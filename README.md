@@ -13,48 +13,262 @@ Open-source, zero-dependency tunnel server and client. Written in Go.
 - **Single binary** — no runtime dependencies
 - **Self-hosted** — run your own tunnel server
 - **HTTP & TCP tunnels** — expose web services or raw TCP
-- **Auto TLS** — automatic HTTPS with Let's Encrypt
+- **Auto TLS** — automatic HTTPS with self-signed certificates
 - **WebSocket support** — real-time applications work out of the box
 - **Custom domains** — use your own domain names
-- **Traffic inspection** — built-in dashboard for debugging
-- **Prometheus metrics** — observability out of the box
+- **Built-in Dashboard** — web UI for monitoring active tunnels
+- **Stream Multiplexing** — multiple connections over single TCP
+- **Flow Control** — backpressure handling per stream
 
 ## Quick Start
 
-### Install
+### Build from Source
 
 ```bash
-go install github.com/wirerift/wirerift/cmd/wirerift@latest
+git clone https://github.com/wirerift/wirerift
+cd wirerift
+make build
 ```
 
-### Expose a local HTTP server
+### Start the Server
 
 ```bash
-# Start your local app on port 3000
-wirerift http 3000
+# Basic server
+./bin/wirerift-server
+
+# With custom domain
+./bin/wirerift-server -domain mytunnel.com
+
+# With auto-generated certificates
+./bin/wirerift-server -auto-cert -cert-dir ./certs
+
+# Verbose logging
+./bin/wirerift-server -v
+```
+
+### Create a Tunnel
+
+```bash
+# HTTP tunnel - exposes local port 3000
+./bin/wirerift http 3000
 # → https://random-subdomain.wirerift.dev
-```
 
-### Expose a TCP service
+# HTTP tunnel with custom subdomain
+./bin/wirerift http 3000 myapp
+# → https://myapp.wirerift.dev
 
-```bash
-# Expose PostgreSQL
-wirerift tcp 5432
+# TCP tunnel - expose any TCP service
+./bin/wirerift tcp 5432
 # → tcp://wirerift.dev:20001
 ```
 
-## Server Setup
+## Configuration
 
-```bash
-# Run the server
-wirerift-server start --domain wirerift.dev --http 80 --https 443
+Create a `wirerift.yaml` file:
+
+```yaml
+# Server configuration
+server: localhost:4443
+token: ""  # Your API token
+
+# Tunnels to start
+tunnels:
+  - type: http
+    local_port: 8080
+    subdomain: ""  # Empty = random subdomain
+
+  - type: tcp
+    local_port: 25565
 ```
 
-## Building
+Then run:
 
 ```bash
+./bin/wirerift start wirerift.yaml
+```
+
+## Architecture
+
+WireRift uses a custom binary protocol with stream multiplexing:
+
+### Protocol Frame Format
+
+```
++--------+--------+----------+----------+---------+
+| Version|  Type  | StreamID | Reserved | Length  |
+| 1 byte | 1 byte | 4 bytes  | 1 byte   | 2 bytes |
++--------+--------+----------+----------+---------+
+|                  Payload (variable)              |
++--------------------------------------------------+
+
+Magic bytes: 0x57 0x52 0x46 0x01 ("WRF\x01")
+```
+
+### Frame Types
+
+| Type | Value | Description |
+|------|-------|-------------|
+| AUTH_REQ | 0x01 | Authentication request |
+| AUTH_RES | 0x02 | Authentication response |
+| TUNNEL_REQ | 0x03 | Tunnel creation request |
+| TUNNEL_RES | 0x04 | Tunnel creation response |
+| STREAM_OPEN | 0x10 | Open new stream |
+| STREAM_DATA | 0x11 | Data frame |
+| STREAM_CLOSE | 0x12 | Graceful close |
+| STREAM_RST | 0x13 | Reset stream |
+| STREAM_WINDOW | 0x14 | Flow control update |
+| HEARTBEAT | 0x20 | Keepalive ping |
+| GO_AWAY | 0x21 | Server shutdown notice |
+| ERROR | 0x22 | Error frame |
+
+### Stream Multiplexing
+
+Multiple streams share a single TCP connection:
+
+```
+Client                              Server
+  |                                   |
+  |------- AUTH_REQ ----------------->|
+  |<------ AUTH_RES ------------------|
+  |                                   |
+  |------- TUNNEL_REQ --------------->|  Create tunnel
+  |<------ TUNNEL_RES ----------------|  myapp.wirerift.dev
+  |                                   |
+  |------- STREAM_OPEN(1) ----------->|  Request #1
+  |------- STREAM_DATA(1) ----------->|  Headers
+  |<------ STREAM_DATA(1) ------------|  Response
+  |------- STREAM_CLOSE(1) ---------->|
+  |                                   |
+  |------- STREAM_OPEN(2) ----------->|  Request #2
+  |------- STREAM_DATA(2) ----------->|  Concurrent!
+  |<------ STREAM_DATA(2) ------------|
+```
+
+## API Reference
+
+The dashboard provides REST API endpoints at `http://localhost:4040/api`:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/tunnels` | GET | List active tunnels |
+| `/api/sessions` | GET | List connected sessions |
+| `/api/stats` | GET | Server statistics |
+| `/api/domains` | GET/POST | List/add custom domains |
+| `/api/domains/{domain}` | GET/DELETE | Get/remove domain |
+| `/api/domains/{domain}/dns` | GET | Get DNS records |
+| `/api/domains/{domain}/verify` | POST | Verify domain |
+
+All API endpoints require Bearer token authentication:
+
+```bash
+curl -H "Authorization: Bearer YOUR_TOKEN" http://localhost:4040/api/tunnels
+```
+
+## Project Structure
+
+```
+wirerift/
+├── cmd/
+│   ├── wirerift/          # Client CLI
+│   └── wirerift-server/   # Server CLI
+├── internal/
+│   ├── auth/              # Token authentication
+│   ├── client/            # Client implementation
+│   ├── config/            # Configuration & domains
+│   ├── dashboard/         # Web dashboard
+│   ├── mux/               # Stream multiplexing
+│   ├── proto/             # Wire protocol
+│   ├── ratelimit/         # Rate limiting
+│   ├── server/            # Server implementation
+│   └── tls/               # TLS certificate management
+├── Makefile
+└── README.md
+```
+
+## Development
+
+```bash
+# Run all tests
+make test
+
+# Run tests with coverage
+make test-coverage
+
+# Format code
+make fmt
+
+# Run linter
+make lint
+
+# Build all binaries
 make build
+
+# Clean build artifacts
+make clean
 ```
+
+## Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `WIRERIFT_SERVER` | Server address | `localhost:4443` |
+| `WIRERIFT_TOKEN` | Authentication token | `""` |
+
+## Server Options
+
+```
+Usage: wirerift-server [options]
+
+Options:
+  -control string
+        Control plane address (default ":4443")
+  -http string
+        HTTP edge address (default ":80")
+  -https string
+        HTTPS edge address (default ":443")
+  -dashboard-port int
+        Dashboard port (default 4040)
+  -domain string
+        Base domain for tunnels (default "wirerift.dev")
+  -tcp-ports string
+        TCP tunnel port range (default "20000-29999")
+  -auto-cert
+        Auto-generate self-signed certificates
+  -cert-dir string
+        Directory for certificates (default "certs")
+  -v    Verbose logging
+  -json
+        JSON log format
+```
+
+## Client Options
+
+```
+Usage: wirerift <command> [options]
+
+Commands:
+  http <port> [subdomain]   Create an HTTP tunnel
+  tcp <port>                Create a TCP tunnel
+  start [config]            Start tunnels from config file
+  list                      List active tunnels
+  config                    Show/edit configuration
+  version                   Show version
+
+Options:
+  -server string
+        Server address (default "localhost:4443")
+  -token string
+        Authentication token
+  -v    Verbose output
+```
+
+## Security
+
+- Token-based authentication for all connections
+- TLS support for encrypted communication
+- Rate limiting per session
+- Domain verification for custom domains
+- Stream isolation with independent flow control
 
 ## License
 

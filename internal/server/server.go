@@ -386,3 +386,99 @@ func extractSubdomain(host, domain string) string {
 
 	return host[:len(host)-len(suffix)]
 }
+
+// startTime tracks when the server was started
+var startTime = time.Now()
+
+// StartTime returns when the server was started.
+func (s *Server) StartTime() time.Time {
+	return startTime
+}
+
+// TunnelInfo represents tunnel information for API responses.
+type TunnelInfo struct {
+	ID        string    `json:"id"`
+	Type      string    `json:"type"`
+	URL       string    `json:"url,omitempty"`
+	Port      int       `json:"port,omitempty"`
+	Target    string    `json:"target"`
+	LocalPort int       `json:"local_port,omitempty"`
+	Status    string    `json:"status"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// SessionInfo represents session information for API responses.
+type SessionInfo struct {
+	ID           string    `json:"id"`
+	AccountID    string    `json:"account_id"`
+	RemoteAddr   string    `json:"remote_addr"`
+	ConnectedAt  time.Time `json:"connected_at"`
+	TunnelCount  int       `json:"tunnel_count"`
+}
+
+// ListTunnels returns a list of all active tunnels.
+func (s *Server) ListTunnels() []TunnelInfo {
+	var tunnels []TunnelInfo
+	s.tunnels.Range(func(key, value any) bool {
+		if t, ok := value.(*Tunnel); ok {
+			t.mu.RLock()
+			info := TunnelInfo{
+				ID:        t.ID,
+				Type:      string(t.Type),
+				URL:       t.PublicURL,
+				Port:      t.Port,
+				Target:    t.LocalAddr,
+				Status:    "active",
+				CreatedAt: t.CreatedAt,
+			}
+			t.mu.RUnlock()
+			tunnels = append(tunnels, info)
+		}
+		return true
+	})
+	return tunnels
+}
+
+// ListSessions returns a list of all connected sessions.
+func (s *Server) ListSessions() []SessionInfo {
+	var sessions []SessionInfo
+	s.sessions.Range(func(key, value any) bool {
+		if sess, ok := value.(*Session); ok {
+			sess.mu.RLock()
+			info := SessionInfo{
+				ID:          sess.ID,
+				AccountID:   sess.AccountID,
+				RemoteAddr:  sess.RemoteAddr.String(),
+				ConnectedAt: sess.CreatedAt,
+				TunnelCount: len(sess.Tunnels),
+			}
+			sess.mu.RUnlock()
+			sessions = append(sessions, info)
+		}
+		return true
+	})
+	return sessions
+}
+
+// Stats returns server statistics.
+func (s *Server) Stats() map[string]interface{} {
+	var tunnelCount, sessionCount int
+	var bytesIn, bytesOut int64
+
+	s.tunnels.Range(func(key, value any) bool {
+		tunnelCount++
+		return true
+	})
+
+	s.sessions.Range(func(key, value any) bool {
+		sessionCount++
+		return true
+	})
+
+	return map[string]interface{}{
+		"active_tunnels":  tunnelCount,
+		"active_sessions": sessionCount,
+		"bytes_in":        bytesIn,
+		"bytes_out":       bytesOut,
+	}
+}
