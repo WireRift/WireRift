@@ -98,3 +98,88 @@ func TestStreamOpenForTCP(t *testing.T) {
 		t.Error("Payload should not be empty")
 	}
 }
+
+func TestTCPProxyWithCustomTimeout(t *testing.T) {
+	server := New(DefaultConfig(), nil)
+	proxy := NewTCPProxy(server, 64*1024, 10*time.Second)
+
+	if proxy == nil {
+		t.Fatal("NewTCPProxy returned nil")
+	}
+	if proxy.bufferSize != 64*1024 {
+		t.Errorf("bufferSize = %d, want %d", proxy.bufferSize, 64*1024)
+	}
+	if proxy.timeout != 10*time.Second {
+		t.Errorf("timeout = %v, want %v", proxy.timeout, 10*time.Second)
+	}
+}
+
+func TestTCPTunnelRemoveConnection(t *testing.T) {
+	tunnel := NewTCPTunnel("tcp-1", "tun-123", 20001)
+
+	// Create pipes
+	c1, c2 := net.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+
+	// Add connection
+	tunnel.AddConnection(c1)
+	if tunnel.ConnectionCount() != 1 {
+		t.Errorf("ConnectionCount = %d, want 1", tunnel.ConnectionCount())
+	}
+
+	// Remove non-existent connection should not panic
+	tunnel.RemoveConnection("192.168.1.100:12345")
+	if tunnel.ConnectionCount() != 1 {
+		t.Errorf("ConnectionCount = %d, want 1 after removing non-existent", tunnel.ConnectionCount())
+	}
+
+	// Remove existing connection by getting its address
+	addr := c1.LocalAddr().String()
+	tunnel.RemoveConnection(addr)
+	if tunnel.ConnectionCount() != 0 {
+		t.Errorf("ConnectionCount = %d, want 0", tunnel.ConnectionCount())
+	}
+}
+
+func TestTCPTunnelCloseMultiple(t *testing.T) {
+	tunnel := NewTCPTunnel("tcp-1", "tun-123", 20001)
+
+	// Create connections with different addresses
+	listener, _ := net.Listen("tcp", "127.0.0.1:0")
+	defer listener.Close()
+
+	go func() {
+		conn, _ := listener.Accept()
+		if conn != nil {
+			conn.Close()
+		}
+	}()
+
+	c1, _ := net.Dial("tcp", listener.Addr().String())
+	if c1 != nil {
+		defer c1.Close()
+		tunnel.AddConnection(c1)
+	}
+
+	// Close should close all connections
+	err := tunnel.Close()
+	if err != nil {
+		t.Errorf("Close failed: %v", err)
+	}
+
+	// After close, should not be able to add more
+	c2, _ := net.Pipe()
+	defer c2.Close()
+	tunnel.AddConnection(c2)
+
+	if tunnel.ConnectionCount() != 0 {
+		t.Errorf("ConnectionCount = %d, want 0 after close", tunnel.ConnectionCount())
+	}
+
+	// Second close should be safe
+	err = tunnel.Close()
+	if err != nil {
+		t.Errorf("Second close failed: %v", err)
+	}
+}
