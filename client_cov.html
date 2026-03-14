@@ -1,0 +1,695 @@
+
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+		<title>client: Go Coverage Report</title>
+		<style>
+			body {
+				background: black;
+				color: rgb(80, 80, 80);
+			}
+			body, pre, #legend span {
+				font-family: Menlo, monospace;
+				font-weight: bold;
+			}
+			#topbar {
+				background: black;
+				position: fixed;
+				top: 0; left: 0; right: 0;
+				height: 42px;
+				border-bottom: 1px solid rgb(80, 80, 80);
+			}
+			#content {
+				margin-top: 50px;
+			}
+			#nav, #legend {
+				float: left;
+				margin-left: 10px;
+			}
+			#legend {
+				margin-top: 12px;
+			}
+			#nav {
+				margin-top: 10px;
+			}
+			#legend span {
+				margin: 0 5px;
+			}
+			.cov0 { color: rgb(192, 0, 0) }
+.cov1 { color: rgb(128, 128, 128) }
+.cov2 { color: rgb(116, 140, 131) }
+.cov3 { color: rgb(104, 152, 134) }
+.cov4 { color: rgb(92, 164, 137) }
+.cov5 { color: rgb(80, 176, 140) }
+.cov6 { color: rgb(68, 188, 143) }
+.cov7 { color: rgb(56, 200, 146) }
+.cov8 { color: rgb(44, 212, 149) }
+.cov9 { color: rgb(32, 224, 152) }
+.cov10 { color: rgb(20, 236, 155) }
+
+		</style>
+	</head>
+	<body>
+		<div id="topbar">
+			<div id="nav">
+				<select id="files">
+				
+				<option value="file0">github.com/wirerift/wirerift/internal/client/client.go (99.0%)</option>
+				
+				</select>
+			</div>
+			<div id="legend">
+				<span>not tracked</span>
+			
+				<span class="cov0">not covered</span>
+				<span class="cov8">covered</span>
+			
+			</div>
+		</div>
+		<div id="content">
+		
+		<pre class="file" id="file0" style="display: none">package client
+
+import (
+        "bufio"
+        "context"
+        "crypto/tls"
+        "errors"
+        "fmt"
+        "io"
+        "log/slog"
+        "net"
+        "net/http"
+        "sync"
+        "sync/atomic"
+        "time"
+
+        "github.com/wirerift/wirerift/internal/mux"
+        "github.com/wirerift/wirerift/internal/proto"
+)
+
+// Errors returned by client operations.
+var (
+        ErrClientClosed    = errors.New("client is closed")
+        ErrNotConnected    = errors.New("not connected to server")
+        ErrAuthFailed      = errors.New("authentication failed")
+        ErrTunnelFailed    = errors.New("tunnel creation failed")
+        ErrReconnectFailed = errors.New("reconnect failed")
+)
+
+// Config holds client configuration.
+type Config struct {
+        // ServerAddr is the address of the tunnel server.
+        ServerAddr string
+
+        // Token is the authentication token.
+        Token string
+
+        // TLSConfig is the TLS configuration.
+        TLSConfig *tls.Config
+
+        // Reconnect enables automatic reconnection.
+        Reconnect bool
+
+        // ReconnectInterval is the initial reconnect interval.
+        ReconnectInterval time.Duration
+
+        // MaxReconnectInterval is the maximum reconnect interval.
+        MaxReconnectInterval time.Duration
+
+        // HeartbeatInterval is the interval for sending heartbeats.
+        HeartbeatInterval time.Duration
+}
+
+// DefaultConfig returns the default client configuration.
+func DefaultConfig() Config <span class="cov8" title="1">{
+        return Config{
+                ServerAddr:           "wirerift.dev:4443",
+                Reconnect:            true,
+                ReconnectInterval:    1 * time.Second,
+                MaxReconnectInterval: 30 * time.Second,
+                HeartbeatInterval:    30 * time.Second,
+        }
+}</span>
+
+// Client is the tunnel client.
+type Client struct {
+        config Config
+        logger *slog.Logger
+
+        // Connection
+        conn net.Conn
+        mux  *mux.Mux
+
+        // Session state
+        sessionID  string
+        connected  atomic.Bool
+        maxTunnels int
+
+        // Tunnels
+        tunnels sync.Map // map[string]*Tunnel
+
+        // Lifecycle
+        ctx    context.Context
+        cancel context.CancelFunc
+        wg     sync.WaitGroup
+}
+
+// Tunnel represents an active tunnel.
+type Tunnel struct {
+        ID        string
+        Type      proto.TunnelType
+        PublicURL string
+        LocalAddr string
+        Subdomain string
+        Port      int
+        client    *Client
+}
+
+// New creates a new client.
+func New(config Config, logger *slog.Logger) *Client <span class="cov8" title="1">{
+        if logger == nil </span><span class="cov8" title="1">{
+                logger = slog.Default()
+        }</span>
+
+        <span class="cov8" title="1">ctx, cancel := context.WithCancel(context.Background())
+
+        return &amp;Client{
+                config: config,
+                logger: logger,
+                ctx:    ctx,
+                cancel: cancel,
+        }</span>
+}
+
+// Connect connects to the tunnel server.
+func (c *Client) Connect() error <span class="cov8" title="1">{
+        if err := c.connect(); err != nil </span><span class="cov8" title="1">{
+                return err
+        }</span>
+
+        // Start stream handler
+        <span class="cov8" title="1">c.wg.Add(1)
+        go func() </span><span class="cov8" title="1">{
+                defer c.wg.Done()
+                c.handleStreams()
+        }</span>()
+
+        // Start heartbeat
+        <span class="cov8" title="1">c.wg.Add(1)
+        go func() </span><span class="cov8" title="1">{
+                defer c.wg.Done()
+                c.heartbeatLoop()
+        }</span>()
+
+        // Start reconnect loop if enabled
+        <span class="cov8" title="1">if c.config.Reconnect </span><span class="cov8" title="1">{
+                c.wg.Add(1)
+                go func() </span><span class="cov8" title="1">{
+                        defer c.wg.Done()
+                        c.reconnectLoop()
+                }</span>()
+        }
+
+        <span class="cov8" title="1">return nil</span>
+}
+
+// connect establishes the connection and authenticates.
+func (c *Client) connect() error <span class="cov8" title="1">{
+        // Dial server
+        var conn net.Conn
+        var err error
+
+        if c.config.TLSConfig != nil </span><span class="cov8" title="1">{
+                conn, err = tls.Dial("tcp", c.config.ServerAddr, c.config.TLSConfig)
+        }</span> else<span class="cov8" title="1"> {
+                conn, err = net.Dial("tcp", c.config.ServerAddr)
+        }</span>
+
+        <span class="cov8" title="1">if err != nil </span><span class="cov8" title="1">{
+                return fmt.Errorf("dial server: %w", err)
+        }</span>
+
+        <span class="cov8" title="1">c.conn = conn
+
+        // Send magic bytes (4 bytes write to a just-opened TCP connection cannot fail)
+        proto.WriteMagic(conn)
+
+        // Create mux and start run loop FIRST so it dispatches control frames
+        c.mux = mux.New(conn, mux.DefaultConfig())
+        go c.mux.Run()
+
+        // Authenticate
+        if err := c.authenticate(); err != nil </span><span class="cov8" title="1">{
+                conn.Close()
+                return err
+        }</span>
+
+        <span class="cov8" title="1">c.connected.Store(true)
+        c.logger.Info("connected", "session", c.sessionID)
+
+        return nil</span>
+}
+
+// authenticate sends authentication request.
+func (c *Client) authenticate() error <span class="cov8" title="1">{
+        authReq := &amp;proto.AuthRequest{
+                Token:   c.config.Token,
+                Version: "1.0.0",
+        }
+
+        // EncodeJSONPayload cannot fail for AuthRequest (only string fields)
+        frame, _ := proto.EncodeJSONPayload(proto.FrameAuthReq, proto.ControlStreamID, authReq)
+
+        if err := c.mux.GetFrameWriter().Write(frame); err != nil </span><span class="cov8" title="1">{
+                return fmt.Errorf("send auth request: %w", err)
+        }</span>
+
+        // Read response from control frame channel (dispatched by mux.Run)
+        <span class="cov8" title="1">var respFrame *proto.Frame
+        select </span>{
+        case f, ok := &lt;-c.mux.ControlFrame():<span class="cov8" title="1">
+                if !ok </span><span class="cov0" title="0">{
+                        return fmt.Errorf("connection closed")
+                }</span>
+                <span class="cov8" title="1">respFrame = f</span>
+        case &lt;-c.mux.Done():<span class="cov8" title="1">
+                return fmt.Errorf("connection closed")</span>
+        case &lt;-c.ctx.Done():<span class="cov8" title="1">
+                return fmt.Errorf("cancelled")</span>
+        }
+
+        <span class="cov8" title="1">if respFrame.Type != proto.FrameAuthRes </span><span class="cov8" title="1">{
+                return fmt.Errorf("unexpected frame type: %v", respFrame.Type)
+        }</span>
+
+        <span class="cov8" title="1">var authRes proto.AuthResponse
+        if err := proto.DecodeJSONPayload(respFrame, &amp;authRes); err != nil </span><span class="cov8" title="1">{
+                return fmt.Errorf("decode auth response: %w", err)
+        }</span>
+
+        <span class="cov8" title="1">if !authRes.OK </span><span class="cov8" title="1">{
+                return fmt.Errorf("%w: %s", ErrAuthFailed, authRes.Error)
+        }</span>
+
+        <span class="cov8" title="1">c.sessionID = authRes.SessionID
+        c.maxTunnels = authRes.MaxTunnels
+
+        return nil</span>
+}
+
+// Close closes the client.
+func (c *Client) Close() error <span class="cov8" title="1">{
+        c.cancel()
+
+        if c.mux != nil </span><span class="cov8" title="1">{
+                c.mux.Close()
+        }</span>
+        <span class="cov8" title="1">if c.conn != nil </span><span class="cov8" title="1">{
+                c.conn.Close()
+        }</span>
+
+        <span class="cov8" title="1">c.wg.Wait()
+        return nil</span>
+}
+
+// HTTP opens an HTTP tunnel.
+func (c *Client) HTTP(localAddr string, opts ...HTTPOption) (*Tunnel, error) <span class="cov8" title="1">{
+        if !c.connected.Load() </span><span class="cov8" title="1">{
+                return nil, ErrNotConnected
+        }</span>
+
+        <span class="cov8" title="1">req := &amp;proto.TunnelRequest{
+                Type:      proto.TunnelTypeHTTP,
+                LocalAddr: localAddr,
+        }
+
+        for _, opt := range opts </span><span class="cov8" title="1">{
+                opt(req)
+        }</span>
+
+        <span class="cov8" title="1">return c.openTunnel(req)</span>
+}
+
+// TCP opens a TCP tunnel.
+func (c *Client) TCP(localAddr string, port int) (*Tunnel, error) <span class="cov8" title="1">{
+        if !c.connected.Load() </span><span class="cov8" title="1">{
+                return nil, ErrNotConnected
+        }</span>
+
+        <span class="cov8" title="1">req := &amp;proto.TunnelRequest{
+                Type:      proto.TunnelTypeTCP,
+                LocalAddr: localAddr,
+                RemotePort: port,
+        }
+
+        return c.openTunnel(req)</span>
+}
+
+// openTunnel sends a tunnel request.
+func (c *Client) openTunnel(req *proto.TunnelRequest) (*Tunnel, error) <span class="cov8" title="1">{
+        // EncodeJSONPayload cannot fail for TunnelRequest (simple JSON-serializable fields)
+        frame, _ := proto.EncodeJSONPayload(proto.FrameTunnelReq, proto.ControlStreamID, req)
+
+        if err := c.mux.GetFrameWriter().Write(frame); err != nil </span><span class="cov8" title="1">{
+                return nil, fmt.Errorf("send tunnel request: %w", err)
+        }</span>
+
+        // Read response from control frame channel (dispatched by mux.Run)
+        <span class="cov8" title="1">var respFrame *proto.Frame
+        select </span>{
+        case f, ok := &lt;-c.mux.ControlFrame():<span class="cov8" title="1">
+                if !ok </span><span class="cov0" title="0">{
+                        return nil, fmt.Errorf("connection closed")
+                }</span>
+                <span class="cov8" title="1">respFrame = f</span>
+        case &lt;-c.mux.Done():<span class="cov8" title="1">
+                return nil, fmt.Errorf("connection closed")</span>
+        case &lt;-c.ctx.Done():<span class="cov8" title="1">
+                return nil, fmt.Errorf("cancelled")</span>
+        }
+
+        <span class="cov8" title="1">if respFrame.Type != proto.FrameTunnelRes </span><span class="cov8" title="1">{
+                return nil, fmt.Errorf("unexpected frame type: %v", respFrame.Type)
+        }</span>
+
+        <span class="cov8" title="1">var res proto.TunnelResponse
+        if err := proto.DecodeJSONPayload(respFrame, &amp;res); err != nil </span><span class="cov8" title="1">{
+                return nil, fmt.Errorf("decode tunnel response: %w", err)
+        }</span>
+
+        <span class="cov8" title="1">if !res.OK </span><span class="cov8" title="1">{
+                return nil, fmt.Errorf("%w: %s", ErrTunnelFailed, res.Error)
+        }</span>
+
+        <span class="cov8" title="1">tunnel := &amp;Tunnel{
+                ID:        res.TunnelID,
+                Type:      res.Type,
+                PublicURL: res.PublicURL,
+                LocalAddr: req.LocalAddr,
+                Subdomain: req.Subdomain,
+                Port:      req.RemotePort,
+                client:    c,
+        }
+
+        c.tunnels.Store(res.TunnelID, tunnel)
+
+        c.logger.Info("tunnel opened", "id", res.TunnelID, "url", res.PublicURL)
+
+        return tunnel, nil</span>
+}
+
+// CloseTunnel closes a tunnel.
+func (c *Client) CloseTunnel(id string) error <span class="cov8" title="1">{
+        if c.mux == nil </span><span class="cov8" title="1">{
+                return ErrNotConnected
+        }</span>
+
+        <span class="cov8" title="1">closeReq := &amp;proto.TunnelClose{TunnelID: id}
+        // EncodeJSONPayload cannot fail for TunnelClose (only string field)
+        frame, _ := proto.EncodeJSONPayload(proto.FrameTunnelClose, proto.ControlStreamID, closeReq)
+
+        if err := c.mux.GetFrameWriter().Write(frame); err != nil </span><span class="cov8" title="1">{
+                return err
+        }</span>
+
+        <span class="cov8" title="1">c.tunnels.Delete(id)
+        c.logger.Info("tunnel closed", "id", id)
+
+        return nil</span>
+}
+
+// SessionID returns the current session ID.
+func (c *Client) SessionID() string <span class="cov8" title="1">{
+        return c.sessionID
+}</span>
+
+// IsConnected returns true if connected.
+func (c *Client) IsConnected() bool <span class="cov8" title="1">{
+        return c.connected.Load()
+}</span>
+
+// FrameWriter returns the frame writer (for internal use).
+func (c *Client) FrameWriter() *proto.FrameWriter <span class="cov8" title="1">{
+        if c.mux == nil </span><span class="cov8" title="1">{
+                return nil
+        }</span>
+        <span class="cov8" title="1">return c.mux.GetFrameWriter()</span>
+}
+
+// FrameReader returns the frame reader (for internal use).
+func (c *Client) FrameReader() *proto.FrameReader <span class="cov8" title="1">{
+        if c.mux == nil </span><span class="cov8" title="1">{
+                return nil
+        }</span>
+        <span class="cov8" title="1">return c.mux.GetFrameReader()</span>
+}
+
+// heartbeatLoop sends periodic heartbeats.
+func (c *Client) heartbeatLoop() <span class="cov8" title="1">{
+        ticker := time.NewTicker(c.config.HeartbeatInterval)
+        defer ticker.Stop()
+
+        for </span><span class="cov8" title="1">{
+                select </span>{
+                case &lt;-c.ctx.Done():<span class="cov8" title="1">
+                        return</span>
+                case &lt;-ticker.C:<span class="cov8" title="1">
+                        if !c.connected.Load() </span><span class="cov8" title="1">{
+                                continue</span>
+                        }
+
+                        <span class="cov8" title="1">frame := &amp;proto.Frame{
+                                Version:  proto.Version,
+                                Type:     proto.FrameHeartbeat,
+                                StreamID: 0,
+                                Payload:  proto.HeartbeatPayload(),
+                        }
+
+                        if err := c.mux.GetFrameWriter().Write(frame); err != nil </span><span class="cov8" title="1">{
+                                c.logger.Warn("heartbeat failed", "error", err)
+                        }</span>
+                case &lt;-c.mux.Done():<span class="cov8" title="1">
+                        c.connected.Store(false)
+                        c.logger.Warn("connection lost")
+                        return</span>
+                }
+        }
+}
+
+// reconnectLoop handles automatic reconnection.
+func (c *Client) reconnectLoop() <span class="cov8" title="1">{
+        interval := c.config.ReconnectInterval
+
+        for </span><span class="cov8" title="1">{
+                select </span>{
+                case &lt;-c.ctx.Done():<span class="cov8" title="1">
+                        return</span>
+                case &lt;-c.mux.Done():<span class="cov8" title="1">
+                        if !c.config.Reconnect </span><span class="cov8" title="1">{
+                                return
+                        }</span>
+
+                        <span class="cov8" title="1">c.connected.Store(false)
+                        c.logger.Info("reconnecting", "interval", interval)
+
+                        select </span>{
+                        case &lt;-c.ctx.Done():<span class="cov8" title="1">
+                                return</span>
+                        case &lt;-time.After(interval):<span class="cov8" title="1"></span>
+                        }
+
+                        <span class="cov8" title="1">if err := c.connect(); err != nil </span><span class="cov8" title="1">{
+                                c.logger.Warn("reconnect failed", "error", err)
+                                interval = interval * 2
+                                if interval &gt; c.config.MaxReconnectInterval </span><span class="cov8" title="1">{
+                                        interval = c.config.MaxReconnectInterval
+                                }</span>
+                                <span class="cov8" title="1">continue</span>
+                        }
+
+                        <span class="cov8" title="1">interval = c.config.ReconnectInterval</span>
+                }
+        }
+}
+
+// HTTPOption is an option for HTTP tunnels.
+type HTTPOption func(*proto.TunnelRequest)
+
+// WithSubdomain sets the subdomain.
+func WithSubdomain(subdomain string) HTTPOption <span class="cov8" title="1">{
+        return func(req *proto.TunnelRequest) </span><span class="cov8" title="1">{
+                req.Subdomain = subdomain
+        }</span>
+}
+
+// WithInspect enables traffic inspection.
+func WithInspect() HTTPOption <span class="cov8" title="1">{
+        return func(req *proto.TunnelRequest) </span><span class="cov8" title="1">{
+                req.Inspect = true
+        }</span>
+}
+
+// WithAuth sets tunnel authentication.
+func WithAuth(username, password string) HTTPOption <span class="cov8" title="1">{
+        return func(req *proto.TunnelRequest) </span><span class="cov8" title="1">{
+                req.Auth = &amp;proto.TunnelAuth{
+                        Type:     "basic",
+                        Username: username,
+                        Password: password,
+                }
+        }</span>
+}
+
+// WithHeaders sets custom headers.
+func WithHeaders(headers map[string]string) HTTPOption <span class="cov8" title="1">{
+        return func(req *proto.TunnelRequest) </span><span class="cov8" title="1">{
+                req.Headers = headers
+        }</span>
+}
+
+// Close closes the tunnel.
+func (t *Tunnel) Close() error <span class="cov8" title="1">{
+        return t.client.CloseTunnel(t.ID)
+}</span>
+
+// GetPublicURL returns the public URL.
+func (t *Tunnel) GetPublicURL() string <span class="cov8" title="1">{
+        return t.PublicURL
+}</span>
+
+// GetLocalAddr returns the local address.
+func (t *Tunnel) GetLocalAddr() string <span class="cov8" title="1">{
+        return t.LocalAddr
+}</span>
+
+// handleStreams accepts incoming streams from the server and dispatches them.
+func (c *Client) handleStreams() <span class="cov8" title="1">{
+        for </span><span class="cov8" title="1">{
+                stream, err := c.mux.AcceptStream()
+                if err != nil </span><span class="cov8" title="1">{
+                        return
+                }</span>
+                <span class="cov8" title="1">go c.handleStream(stream)</span>
+        }
+}
+
+// handleStream routes a stream based on its protocol.
+func (c *Client) handleStream(stream *mux.Stream) <span class="cov8" title="1">{
+        defer stream.Close()
+        protocol := stream.Protocol()
+
+        switch protocol </span>{
+        case "http":<span class="cov8" title="1">
+                c.handleHTTPStream(stream)</span>
+        case "tcp":<span class="cov8" title="1">
+                c.handleTCPStream(stream)</span>
+        default:<span class="cov8" title="1">
+                stream.Reset()</span>
+        }
+}
+
+// handleHTTPStream handles an incoming HTTP stream by proxying to the local service.
+func (c *Client) handleHTTPStream(stream *mux.Stream) <span class="cov8" title="1">{
+        // Find the tunnel for this stream
+        tunnel := c.findTunnelForStream(stream)
+        if tunnel == nil </span><span class="cov8" title="1">{
+                stream.Reset()
+                return
+        }</span>
+
+        // Read HTTP request from stream
+        <span class="cov8" title="1">reader := bufio.NewReader(stream)
+        req, err := http.ReadRequest(reader)
+        if err != nil </span><span class="cov8" title="1">{
+                return
+        }</span>
+
+        // Forward to local service
+        <span class="cov8" title="1">req.URL.Scheme = "http"
+        req.URL.Host = tunnel.LocalAddr
+        req.RequestURI = ""
+
+        resp, err := http.DefaultClient.Do(req)
+        if err != nil </span><span class="cov8" title="1">{
+                // Send 502 response
+                errResp := "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n"
+                stream.Write([]byte(errResp))
+                return
+        }</span>
+        <span class="cov8" title="1">defer resp.Body.Close()
+
+        // Write response back through stream
+        resp.Write(stream)</span>
+}
+
+// handleTCPStream handles an incoming TCP stream by proxying to the local service.
+func (c *Client) handleTCPStream(stream *mux.Stream) <span class="cov8" title="1">{
+        tunnel := c.findTunnelForStream(stream)
+        if tunnel == nil </span><span class="cov8" title="1">{
+                stream.Reset()
+                return
+        }</span>
+
+        // Dial local service
+        <span class="cov8" title="1">localConn, err := net.Dial("tcp", tunnel.LocalAddr)
+        if err != nil </span><span class="cov8" title="1">{
+                return
+        }</span>
+        <span class="cov8" title="1">defer localConn.Close()
+
+        // Bidirectional copy
+        var wg sync.WaitGroup
+        wg.Add(2)
+        go func() </span><span class="cov8" title="1">{
+                defer wg.Done()
+                io.Copy(localConn, stream)
+        }</span>()
+        <span class="cov8" title="1">go func() </span><span class="cov8" title="1">{
+                defer wg.Done()
+                io.Copy(stream, localConn)
+        }</span>()
+        <span class="cov8" title="1">wg.Wait()</span>
+}
+
+// findTunnelForStream finds the tunnel associated with a stream.
+func (c *Client) findTunnelForStream(stream *mux.Stream) *Tunnel <span class="cov8" title="1">{
+        tunnelID := stream.TunnelID()
+        if v, ok := c.tunnels.Load(tunnelID); ok </span><span class="cov8" title="1">{
+                return v.(*Tunnel)
+        }</span>
+        <span class="cov8" title="1">return nil</span>
+}
+</pre>
+		
+		</div>
+	</body>
+	<script>
+	(function() {
+		var files = document.getElementById('files');
+		var visible;
+		files.addEventListener('change', onChange, false);
+		function select(part) {
+			if (visible)
+				visible.style.display = 'none';
+			visible = document.getElementById(part);
+			if (!visible)
+				return;
+			files.value = part;
+			visible.style.display = 'block';
+			location.hash = part;
+		}
+		function onChange() {
+			select(files.value);
+			window.scrollTo(0, 0);
+		}
+		if (location.hash != "") {
+			select(location.hash.substr(1));
+		}
+		if (!visible) {
+			select("file0");
+		}
+	})();
+	</script>
+</html>

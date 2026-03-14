@@ -142,7 +142,7 @@ func TestStreamMetadata(t *testing.T) {
 	}
 	stream.window.Store(proto.DefaultWindowSize)
 
-	stream.SetMetadata("192.168.1.1:12345", "http")
+	stream.SetMetadata("192.168.1.1:12345", "http", "")
 
 	if stream.RemoteAddr() != "192.168.1.1:12345" {
 		t.Errorf("RemoteAddr = %q, want %q", stream.RemoteAddr(), "192.168.1.1:12345")
@@ -1923,6 +1923,183 @@ func TestRingBufferReadEmptyP(t *testing.T) {
 	// Verify data is still there
 	if rb.Len() != 4 {
 		t.Errorf("Buffer len = %d, want 4 (data should not be consumed)", rb.Len())
+	}
+}
+
+// TestMuxControlFrame tests that AUTH_REQ frames are routed to the ControlFrame channel.
+func TestMuxControlFrame(t *testing.T) {
+	_, server := newTestPipe(t)
+
+	// Build an AUTH_REQ frame
+	frame, _ := proto.EncodeJSONPayload(proto.FrameAuthReq, 0, &proto.AuthRequest{
+		Token: "test-token",
+	})
+
+	// Dispatch through handleFrame
+	if err := server.handleFrame(frame); err != nil {
+		t.Fatalf("handleFrame failed: %v", err)
+	}
+
+	// Should arrive on ControlFrame channel
+	select {
+	case got := <-server.ControlFrame():
+		if got.Type != proto.FrameAuthReq {
+			t.Errorf("ControlFrame type = %v, want %v", got.Type, proto.FrameAuthReq)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("Timed out waiting for control frame")
+	}
+
+	server.Close()
+}
+
+// TestMuxControlFrameTunnelReq tests that TUNNEL_REQ frames are routed to the ControlFrame channel.
+func TestMuxControlFrameTunnelReq(t *testing.T) {
+	_, server := newTestPipe(t)
+
+	frame, _ := proto.EncodeJSONPayload(proto.FrameTunnelReq, 0, &proto.TunnelRequest{
+		Subdomain: "test",
+		LocalAddr: "127.0.0.1:8080",
+	})
+
+	if err := server.handleFrame(frame); err != nil {
+		t.Fatalf("handleFrame failed: %v", err)
+	}
+
+	select {
+	case got := <-server.ControlFrame():
+		if got.Type != proto.FrameTunnelReq {
+			t.Errorf("ControlFrame type = %v, want %v", got.Type, proto.FrameTunnelReq)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("Timed out waiting for control frame")
+	}
+
+	server.Close()
+}
+
+// TestMuxControlFrameTunnelRes tests that TUNNEL_RES frames are routed to the ControlFrame channel.
+func TestMuxControlFrameTunnelRes(t *testing.T) {
+	_, server := newTestPipe(t)
+
+	frame, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, 0, &proto.TunnelResponse{
+		TunnelID: "tun-123",
+		OK:       true,
+	})
+
+	if err := server.handleFrame(frame); err != nil {
+		t.Fatalf("handleFrame failed: %v", err)
+	}
+
+	select {
+	case got := <-server.ControlFrame():
+		if got.Type != proto.FrameTunnelRes {
+			t.Errorf("ControlFrame type = %v, want %v", got.Type, proto.FrameTunnelRes)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("Timed out waiting for control frame")
+	}
+
+	server.Close()
+}
+
+// TestStreamTunnelID tests the TunnelID getter on Stream.
+func TestStreamTunnelID(t *testing.T) {
+	stream := &Stream{
+		readBuf:  newRingBuffer(4096),
+		readCh:   make(chan struct{}, 1),
+		windowCh: make(chan struct{}, 1),
+	}
+
+	// Initially empty
+	if stream.TunnelID() != "" {
+		t.Errorf("TunnelID should be empty initially, got %q", stream.TunnelID())
+	}
+
+	// Set via SetMetadata
+	stream.SetMetadata("192.168.1.1:12345", "http", "tun-abc")
+
+	if stream.TunnelID() != "tun-abc" {
+		t.Errorf("TunnelID = %q, want %q", stream.TunnelID(), "tun-abc")
+	}
+}
+
+// TestHandleStreamOpenWithTunnelID tests that handleStreamOpen sets tunnelID on the stream.
+func TestHandleStreamOpenWithTunnelID(t *testing.T) {
+	_, server := newTestPipe(t)
+
+	frame, _ := proto.EncodeJSONPayload(proto.FrameStreamOpen, 1, &proto.StreamOpen{
+		TunnelID:   "tun-xyz",
+		RemoteAddr: "10.0.0.1:8080",
+		Protocol:   "tcp",
+	})
+
+	server.handleFrame(frame)
+
+	select {
+	case stream := <-server.accept:
+		if stream.TunnelID() != "tun-xyz" {
+			t.Errorf("TunnelID = %q, want %q", stream.TunnelID(), "tun-xyz")
+		}
+		if stream.RemoteAddr() != "10.0.0.1:8080" {
+			t.Errorf("RemoteAddr = %q, want %q", stream.RemoteAddr(), "10.0.0.1:8080")
+		}
+		if stream.Protocol() != "tcp" {
+			t.Errorf("Protocol = %q, want %q", stream.Protocol(), "tcp")
+		}
+	default:
+		t.Fatal("No stream available")
+	}
+
+	server.Close()
+}
+
+// TestMuxControlFrameMuxClosed tests handleControlFrame when mux is already closed.
+func TestMuxControlFrameMuxClosed(t *testing.T) {
+	_, server := newTestPipe(t)
+
+	// Close the mux first
+	server.Close()
+
+	frame, _ := proto.EncodeJSONPayload(proto.FrameAuthReq, 0, &proto.AuthRequest{
+		Token: "test-token",
+	})
+
+	err := server.handleControlFrame(frame)
+	if err != ErrMuxClosed {
+		t.Errorf("Expected ErrMuxClosed, got %v", err)
+	}
+}
+
+// TestMuxControlFrameChannelFullThenClose tests handleControlFrame when the control channel
+// is full and the mux closes while blocked.
+func TestMuxControlFrameChannelFullThenClose(t *testing.T) {
+	_, server := newTestPipe(t)
+
+	// Fill the control channel (capacity 16)
+	for i := 0; i < 16; i++ {
+		frame, _ := proto.EncodeJSONPayload(proto.FrameAuthReq, 0, &proto.AuthRequest{
+			Token: "fill",
+		})
+		if err := server.handleControlFrame(frame); err != nil {
+			t.Fatalf("handleControlFrame %d failed: %v", i, err)
+		}
+	}
+
+	// Now the channel is full. The next send will block in the second select.
+	// Close the mux after a short delay to unblock via <-m.done.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		server.Close()
+	}()
+
+	frame, _ := proto.EncodeJSONPayload(proto.FrameAuthReq, 0, &proto.AuthRequest{
+		Token: "overflow",
+	})
+
+	err := server.handleControlFrame(frame)
+	if err != ErrMuxClosed {
+		t.Errorf("Expected ErrMuxClosed, got %v", err)
 	}
 }
 

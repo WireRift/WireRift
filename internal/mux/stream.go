@@ -40,6 +40,7 @@ type Stream struct {
 	// Metadata
 	remoteAddr string
 	protocol   string
+	tunnelID   string
 
 	// Callbacks
 	onClose func()
@@ -81,10 +82,16 @@ func (s *Stream) LocalAddr() net.Addr {
 	return nil
 }
 
+// TunnelID returns the tunnel ID associated with this stream.
+func (s *Stream) TunnelID() string {
+	return s.tunnelID
+}
+
 // SetMetadata sets stream metadata.
-func (s *Stream) SetMetadata(remoteAddr, protocol string) {
+func (s *Stream) SetMetadata(remoteAddr, protocol, tunnelID string) {
 	s.remoteAddr = remoteAddr
 	s.protocol = protocol
+	s.tunnelID = tunnelID
 }
 
 // Read reads data from the stream. Blocks until data is available or stream is closed.

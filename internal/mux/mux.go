@@ -58,9 +58,10 @@ type Mux struct {
 	streams sync.Map // map[uint32]*Stream
 	nextID  atomic.Uint32
 
-	accept chan *Stream // incoming streams from remote
-	done   chan struct{}
-	err    atomic.Value // error that caused shutdown
+	accept    chan *Stream      // incoming streams from remote
+	controlCh chan *proto.Frame // control frames (auth, tunnel)
+	done      chan struct{}
+	err       atomic.Value // error that caused shutdown
 
 	// Server-side stream ID allocation (odd numbers)
 	serverStreamID atomic.Uint32
@@ -88,6 +89,7 @@ func New(conn net.Conn, config Config) *Mux {
 		frameReader:  proto.NewFrameReader(conn),
 		config:       config,
 		accept:       make(chan *Stream, 128),
+		controlCh:    make(chan *proto.Frame, 16),
 		done:         make(chan struct{}),
 		maxFrameSize: config.MaxFrameSize,
 	}
@@ -224,10 +226,33 @@ func (m *Mux) handleFrame(frame *proto.Frame) error {
 		return m.handleGoAway(frame)
 	case proto.FrameError:
 		return m.handleError(frame)
+	case proto.FrameAuthReq, proto.FrameAuthRes, proto.FrameTunnelReq, proto.FrameTunnelRes, proto.FrameTunnelClose:
+		return m.handleControlFrame(frame)
 	default:
 		// Unknown frame type - ignore
 		return nil
 	}
+}
+
+// handleControlFrame routes control frames (auth, tunnel) to the control channel.
+func (m *Mux) handleControlFrame(frame *proto.Frame) error {
+	select {
+	case <-m.done:
+		return ErrMuxClosed
+	default:
+	}
+
+	select {
+	case m.controlCh <- frame:
+		return nil
+	case <-m.done:
+		return ErrMuxClosed
+	}
+}
+
+// ControlFrame returns the channel for receiving control frames (auth, tunnel).
+func (m *Mux) ControlFrame() <-chan *proto.Frame {
+	return m.controlCh
 }
 
 // handleStreamOpen handles a STREAM_OPEN frame.
@@ -238,7 +263,7 @@ func (m *Mux) handleStreamOpen(frame *proto.Frame) error {
 	}
 
 	stream := newStream(frame.StreamID, m, m.config.WindowSize)
-	stream.SetMetadata(msg.RemoteAddr, msg.Protocol)
+	stream.SetMetadata(msg.RemoteAddr, msg.Protocol, msg.TunnelID)
 	m.streams.Store(frame.StreamID, stream)
 
 	// Notify acceptor

@@ -2,9 +2,11 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -12,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/wirerift/wirerift/internal/auth"
 	"github.com/wirerift/wirerift/internal/mux"
 	"github.com/wirerift/wirerift/internal/proto"
 )
@@ -58,6 +61,9 @@ type Config struct {
 
 	// MaxTunnelsPerSession is the maximum tunnels per session.
 	MaxTunnelsPerSession int
+
+	// AuthManager is the authentication manager.
+	AuthManager *auth.Manager
 }
 
 // DefaultConfig returns the default server configuration.
@@ -77,8 +83,9 @@ func DefaultConfig() Config {
 
 // Server is the tunnel server.
 type Server struct {
-	config Config
-	logger *slog.Logger
+	config      Config
+	logger      *slog.Logger
+	authManager *auth.Manager
 
 	// Listeners
 	controlListener net.Listener
@@ -144,6 +151,12 @@ func New(config Config, logger *slog.Logger) *Server {
 	}
 
 	s.nextPort.Store(int32(s.tcpPortStart))
+
+	if config.AuthManager != nil {
+		s.authManager = config.AuthManager
+	} else {
+		s.authManager = auth.NewManager()
+	}
 
 	return s
 }
@@ -223,9 +236,9 @@ func (s *Server) acceptControlConnections() {
 			case <-s.ctx.Done():
 				return
 			default:
-				s.logger.Error("accept control connection", "error", err)
-				continue
 			}
+			// If listener was closed, stop accepting
+			return
 		}
 
 		s.wg.Add(1)
@@ -234,6 +247,17 @@ func (s *Server) acceptControlConnections() {
 			s.handleControlConnection(conn)
 		}()
 	}
+}
+
+// generateSubdomain generates a random subdomain string.
+func generateSubdomain() string {
+	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, 8)
+	rand.Read(b)
+	for i := range b {
+		b[i] = charset[int(b[i])%len(charset)]
+	}
+	return string(b)
 }
 
 // handleControlConnection handles a control plane connection.
@@ -251,18 +275,338 @@ func (s *Server) handleControlConnection(conn net.Conn) {
 
 	// Create mux
 	m := mux.New(conn, mux.DefaultConfig())
-
-	// Handle control frames
 	go m.Run()
 
+	// Authenticate
+	session, err := s.handleAuth(m, remoteAddr)
+	if err != nil {
+		s.logger.Warn("auth failed", "remote", remoteAddr, "error", err)
+		m.Close()
+		return
+	}
+	defer s.removeSession(session.ID)
+
+	s.logger.Info("session started", "id", session.ID, "remote", remoteAddr)
+
+	// Handle tunnel requests until disconnect
+	s.handleTunnelRequests(m, session)
+
+	s.logger.Info("session ended", "id", session.ID)
+}
+
+// handleAuth authenticates a client connection.
+func (s *Server) handleAuth(m *mux.Mux, remoteAddr net.Addr) (*Session, error) {
+	// Wait for auth frame with timeout
+	select {
+	case frame := <-m.ControlFrame():
+		if frame.Type != proto.FrameAuthReq {
+			return nil, fmt.Errorf("expected AUTH_REQ, got %v", frame.Type)
+		}
+
+		var authReq proto.AuthRequest
+		if err := proto.DecodeJSONPayload(frame, &authReq); err != nil {
+			return nil, fmt.Errorf("decode auth request: %w", err)
+		}
+
+		// Validate token
+		_, account, err := s.authManager.ValidateToken(authReq.Token)
+		if err != nil {
+			// Send failure response
+			resp := &proto.AuthResponse{OK: false, Error: err.Error()}
+			respFrame, _ := proto.EncodeJSONPayload(proto.FrameAuthRes, 0, resp)
+			m.GetFrameWriter().Write(respFrame)
+			return nil, fmt.Errorf("invalid token: %w", err)
+		}
+
+		// Create session
+		sessionID := fmt.Sprintf("sess_%s", generateSubdomain())
+		session := &Session{
+			ID:         sessionID,
+			AccountID:  account.ID,
+			Mux:        m,
+			Tunnels:    make(map[string]*Tunnel),
+			CreatedAt:  time.Now(),
+			LastSeen:   time.Now(),
+			RemoteAddr: remoteAddr,
+		}
+		s.sessions.Store(sessionID, session)
+
+		// Send success response
+		maxTunnels := s.config.MaxTunnelsPerSession
+		resp := &proto.AuthResponse{
+			OK:         true,
+			SessionID:  sessionID,
+			MaxTunnels: maxTunnels,
+		}
+		respFrame, _ := proto.EncodeJSONPayload(proto.FrameAuthRes, 0, resp)
+		m.GetFrameWriter().Write(respFrame)
+
+		return session, nil
+
+	case <-time.After(10 * time.Second):
+		return nil, fmt.Errorf("auth timeout")
+
+	case <-s.ctx.Done():
+		return nil, fmt.Errorf("server shutting down")
+	}
+}
+
+// handleTunnelRequests processes tunnel requests from a session.
+func (s *Server) handleTunnelRequests(m *mux.Mux, session *Session) {
 	for {
 		select {
-		case <-s.ctx.Done():
-			return
+		case frame := <-m.ControlFrame():
+			switch frame.Type {
+			case proto.FrameTunnelReq:
+				s.handleTunnelRequest(m, session, frame)
+			case proto.FrameTunnelClose:
+				s.handleTunnelClose(session, frame)
+			}
+
 		case <-m.Done():
+			return
+
+		case <-s.ctx.Done():
 			return
 		}
 	}
+}
+
+// handleTunnelRequest processes a tunnel creation request.
+func (s *Server) handleTunnelRequest(m *mux.Mux, session *Session, frame *proto.Frame) {
+	var req proto.TunnelRequest
+	if err := proto.DecodeJSONPayload(frame, &req); err != nil {
+		resp := &proto.TunnelResponse{OK: false, Error: "invalid request"}
+		respFrame, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, 0, resp)
+		m.GetFrameWriter().Write(respFrame)
+		return
+	}
+
+	session.mu.Lock()
+	if len(session.Tunnels) >= s.config.MaxTunnelsPerSession {
+		session.mu.Unlock()
+		resp := &proto.TunnelResponse{OK: false, Error: "max tunnels exceeded"}
+		respFrame, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, 0, resp)
+		m.GetFrameWriter().Write(respFrame)
+		return
+	}
+	session.mu.Unlock()
+
+	tunnelID := fmt.Sprintf("tun_%s", generateSubdomain())
+
+	switch req.Type {
+	case proto.TunnelTypeHTTP:
+		subdomain := req.Subdomain
+		if subdomain == "" {
+			subdomain = generateSubdomain()
+		}
+
+		// Check if subdomain is taken
+		if _, loaded := s.tunnels.LoadOrStore(subdomain, &Tunnel{}); loaded {
+			resp := &proto.TunnelResponse{OK: false, Error: "subdomain already taken"}
+			respFrame, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, 0, resp)
+			m.GetFrameWriter().Write(respFrame)
+			return
+		}
+
+		tunnel := &Tunnel{
+			ID:        tunnelID,
+			Type:      proto.TunnelTypeHTTP,
+			SessionID: session.ID,
+			Subdomain: subdomain,
+			PublicURL: fmt.Sprintf("http://%s.%s", subdomain, s.config.Domain),
+			LocalAddr: req.LocalAddr,
+			CreatedAt: time.Now(),
+		}
+		s.tunnels.Store(subdomain, tunnel)
+
+		session.mu.Lock()
+		session.Tunnels[tunnelID] = tunnel
+		session.mu.Unlock()
+
+		resp := &proto.TunnelResponse{
+			OK:        true,
+			TunnelID:  tunnelID,
+			Type:      proto.TunnelTypeHTTP,
+			PublicURL: tunnel.PublicURL,
+		}
+		respFrame, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, 0, resp)
+		m.GetFrameWriter().Write(respFrame)
+
+		s.logger.Info("tunnel created", "id", tunnelID, "type", "http", "subdomain", subdomain)
+
+	case proto.TunnelTypeTCP:
+		port, err := s.allocatePort()
+		if err != nil {
+			resp := &proto.TunnelResponse{OK: false, Error: "no ports available"}
+			respFrame, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, 0, resp)
+			m.GetFrameWriter().Write(respFrame)
+			return
+		}
+
+		tunnel := &Tunnel{
+			ID:        tunnelID,
+			Type:      proto.TunnelTypeTCP,
+			SessionID: session.ID,
+			Port:      port,
+			PublicURL: fmt.Sprintf("tcp://%s:%d", s.config.Domain, port),
+			LocalAddr: req.LocalAddr,
+			CreatedAt: time.Now(),
+		}
+
+		portKey := fmt.Sprintf("tcp:%d", port)
+		s.tunnels.Store(portKey, tunnel)
+
+		session.mu.Lock()
+		session.Tunnels[tunnelID] = tunnel
+		session.mu.Unlock()
+
+		// Start TCP listener for this tunnel
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			s.startTCPTunnelListener(port, tunnel, session)
+		}()
+
+		resp := &proto.TunnelResponse{
+			OK:        true,
+			TunnelID:  tunnelID,
+			Type:      proto.TunnelTypeTCP,
+			PublicURL: tunnel.PublicURL,
+		}
+		respFrame, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, 0, resp)
+		m.GetFrameWriter().Write(respFrame)
+
+		s.logger.Info("tunnel created", "id", tunnelID, "type", "tcp", "port", port)
+
+	default:
+		resp := &proto.TunnelResponse{OK: false, Error: "unsupported tunnel type"}
+		respFrame, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, 0, resp)
+		m.GetFrameWriter().Write(respFrame)
+	}
+}
+
+// handleTunnelClose processes a tunnel close request.
+func (s *Server) handleTunnelClose(session *Session, frame *proto.Frame) {
+	var req proto.TunnelClose
+	if err := proto.DecodeJSONPayload(frame, &req); err != nil {
+		return
+	}
+
+	session.mu.Lock()
+	tunnel, ok := session.Tunnels[req.TunnelID]
+	if ok {
+		delete(session.Tunnels, req.TunnelID)
+	}
+	session.mu.Unlock()
+
+	if tunnel == nil {
+		return
+	}
+
+	// Remove from global tunnels map
+	switch tunnel.Type {
+	case proto.TunnelTypeHTTP:
+		s.tunnels.Delete(tunnel.Subdomain)
+	case proto.TunnelTypeTCP:
+		portKey := fmt.Sprintf("tcp:%d", tunnel.Port)
+		s.tunnels.Delete(portKey)
+		s.releasePort(tunnel.Port)
+	}
+
+	s.logger.Info("tunnel closed", "id", req.TunnelID)
+}
+
+// removeSession removes a session and cleans up all its tunnels.
+func (s *Server) removeSession(sessionID string) {
+	v, ok := s.sessions.LoadAndDelete(sessionID)
+	if !ok {
+		return
+	}
+
+	session := v.(*Session)
+	session.mu.Lock()
+	tunnels := make(map[string]*Tunnel)
+	for k, v := range session.Tunnels {
+		tunnels[k] = v
+	}
+	session.Tunnels = nil
+	session.mu.Unlock()
+
+	// Clean up all tunnels
+	for _, tunnel := range tunnels {
+		switch tunnel.Type {
+		case proto.TunnelTypeHTTP:
+			s.tunnels.Delete(tunnel.Subdomain)
+		case proto.TunnelTypeTCP:
+			portKey := fmt.Sprintf("tcp:%d", tunnel.Port)
+			s.tunnels.Delete(portKey)
+			s.releasePort(tunnel.Port)
+		}
+	}
+}
+
+// startTCPTunnelListener starts a TCP listener for a tunnel.
+func (s *Server) startTCPTunnelListener(port int, tunnel *Tunnel, session *Session) {
+	addr := fmt.Sprintf(":%d", port)
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		s.logger.Error("failed to start TCP tunnel listener", "port", port, "error", err)
+		return
+	}
+	defer listener.Close()
+
+	// Close listener when context or mux is done to unblock Accept
+	go func() {
+		select {
+		case <-s.ctx.Done():
+		case <-session.Mux.Done():
+		}
+		listener.Close()
+	}()
+
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+
+		go func() {
+			defer conn.Close()
+			s.proxyTCPConnection(conn, tunnel, session)
+		}()
+	}
+}
+
+// proxyTCPConnection proxies a TCP connection through the mux.
+func (s *Server) proxyTCPConnection(conn net.Conn, tunnel *Tunnel, session *Session) {
+	// Open a stream through the mux
+	stream, err := session.Mux.OpenStream()
+	if err != nil {
+		return
+	}
+	defer stream.Close()
+
+	// Send STREAM_OPEN with TCP metadata
+	openFrame, _ := StreamOpenForTCP(tunnel.ID, stream.ID(), conn.RemoteAddr().String())
+	if err := session.Mux.GetFrameWriter().Write(openFrame); err != nil {
+		return
+	}
+
+	// Bidirectional copy
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		io.Copy(stream, conn)
+		stream.Close()
+	}()
+	go func() {
+		defer wg.Done()
+		io.Copy(conn, stream)
+		conn.Close()
+	}()
+	wg.Wait()
 }
 
 // startHTTPListener starts the HTTP edge listener.
@@ -317,15 +661,49 @@ func (s *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
 
 // forwardHTTPRequest forwards an HTTP request through the tunnel.
 func (s *Server) forwardHTTPRequest(w http.ResponseWriter, r *http.Request, session *Session, tunnel *Tunnel) {
-	// This is a simplified implementation
-	// In the full implementation, we would:
-	// 1. Create a new mux stream
-	// 2. Send STREAM_OPEN with request metadata
-	// 3. Send HTTP request as STREAM_DATA
-	// 4. Read response from stream
-	// 5. Write response to client
+	// 1. Open a new mux stream
+	stream, err := session.Mux.OpenStream()
+	if err != nil {
+		http.Error(w, "Failed to open stream", http.StatusBadGateway)
+		return
+	}
+	defer stream.Close()
 
-	http.Error(w, "Not implemented", http.StatusServiceUnavailable)
+	// 2. Send STREAM_OPEN frame with metadata
+	openFrame, _ := StreamOpenForHTTP(tunnel.ID, stream.ID(), r.RemoteAddr)
+	if err := session.Mux.GetFrameWriter().Write(openFrame); err != nil {
+		http.Error(w, "Failed to send stream open", http.StatusBadGateway)
+		return
+	}
+
+	// 3. Serialize the HTTP request and write through the stream
+	reqData, err := SerializeRequest(r)
+	if err != nil {
+		http.Error(w, "Failed to serialize request", http.StatusInternalServerError)
+		return
+	}
+	if _, err := stream.Write(reqData); err != nil {
+		http.Error(w, "Failed to write request to stream", http.StatusBadGateway)
+		return
+	}
+
+	// 4. Read response data from the stream
+	respData, err := io.ReadAll(stream)
+	if err != nil {
+		http.Error(w, "Failed to read response from stream", http.StatusBadGateway)
+		return
+	}
+
+	// 5. Deserialize the response
+	resp, err := DeserializeResponse(respData)
+	if err != nil {
+		http.Error(w, "Failed to deserialize response", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	// 6. Write the response back to the edge HTTP client
+	WriteResponse(w, resp)
 }
 
 // getTunnelBySubdomain looks up a tunnel by subdomain.

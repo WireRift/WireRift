@@ -1,12 +1,15 @@
 package client
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -115,6 +118,13 @@ func (c *Client) Connect() error {
 		return err
 	}
 
+	// Start stream handler
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		c.handleStreams()
+	}()
+
 	// Start heartbeat
 	c.wg.Add(1)
 	go func() {
@@ -155,8 +165,9 @@ func (c *Client) connect() error {
 	// Send magic bytes (4 bytes write to a just-opened TCP connection cannot fail)
 	proto.WriteMagic(conn)
 
-	// Create mux
+	// Create mux and start run loop FIRST so it dispatches control frames
 	c.mux = mux.New(conn, mux.DefaultConfig())
+	go c.mux.Run()
 
 	// Authenticate
 	if err := c.authenticate(); err != nil {
@@ -166,9 +177,6 @@ func (c *Client) connect() error {
 
 	c.connected.Store(true)
 	c.logger.Info("connected", "session", c.sessionID)
-
-	// Start mux run loop
-	go c.mux.Run()
 
 	return nil
 }
@@ -187,10 +195,15 @@ func (c *Client) authenticate() error {
 		return fmt.Errorf("send auth request: %w", err)
 	}
 
-	// Read response
-	respFrame, err := c.mux.GetFrameReader().Read()
-	if err != nil {
-		return fmt.Errorf("read auth response: %w", err)
+	// Read response from control frame channel (dispatched by mux.Run)
+	var respFrame *proto.Frame
+	select {
+	case f := <-c.mux.ControlFrame():
+		respFrame = f
+	case <-c.mux.Done():
+		return fmt.Errorf("connection closed")
+	case <-c.ctx.Done():
+		return fmt.Errorf("cancelled")
 	}
 
 	if respFrame.Type != proto.FrameAuthRes {
@@ -269,10 +282,15 @@ func (c *Client) openTunnel(req *proto.TunnelRequest) (*Tunnel, error) {
 		return nil, fmt.Errorf("send tunnel request: %w", err)
 	}
 
-	// Read response
-	respFrame, err := c.mux.GetFrameReader().Read()
-	if err != nil {
-		return nil, fmt.Errorf("read tunnel response: %w", err)
+	// Read response from control frame channel (dispatched by mux.Run)
+	var respFrame *proto.Frame
+	select {
+	case f := <-c.mux.ControlFrame():
+		respFrame = f
+	case <-c.mux.Done():
+		return nil, fmt.Errorf("connection closed")
+	case <-c.ctx.Done():
+		return nil, fmt.Errorf("cancelled")
 	}
 
 	if respFrame.Type != proto.FrameTunnelRes {
@@ -467,4 +485,102 @@ func (t *Tunnel) GetPublicURL() string {
 // GetLocalAddr returns the local address.
 func (t *Tunnel) GetLocalAddr() string {
 	return t.LocalAddr
+}
+
+// handleStreams accepts incoming streams from the server and dispatches them.
+func (c *Client) handleStreams() {
+	for {
+		stream, err := c.mux.AcceptStream()
+		if err != nil {
+			return
+		}
+		go c.handleStream(stream)
+	}
+}
+
+// handleStream routes a stream based on its protocol.
+func (c *Client) handleStream(stream *mux.Stream) {
+	defer stream.Close()
+	protocol := stream.Protocol()
+
+	switch protocol {
+	case "http":
+		c.handleHTTPStream(stream)
+	case "tcp":
+		c.handleTCPStream(stream)
+	default:
+		stream.Reset()
+	}
+}
+
+// handleHTTPStream handles an incoming HTTP stream by proxying to the local service.
+func (c *Client) handleHTTPStream(stream *mux.Stream) {
+	// Find the tunnel for this stream
+	tunnel := c.findTunnelForStream(stream)
+	if tunnel == nil {
+		stream.Reset()
+		return
+	}
+
+	// Read HTTP request from stream
+	reader := bufio.NewReader(stream)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		return
+	}
+
+	// Forward to local service
+	req.URL.Scheme = "http"
+	req.URL.Host = tunnel.LocalAddr
+	req.RequestURI = ""
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		// Send 502 response
+		errResp := "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n"
+		stream.Write([]byte(errResp))
+		return
+	}
+	defer resp.Body.Close()
+
+	// Write response back through stream
+	resp.Write(stream)
+}
+
+// handleTCPStream handles an incoming TCP stream by proxying to the local service.
+func (c *Client) handleTCPStream(stream *mux.Stream) {
+	tunnel := c.findTunnelForStream(stream)
+	if tunnel == nil {
+		stream.Reset()
+		return
+	}
+
+	// Dial local service
+	localConn, err := net.Dial("tcp", tunnel.LocalAddr)
+	if err != nil {
+		return
+	}
+	defer localConn.Close()
+
+	// Bidirectional copy
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		io.Copy(localConn, stream)
+	}()
+	go func() {
+		defer wg.Done()
+		io.Copy(stream, localConn)
+	}()
+	wg.Wait()
+}
+
+// findTunnelForStream finds the tunnel associated with a stream.
+func (c *Client) findTunnelForStream(stream *mux.Stream) *Tunnel {
+	tunnelID := stream.TunnelID()
+	if v, ok := c.tunnels.Load(tunnelID); ok {
+		return v.(*Tunnel)
+	}
+	return nil
 }

@@ -1,10 +1,15 @@
 package client
 
 import (
+	"bufio"
 	"crypto/tls"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -213,6 +218,8 @@ func TestClientErrors(t *testing.T) {
 }
 
 // --- Mock server for full-flow connect tests ---
+// The mock server uses a mux on the server side, matching the real server.
+// This ensures control frames are dispatched properly through the mux protocol.
 
 type mockServer struct {
 	listener net.Listener
@@ -265,32 +272,28 @@ func (ms *mockServer) handleConn(conn net.Conn) {
 		return
 	}
 
-	frameWriter := proto.NewFrameWriter(conn)
-	frameReader := proto.NewFrameReader(conn)
+	// Use a mux on the server side so control frames are dispatched properly
+	m := mux.New(conn, mux.DefaultConfig())
+	go m.Run()
 
 	for {
-		frame, err := frameReader.Read()
-		if err != nil {
-			return
-		}
-
-		switch frame.Type {
-		case proto.FrameAuthReq:
-			ms.handleAuth(frame, frameWriter)
-		case proto.FrameTunnelReq:
-			ms.handleTunnelRequest(frame, frameWriter)
-		case proto.FrameHeartbeat:
-			ackFrame := &proto.Frame{
-				Version:  proto.Version,
-				Type:     proto.FrameHeartbeatAck,
-				StreamID: 0,
-				Payload:  proto.HeartbeatPayload(),
+		select {
+		case frame, ok := <-m.ControlFrame():
+			if !ok {
+				return
 			}
-			frameWriter.Write(ackFrame)
-		case proto.FrameTunnelClose:
-			// Just consume it
-		default:
-			// Ignore
+
+			switch frame.Type {
+			case proto.FrameAuthReq:
+				ms.handleAuth(frame, m.GetFrameWriter())
+			case proto.FrameTunnelReq:
+				ms.handleTunnelRequest(frame, m.GetFrameWriter())
+			case proto.FrameTunnelClose:
+				// Just consume it
+			}
+
+		case <-m.Done():
+			return
 		}
 	}
 }
@@ -344,8 +347,35 @@ func (ms *mockServer) ConnectionCount() int {
 // --- Helper: create a connected client using net.Pipe ---
 
 // makeConnectedClient creates a Client with an active mux backed by a net.Pipe.
-// Returns the client, and the server-side of the pipe for writing responses.
-func makeConnectedClient(t *testing.T) (*Client, net.Conn) {
+// The mux.Run() loop is started so that control frames are dispatched.
+// Returns the client, and the server-side mux for sending responses.
+func makeConnectedClient(t *testing.T) (*Client, *mux.Mux) {
+	t.Helper()
+	c1, c2 := net.Pipe()
+
+	cfg := Config{
+		HeartbeatInterval:    100 * time.Millisecond,
+		ReconnectInterval:    50 * time.Millisecond,
+		MaxReconnectInterval: 200 * time.Millisecond,
+	}
+	c := New(cfg, slog.Default())
+	c.conn = c1
+	c.mux = mux.New(c1, mux.DefaultConfig())
+	c.connected.Store(true)
+	c.sessionID = "test-session"
+	c.maxTunnels = 10
+	go c.mux.Run()
+
+	serverMux := mux.New(c2, mux.DefaultConfig())
+	go serverMux.Run()
+
+	return c, serverMux
+}
+
+// makeConnectedClientRaw creates a Client with an active mux backed by a net.Pipe.
+// Returns the client and the raw server-side connection (not a mux).
+// Used for tests that need direct control over the connection (e.g., close, drain).
+func makeConnectedClientRaw(t *testing.T) (*Client, net.Conn) {
 	t.Helper()
 	c1, c2 := net.Pipe()
 
@@ -492,49 +522,24 @@ func TestAuthenticateReadError(t *testing.T) {
 	c := New(cfg, slog.Default())
 	c.conn = c1
 	c.mux = mux.New(c1, mux.DefaultConfig())
+	go c.mux.Run() // Start mux so it dispatches control frames
 
-	// Server side: read the auth request frame then close
+	// Server side: use a mux too, read the auth request then close
+	serverMux := mux.New(c2, mux.DefaultConfig())
+	go serverMux.Run()
 	go func() {
-		fr := proto.NewFrameReader(c2)
-		fr.Read() // read auth request
-		c2.Close() // close before sending response
+		// Wait for control frame (the auth request), then close
+		select {
+		case <-serverMux.ControlFrame():
+		case <-serverMux.Done():
+		}
+		// Close without sending response
+		serverMux.Close()
 	}()
 
 	err := c.authenticate()
 	if err == nil {
 		t.Fatal("Expected error when reading response from closed conn")
-	}
-	c1.Close()
-}
-
-func TestAuthenticateWrongFrameType(t *testing.T) {
-	c1, c2 := net.Pipe()
-
-	cfg := Config{HeartbeatInterval: time.Second}
-	c := New(cfg, slog.Default())
-	c.conn = c1
-	c.mux = mux.New(c1, mux.DefaultConfig())
-
-	go func() {
-		fr := proto.NewFrameReader(c2)
-		fw := proto.NewFrameWriter(c2)
-		fr.Read() // read auth request
-
-		// Send wrong frame type
-		wrongFrame := &proto.Frame{
-			Version:  proto.Version,
-			Type:     proto.FrameHeartbeat,
-			StreamID: 0,
-			Payload:  proto.HeartbeatPayload(),
-		}
-		fw.Write(wrongFrame)
-		// Drain remaining
-		io.Copy(io.Discard, c2)
-	}()
-
-	err := c.authenticate()
-	if err == nil {
-		t.Fatal("Expected error for wrong frame type")
 	}
 	c1.Close()
 }
@@ -546,12 +551,17 @@ func TestAuthenticateDecodeError(t *testing.T) {
 	c := New(cfg, slog.Default())
 	c.conn = c1
 	c.mux = mux.New(c1, mux.DefaultConfig())
+	go c.mux.Run()
 
+	// Server side: use a mux, read auth request, send auth response with invalid JSON
+	serverMux := mux.New(c2, mux.DefaultConfig())
+	go serverMux.Run()
 	go func() {
-		fr := proto.NewFrameReader(c2)
-		fw := proto.NewFrameWriter(c2)
-		fr.Read() // read auth request
-
+		select {
+		case <-serverMux.ControlFrame():
+		case <-serverMux.Done():
+			return
+		}
 		// Send auth response frame with invalid JSON payload
 		badFrame := &proto.Frame{
 			Version:  proto.Version,
@@ -559,8 +569,9 @@ func TestAuthenticateDecodeError(t *testing.T) {
 			StreamID: 0,
 			Payload:  []byte("not valid json{{{"),
 		}
-		fw.Write(badFrame)
-		io.Copy(io.Discard, c2)
+		serverMux.GetFrameWriter().Write(badFrame)
+		// Keep mux alive to drain
+		<-serverMux.Done()
 	}()
 
 	err := c.authenticate()
@@ -568,6 +579,7 @@ func TestAuthenticateDecodeError(t *testing.T) {
 		t.Fatal("Expected error for bad JSON payload")
 	}
 	c1.Close()
+	c2.Close()
 }
 
 func TestAuthenticateAuthFailed(t *testing.T) {
@@ -577,19 +589,23 @@ func TestAuthenticateAuthFailed(t *testing.T) {
 	c := New(cfg, slog.Default())
 	c.conn = c1
 	c.mux = mux.New(c1, mux.DefaultConfig())
+	go c.mux.Run()
 
+	serverMux := mux.New(c2, mux.DefaultConfig())
+	go serverMux.Run()
 	go func() {
-		fr := proto.NewFrameReader(c2)
-		fw := proto.NewFrameWriter(c2)
-		fr.Read() // read auth request
-
+		select {
+		case <-serverMux.ControlFrame():
+		case <-serverMux.Done():
+			return
+		}
 		resp := &proto.AuthResponse{
 			OK:    false,
 			Error: "access denied",
 		}
 		respFrame, _ := proto.EncodeJSONPayload(proto.FrameAuthRes, proto.ControlStreamID, resp)
-		fw.Write(respFrame)
-		io.Copy(io.Discard, c2)
+		serverMux.GetFrameWriter().Write(respFrame)
+		<-serverMux.Done()
 	}()
 
 	err := c.authenticate()
@@ -597,6 +613,7 @@ func TestAuthenticateAuthFailed(t *testing.T) {
 		t.Fatal("Expected error for auth failure")
 	}
 	c1.Close()
+	c2.Close()
 }
 
 func TestAuthenticateSuccess(t *testing.T) {
@@ -606,20 +623,24 @@ func TestAuthenticateSuccess(t *testing.T) {
 	c := New(cfg, slog.Default())
 	c.conn = c1
 	c.mux = mux.New(c1, mux.DefaultConfig())
+	go c.mux.Run()
 
+	serverMux := mux.New(c2, mux.DefaultConfig())
+	go serverMux.Run()
 	go func() {
-		fr := proto.NewFrameReader(c2)
-		fw := proto.NewFrameWriter(c2)
-		fr.Read() // read auth request
-
+		select {
+		case <-serverMux.ControlFrame():
+		case <-serverMux.Done():
+			return
+		}
 		resp := &proto.AuthResponse{
 			OK:         true,
 			SessionID:  "session-abc",
 			MaxTunnels: 5,
 		}
 		respFrame, _ := proto.EncodeJSONPayload(proto.FrameAuthRes, proto.ControlStreamID, resp)
-		fw.Write(respFrame)
-		io.Copy(io.Discard, c2)
+		serverMux.GetFrameWriter().Write(respFrame)
+		<-serverMux.Done()
 	}()
 
 	err := c.authenticate()
@@ -633,33 +654,34 @@ func TestAuthenticateSuccess(t *testing.T) {
 		t.Errorf("maxTunnels = %d, want 5", c.maxTunnels)
 	}
 	c1.Close()
+	c2.Close()
 }
 
 // --- openTunnel() tests ---
 
 func TestOpenTunnelSuccess(t *testing.T) {
-	client, serverConn := makeConnectedClient(t)
-	defer serverConn.Close()
+	client, serverMux := makeConnectedClient(t)
 
 	go func() {
-		fr := proto.NewFrameReader(serverConn)
-		fw := proto.NewFrameWriter(serverConn)
-		frame, err := fr.Read()
-		if err != nil {
-			return
+		select {
+		case frame, ok := <-serverMux.ControlFrame():
+			if !ok {
+				return
+			}
+			if frame.Type != proto.FrameTunnelReq {
+				return
+			}
+			resp := &proto.TunnelResponse{
+				OK:        true,
+				TunnelID:  "tun-123",
+				Type:      proto.TunnelTypeHTTP,
+				PublicURL: "https://myapp.wirerift.dev",
+			}
+			respFrame, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, proto.ControlStreamID, resp)
+			serverMux.GetFrameWriter().Write(respFrame)
+		case <-serverMux.Done():
 		}
-		if frame.Type != proto.FrameTunnelReq {
-			return
-		}
-		resp := &proto.TunnelResponse{
-			OK:        true,
-			TunnelID:  "tun-123",
-			Type:      proto.TunnelTypeHTTP,
-			PublicURL: "https://myapp.wirerift.dev",
-		}
-		respFrame, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, proto.ControlStreamID, resp)
-		fw.Write(respFrame)
-		io.Copy(io.Discard, serverConn)
+		<-serverMux.Done()
 	}()
 
 	req := &proto.TunnelRequest{
@@ -693,8 +715,8 @@ func TestOpenTunnelSuccess(t *testing.T) {
 }
 
 func TestOpenTunnelWriteError(t *testing.T) {
-	client, serverConn := makeConnectedClient(t)
-	serverConn.Close() // close server side so writes fail
+	client, serverMux := makeConnectedClient(t)
+	serverMux.Close() // close server mux so writes fail
 
 	req := &proto.TunnelRequest{
 		Type:      proto.TunnelTypeHTTP,
@@ -708,12 +730,15 @@ func TestOpenTunnelWriteError(t *testing.T) {
 }
 
 func TestOpenTunnelReadError(t *testing.T) {
-	client, serverConn := makeConnectedClient(t)
+	client, serverMux := makeConnectedClient(t)
 
 	go func() {
-		fr := proto.NewFrameReader(serverConn)
-		fr.Read() // read tunnel request
-		serverConn.Close() // close before sending response
+		// Wait for control frame then close without responding
+		select {
+		case <-serverMux.ControlFrame():
+		case <-serverMux.Done():
+		}
+		serverMux.Close()
 	}()
 
 	req := &proto.TunnelRequest{
@@ -727,52 +752,23 @@ func TestOpenTunnelReadError(t *testing.T) {
 	client.conn.Close()
 }
 
-func TestOpenTunnelWrongFrameType(t *testing.T) {
-	client, serverConn := makeConnectedClient(t)
-
-	go func() {
-		fr := proto.NewFrameReader(serverConn)
-		fw := proto.NewFrameWriter(serverConn)
-		fr.Read() // read tunnel request
-
-		wrongFrame := &proto.Frame{
-			Version:  proto.Version,
-			Type:     proto.FrameHeartbeat,
-			StreamID: 0,
-			Payload:  proto.HeartbeatPayload(),
-		}
-		fw.Write(wrongFrame)
-		io.Copy(io.Discard, serverConn)
-	}()
-
-	req := &proto.TunnelRequest{
-		Type:      proto.TunnelTypeHTTP,
-		LocalAddr: "localhost:3000",
-	}
-	_, err := client.openTunnel(req)
-	if err == nil {
-		t.Fatal("Expected error for wrong frame type")
-	}
-	client.conn.Close()
-	serverConn.Close()
-}
-
 func TestOpenTunnelDecodeError(t *testing.T) {
-	client, serverConn := makeConnectedClient(t)
+	client, serverMux := makeConnectedClient(t)
 
 	go func() {
-		fr := proto.NewFrameReader(serverConn)
-		fw := proto.NewFrameWriter(serverConn)
-		fr.Read() // read tunnel request
-
+		select {
+		case <-serverMux.ControlFrame():
+		case <-serverMux.Done():
+			return
+		}
 		badFrame := &proto.Frame{
 			Version:  proto.Version,
 			Type:     proto.FrameTunnelRes,
 			StreamID: 0,
 			Payload:  []byte("invalid json{{{"),
 		}
-		fw.Write(badFrame)
-		io.Copy(io.Discard, serverConn)
+		serverMux.GetFrameWriter().Write(badFrame)
+		<-serverMux.Done()
 	}()
 
 	req := &proto.TunnelRequest{
@@ -784,24 +780,24 @@ func TestOpenTunnelDecodeError(t *testing.T) {
 		t.Fatal("Expected error for invalid JSON")
 	}
 	client.conn.Close()
-	serverConn.Close()
 }
 
 func TestOpenTunnelFailed(t *testing.T) {
-	client, serverConn := makeConnectedClient(t)
+	client, serverMux := makeConnectedClient(t)
 
 	go func() {
-		fr := proto.NewFrameReader(serverConn)
-		fw := proto.NewFrameWriter(serverConn)
-		fr.Read() // read tunnel request
-
+		select {
+		case <-serverMux.ControlFrame():
+		case <-serverMux.Done():
+			return
+		}
 		resp := &proto.TunnelResponse{
 			OK:    false,
 			Error: "max tunnels reached",
 		}
 		respFrame, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, proto.ControlStreamID, resp)
-		fw.Write(respFrame)
-		io.Copy(io.Discard, serverConn)
+		serverMux.GetFrameWriter().Write(respFrame)
+		<-serverMux.Done()
 	}()
 
 	req := &proto.TunnelRequest{
@@ -813,33 +809,33 @@ func TestOpenTunnelFailed(t *testing.T) {
 		t.Fatal("Expected error for failed tunnel")
 	}
 	client.conn.Close()
-	serverConn.Close()
 }
 
 // --- HTTP() and TCP() with connected client ---
 
 func TestHTTPSuccess(t *testing.T) {
-	client, serverConn := makeConnectedClient(t)
+	client, serverMux := makeConnectedClient(t)
 
 	go func() {
-		fr := proto.NewFrameReader(serverConn)
-		fw := proto.NewFrameWriter(serverConn)
-		frame, err := fr.Read()
-		if err != nil {
-			return
+		select {
+		case frame, ok := <-serverMux.ControlFrame():
+			if !ok {
+				return
+			}
+			if frame.Type != proto.FrameTunnelReq {
+				return
+			}
+			resp := &proto.TunnelResponse{
+				OK:        true,
+				TunnelID:  "http-tun-1",
+				Type:      proto.TunnelTypeHTTP,
+				PublicURL: "https://myapp.wirerift.dev",
+			}
+			respFrame, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, proto.ControlStreamID, resp)
+			serverMux.GetFrameWriter().Write(respFrame)
+		case <-serverMux.Done():
 		}
-		if frame.Type != proto.FrameTunnelReq {
-			return
-		}
-		resp := &proto.TunnelResponse{
-			OK:        true,
-			TunnelID:  "http-tun-1",
-			Type:      proto.TunnelTypeHTTP,
-			PublicURL: "https://myapp.wirerift.dev",
-		}
-		respFrame, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, proto.ControlStreamID, resp)
-		fw.Write(respFrame)
-		io.Copy(io.Discard, serverConn)
+		<-serverMux.Done()
 	}()
 
 	tunnel, err := client.HTTP("localhost:3000", WithSubdomain("myapp"), WithInspect())
@@ -850,30 +846,30 @@ func TestHTTPSuccess(t *testing.T) {
 		t.Errorf("tunnel ID = %q, want http-tun-1", tunnel.ID)
 	}
 	client.conn.Close()
-	serverConn.Close()
 }
 
 func TestTCPSuccess(t *testing.T) {
-	client, serverConn := makeConnectedClient(t)
+	client, serverMux := makeConnectedClient(t)
 
 	go func() {
-		fr := proto.NewFrameReader(serverConn)
-		fw := proto.NewFrameWriter(serverConn)
-		frame, err := fr.Read()
-		if err != nil {
-			return
+		select {
+		case frame, ok := <-serverMux.ControlFrame():
+			if !ok {
+				return
+			}
+			if frame.Type != proto.FrameTunnelReq {
+				return
+			}
+			resp := &proto.TunnelResponse{
+				OK:       true,
+				TunnelID: "tcp-tun-1",
+				Type:     proto.TunnelTypeTCP,
+			}
+			respFrame, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, proto.ControlStreamID, resp)
+			serverMux.GetFrameWriter().Write(respFrame)
+		case <-serverMux.Done():
 		}
-		if frame.Type != proto.FrameTunnelReq {
-			return
-		}
-		resp := &proto.TunnelResponse{
-			OK:       true,
-			TunnelID: "tcp-tun-1",
-			Type:     proto.TunnelTypeTCP,
-		}
-		respFrame, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, proto.ControlStreamID, resp)
-		fw.Write(respFrame)
-		io.Copy(io.Discard, serverConn)
+		<-serverMux.Done()
 	}()
 
 	tunnel, err := client.TCP("localhost:5432", 5432)
@@ -887,20 +883,25 @@ func TestTCPSuccess(t *testing.T) {
 		t.Errorf("Port = %d, want 5432", tunnel.Port)
 	}
 	client.conn.Close()
-	serverConn.Close()
 }
 
 // --- CloseTunnel() tests ---
 
 func TestCloseTunnelSuccess(t *testing.T) {
-	client, serverConn := makeConnectedClient(t)
+	client, serverMux := makeConnectedClient(t)
 
 	// Store a tunnel to close
 	client.tunnels.Store("tun-1", &Tunnel{ID: "tun-1", client: client})
 
 	go func() {
-		// Drain all data from server side
-		io.Copy(io.Discard, serverConn)
+		// Drain control frames
+		for {
+			select {
+			case <-serverMux.ControlFrame():
+			case <-serverMux.Done():
+				return
+			}
+		}
 	}()
 
 	err := client.CloseTunnel("tun-1")
@@ -914,12 +915,13 @@ func TestCloseTunnelSuccess(t *testing.T) {
 	}
 
 	client.conn.Close()
-	serverConn.Close()
 }
 
 func TestCloseTunnelWriteError(t *testing.T) {
-	client, serverConn := makeConnectedClient(t)
-	serverConn.Close() // close server side so writes fail
+	client, serverMux := makeConnectedClient(t)
+	serverMux.Close() // close server mux so writes fail
+	// Wait briefly for the close to propagate
+	time.Sleep(10 * time.Millisecond)
 
 	err := client.CloseTunnel("tun-1")
 	if err == nil {
@@ -978,7 +980,7 @@ func TestHeartbeatLoopCtxDone(t *testing.T) {
 }
 
 func TestHeartbeatLoopWriteError(t *testing.T) {
-	client, serverConn := makeConnectedClient(t)
+	client, serverConn := makeConnectedClientRaw(t)
 
 	// Close server side after a brief delay so heartbeat write fails,
 	// then close mux to end the loop since heartbeat failures only log warnings.
@@ -995,7 +997,7 @@ func TestHeartbeatLoopWriteError(t *testing.T) {
 }
 
 func TestHeartbeatLoopMuxDone(t *testing.T) {
-	client, serverConn := makeConnectedClient(t)
+	client, serverConn := makeConnectedClientRaw(t)
 
 	// Close the mux to trigger Done()
 	go func() {
@@ -1014,7 +1016,7 @@ func TestHeartbeatLoopMuxDone(t *testing.T) {
 
 func TestHeartbeatLoopNotConnected(t *testing.T) {
 	// Test the continue branch when not connected
-	client, serverConn := makeConnectedClient(t)
+	client, serverConn := makeConnectedClientRaw(t)
 	client.connected.Store(false) // set not connected
 
 	go func() {
@@ -1034,7 +1036,7 @@ func TestHeartbeatLoopNotConnected(t *testing.T) {
 // --- reconnectLoop() tests ---
 
 func TestReconnectLoopCtxDone(t *testing.T) {
-	client, serverConn := makeConnectedClient(t)
+	client, serverConn := makeConnectedClientRaw(t)
 	client.config.Reconnect = true
 
 	// Cancel context immediately
@@ -1046,7 +1048,7 @@ func TestReconnectLoopCtxDone(t *testing.T) {
 }
 
 func TestReconnectLoopReconnectDisabled(t *testing.T) {
-	client, serverConn := makeConnectedClient(t)
+	client, serverConn := makeConnectedClientRaw(t)
 	client.config.Reconnect = false
 
 	// Close mux to trigger Done
@@ -1060,7 +1062,7 @@ func TestReconnectLoopReconnectDisabled(t *testing.T) {
 }
 
 func TestReconnectLoopFailureWithBackoff(t *testing.T) {
-	client, serverConn := makeConnectedClient(t)
+	client, serverConn := makeConnectedClientRaw(t)
 	client.config.Reconnect = true
 	client.config.ServerAddr = "127.0.0.1:1" // will fail to reconnect
 	client.config.ReconnectInterval = 20 * time.Millisecond
@@ -1080,7 +1082,7 @@ func TestReconnectLoopFailureWithBackoff(t *testing.T) {
 }
 
 func TestReconnectLoopCtxDoneDuringWait(t *testing.T) {
-	client, serverConn := makeConnectedClient(t)
+	client, serverConn := makeConnectedClientRaw(t)
 	client.config.Reconnect = true
 	client.config.ServerAddr = "127.0.0.1:1"
 	client.config.ReconnectInterval = 5 * time.Second // long interval
@@ -1103,7 +1105,7 @@ func TestReconnectLoopSuccess(t *testing.T) {
 	server := newMockServer(t)
 	defer server.Close()
 
-	client, serverConn := makeConnectedClient(t)
+	client, serverConn := makeConnectedClientRaw(t)
 	client.config.Reconnect = true
 	client.config.ServerAddr = server.addr
 	client.config.Token = server.token
@@ -1149,10 +1151,16 @@ func TestConnectionLossTriggersReconnect(t *testing.T) {
 // --- Tunnel.Close via client ---
 
 func TestTunnelCloseViaClient(t *testing.T) {
-	client, serverConn := makeConnectedClient(t)
+	client, serverMux := makeConnectedClient(t)
 
 	go func() {
-		io.Copy(io.Discard, serverConn)
+		for {
+			select {
+			case <-serverMux.ControlFrame():
+			case <-serverMux.Done():
+				return
+			}
+		}
 	}()
 
 	tunnel := &Tunnel{
@@ -1171,7 +1179,6 @@ func TestTunnelCloseViaClient(t *testing.T) {
 	}
 
 	client.conn.Close()
-	serverConn.Close()
 }
 
 // --- connect() WriteMagic error ---
@@ -1229,16 +1236,23 @@ func TestConnectAuthenticateError(t *testing.T) {
 		magic := make([]byte, 4)
 		io.ReadFull(conn, magic)
 
-		fr := proto.NewFrameReader(conn)
-		fw := proto.NewFrameWriter(conn)
+		// Use a mux on the server side so the client mux dispatches correctly
+		serverMux := mux.New(conn, mux.DefaultConfig())
+		go serverMux.Run()
 
-		// Read auth request
-		fr.Read()
+		// Wait for auth request
+		select {
+		case <-serverMux.ControlFrame():
+		case <-serverMux.Done():
+			return
+		}
 
 		// Send auth failure
 		resp := &proto.AuthResponse{OK: false, Error: "bad token"}
 		respFrame, _ := proto.EncodeJSONPayload(proto.FrameAuthRes, proto.ControlStreamID, resp)
-		fw.Write(respFrame)
+		serverMux.GetFrameWriter().Write(respFrame)
+
+		<-serverMux.Done()
 	}()
 
 	cfg := DefaultConfig()
@@ -1296,3 +1310,649 @@ func TestMaxTunnelsAfterConnect(t *testing.T) {
 		t.Errorf("maxTunnels should be 10 after connect, got %d", c.maxTunnels)
 	}
 }
+
+// --- Stream handler tests ---
+
+func TestFindTunnelForStream(t *testing.T) {
+	c := New(DefaultConfig(), nil)
+
+	// No tunnel stored
+	c1, c2 := net.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+	m := mux.New(c1, mux.DefaultConfig())
+	stream, _ := m.OpenStream()
+	stream.SetMetadata("", "", "nonexistent")
+
+	result := c.findTunnelForStream(stream)
+	if result != nil {
+		t.Error("Expected nil for nonexistent tunnel")
+	}
+
+	// Store a tunnel and find it
+	tun := &Tunnel{ID: "tun-1", LocalAddr: "localhost:3000", client: c}
+	c.tunnels.Store("tun-1", tun)
+	stream.SetMetadata("", "", "tun-1")
+
+	result = c.findTunnelForStream(stream)
+	if result == nil {
+		t.Fatal("Expected to find tunnel")
+	}
+	if result.ID != "tun-1" {
+		t.Errorf("tunnel ID = %q, want tun-1", result.ID)
+	}
+}
+
+// --- handleStream tests ---
+
+func TestHandleStreamHTTP(t *testing.T) {
+	// Start a local HTTP server
+	localServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		w.Write([]byte("hello from local"))
+	}))
+	defer localServer.Close()
+
+	c1, c2 := net.Pipe()
+	clientMux := mux.New(c1, mux.DefaultConfig())
+	serverMux := mux.New(c2, mux.DefaultConfig())
+	go clientMux.Run()
+	go serverMux.Run()
+
+	cfg := DefaultConfig()
+	c := New(cfg, nil)
+	c.mux = clientMux
+	c.connected.Store(true)
+
+	localAddr := strings.TrimPrefix(localServer.URL, "http://")
+	tun := &Tunnel{ID: "tun-http", LocalAddr: localAddr, Type: proto.TunnelTypeHTTP, client: c}
+	c.tunnels.Store("tun-http", tun)
+
+	// Start handling streams
+	go c.handleStreams()
+
+	// Open a stream from server side and send STREAM_OPEN
+	stream, err := serverMux.OpenStream()
+	if err != nil {
+		t.Fatalf("OpenStream failed: %v", err)
+	}
+
+	openFrame, _ := proto.EncodeJSONPayload(proto.FrameStreamOpen, stream.ID(), &proto.StreamOpen{
+		TunnelID: "tun-http", RemoteAddr: "1.2.3.4:5678", Protocol: "http",
+	})
+	serverMux.GetFrameWriter().Write(openFrame)
+
+	// Wait for the stream to be accepted on the client side
+	time.Sleep(100 * time.Millisecond)
+
+	// Write an HTTP request through the stream
+	httpReq := "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+	stream.Write([]byte(httpReq))
+
+	// Read the HTTP response from the stream
+	reader := bufio.NewReader(stream)
+	resp, err := http.ReadResponse(reader, nil)
+	if err != nil {
+		t.Fatalf("Failed to read response: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		t.Errorf("Expected status 200, got %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != "hello from local" {
+		t.Errorf("Expected body 'hello from local', got %q", string(body))
+	}
+
+	c1.Close()
+	c2.Close()
+}
+
+func TestHandleStreamTCP(t *testing.T) {
+	// Start a local TCP echo server
+	echoListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to start echo server: %v", err)
+	}
+	defer echoListener.Close()
+
+	go func() {
+		for {
+			conn, err := echoListener.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				io.Copy(conn, conn)
+			}()
+		}
+	}()
+
+	c1, c2 := net.Pipe()
+	clientMux := mux.New(c1, mux.DefaultConfig())
+	serverMux := mux.New(c2, mux.DefaultConfig())
+	go clientMux.Run()
+	go serverMux.Run()
+
+	cfg := DefaultConfig()
+	c := New(cfg, nil)
+	c.mux = clientMux
+	c.connected.Store(true)
+
+	localAddr := echoListener.Addr().String()
+	tun := &Tunnel{ID: "tun-tcp", LocalAddr: localAddr, Type: proto.TunnelTypeTCP, client: c}
+	c.tunnels.Store("tun-tcp", tun)
+
+	// Start handling streams
+	go c.handleStreams()
+
+	// Open a stream from server side and send STREAM_OPEN
+	stream, err := serverMux.OpenStream()
+	if err != nil {
+		t.Fatalf("OpenStream failed: %v", err)
+	}
+
+	openFrame, _ := proto.EncodeJSONPayload(proto.FrameStreamOpen, stream.ID(), &proto.StreamOpen{
+		TunnelID: "tun-tcp", RemoteAddr: "1.2.3.4:5678", Protocol: "tcp",
+	})
+	serverMux.GetFrameWriter().Write(openFrame)
+
+	// Wait for the stream to be accepted
+	time.Sleep(100 * time.Millisecond)
+
+	// Write data through the stream
+	testData := "hello echo"
+	stream.Write([]byte(testData))
+
+	// Read the echoed data
+	buf := make([]byte, 256)
+	n, err := stream.Read(buf)
+	if err != nil {
+		t.Fatalf("Failed to read echo: %v", err)
+	}
+	if string(buf[:n]) != testData {
+		t.Errorf("Expected echo %q, got %q", testData, string(buf[:n]))
+	}
+
+	c1.Close()
+	c2.Close()
+}
+
+func TestHandleStreamUnknownProtocol(t *testing.T) {
+	c1, c2 := net.Pipe()
+	clientMux := mux.New(c1, mux.DefaultConfig())
+	serverMux := mux.New(c2, mux.DefaultConfig())
+	go clientMux.Run()
+	go serverMux.Run()
+
+	cfg := DefaultConfig()
+	c := New(cfg, nil)
+	c.mux = clientMux
+	c.connected.Store(true)
+
+	// Start handling streams
+	go c.handleStreams()
+
+	// Open a stream with unknown protocol
+	stream, err := serverMux.OpenStream()
+	if err != nil {
+		t.Fatalf("OpenStream failed: %v", err)
+	}
+
+	openFrame, _ := proto.EncodeJSONPayload(proto.FrameStreamOpen, stream.ID(), &proto.StreamOpen{
+		TunnelID: "tun-unknown", RemoteAddr: "1.2.3.4:5678", Protocol: "unknown",
+	})
+	serverMux.GetFrameWriter().Write(openFrame)
+
+	// Wait for the stream to be accepted and handled (reset)
+	time.Sleep(100 * time.Millisecond)
+
+	// The stream should have been reset - reading should fail
+	buf := make([]byte, 10)
+	_, err = stream.Read(buf)
+	if err == nil {
+		t.Error("Expected error reading from reset stream")
+	}
+
+	c1.Close()
+	c2.Close()
+}
+
+// --- handleHTTPStream edge cases ---
+
+func TestHandleHTTPStreamNoTunnel(t *testing.T) {
+	c1, c2 := net.Pipe()
+	clientMux := mux.New(c1, mux.DefaultConfig())
+	serverMux := mux.New(c2, mux.DefaultConfig())
+	go clientMux.Run()
+	go serverMux.Run()
+
+	cfg := DefaultConfig()
+	c := New(cfg, nil)
+	c.mux = clientMux
+	c.connected.Store(true)
+	// Do NOT store any tunnel
+
+	// Open a stream with a tunnel ID that doesn't exist
+	stream, _ := serverMux.OpenStream()
+	openFrame, _ := proto.EncodeJSONPayload(proto.FrameStreamOpen, stream.ID(), &proto.StreamOpen{
+		TunnelID: "nonexistent", RemoteAddr: "1.2.3.4:5678", Protocol: "http",
+	})
+	serverMux.GetFrameWriter().Write(openFrame)
+
+	// Accept stream on client side and call handleStream directly
+	clientStream, err := clientMux.AcceptStream()
+	if err != nil {
+		t.Fatalf("AcceptStream failed: %v", err)
+	}
+
+	// handleStream should reset the stream because tunnel is not found
+	c.handleStream(clientStream)
+
+	// The server-side stream should be reset
+	buf := make([]byte, 10)
+	_, err = stream.Read(buf)
+	if err == nil {
+		t.Error("Expected error reading from reset stream")
+	}
+
+	c1.Close()
+	c2.Close()
+}
+
+func TestHandleHTTPStreamBadRequest(t *testing.T) {
+	c1, c2 := net.Pipe()
+	clientMux := mux.New(c1, mux.DefaultConfig())
+	serverMux := mux.New(c2, mux.DefaultConfig())
+	go clientMux.Run()
+	go serverMux.Run()
+
+	cfg := DefaultConfig()
+	c := New(cfg, nil)
+	c.mux = clientMux
+	c.connected.Store(true)
+
+	tun := &Tunnel{ID: "tun-bad", LocalAddr: "127.0.0.1:1", Type: proto.TunnelTypeHTTP, client: c}
+	c.tunnels.Store("tun-bad", tun)
+
+	// Open a stream
+	stream, _ := serverMux.OpenStream()
+	openFrame, _ := proto.EncodeJSONPayload(proto.FrameStreamOpen, stream.ID(), &proto.StreamOpen{
+		TunnelID: "tun-bad", RemoteAddr: "1.2.3.4:5678", Protocol: "http",
+	})
+	serverMux.GetFrameWriter().Write(openFrame)
+
+	clientStream, err := clientMux.AcceptStream()
+	if err != nil {
+		t.Fatalf("AcceptStream failed: %v", err)
+	}
+
+	// Write invalid HTTP data, then close the stream so ReadRequest fails
+	stream.Write([]byte("not a valid http request\r\n\r\n"))
+	stream.Close()
+
+	// handleHTTPStream should return without panic (ReadRequest will fail)
+	c.handleHTTPStream(clientStream)
+
+	c1.Close()
+	c2.Close()
+}
+
+func TestHandleHTTPStreamLocalServerDown(t *testing.T) {
+	c1, c2 := net.Pipe()
+	clientMux := mux.New(c1, mux.DefaultConfig())
+	serverMux := mux.New(c2, mux.DefaultConfig())
+	go clientMux.Run()
+	go serverMux.Run()
+
+	cfg := DefaultConfig()
+	c := New(cfg, nil)
+	c.mux = clientMux
+	c.connected.Store(true)
+
+	// Use an address where nothing is listening
+	tun := &Tunnel{ID: "tun-down", LocalAddr: "127.0.0.1:1", Type: proto.TunnelTypeHTTP, client: c}
+	c.tunnels.Store("tun-down", tun)
+
+	// Open a stream
+	stream, _ := serverMux.OpenStream()
+	openFrame, _ := proto.EncodeJSONPayload(proto.FrameStreamOpen, stream.ID(), &proto.StreamOpen{
+		TunnelID: "tun-down", RemoteAddr: "1.2.3.4:5678", Protocol: "http",
+	})
+	serverMux.GetFrameWriter().Write(openFrame)
+
+	clientStream, err := clientMux.AcceptStream()
+	if err != nil {
+		t.Fatalf("AcceptStream failed: %v", err)
+	}
+
+	// Write a valid HTTP request
+	httpReq := "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"
+	stream.Write([]byte(httpReq))
+
+	// handleHTTPStream should send 502 response since local server is down
+	c.handleHTTPStream(clientStream)
+
+	// Read the 502 response from the server-side stream
+	buf := make([]byte, 1024)
+	n, _ := stream.Read(buf)
+	response := string(buf[:n])
+	if !strings.Contains(response, "502 Bad Gateway") {
+		t.Errorf("Expected 502 Bad Gateway, got: %s", response)
+	}
+
+	c1.Close()
+	c2.Close()
+}
+
+// --- handleTCPStream edge cases ---
+
+func TestHandleTCPStreamNoTunnel(t *testing.T) {
+	c1, c2 := net.Pipe()
+	clientMux := mux.New(c1, mux.DefaultConfig())
+	serverMux := mux.New(c2, mux.DefaultConfig())
+	go clientMux.Run()
+	go serverMux.Run()
+
+	cfg := DefaultConfig()
+	c := New(cfg, nil)
+	c.mux = clientMux
+	c.connected.Store(true)
+
+	// Open a stream with nonexistent tunnel
+	stream, _ := serverMux.OpenStream()
+	openFrame, _ := proto.EncodeJSONPayload(proto.FrameStreamOpen, stream.ID(), &proto.StreamOpen{
+		TunnelID: "nonexistent", RemoteAddr: "1.2.3.4:5678", Protocol: "tcp",
+	})
+	serverMux.GetFrameWriter().Write(openFrame)
+
+	clientStream, err := clientMux.AcceptStream()
+	if err != nil {
+		t.Fatalf("AcceptStream failed: %v", err)
+	}
+
+	// handleTCPStream should reset stream because tunnel not found
+	c.handleTCPStream(clientStream)
+
+	// Server-side stream should be reset
+	buf := make([]byte, 10)
+	_, err = stream.Read(buf)
+	if err == nil {
+		t.Error("Expected error from reset stream")
+	}
+
+	c1.Close()
+	c2.Close()
+}
+
+func TestHandleTCPStreamDialError(t *testing.T) {
+	c1, c2 := net.Pipe()
+	clientMux := mux.New(c1, mux.DefaultConfig())
+	serverMux := mux.New(c2, mux.DefaultConfig())
+	go clientMux.Run()
+	go serverMux.Run()
+
+	cfg := DefaultConfig()
+	c := New(cfg, nil)
+	c.mux = clientMux
+	c.connected.Store(true)
+
+	// Use a bad address so net.Dial fails
+	tun := &Tunnel{ID: "tun-bad-tcp", LocalAddr: "127.0.0.1:1", Type: proto.TunnelTypeTCP, client: c}
+	c.tunnels.Store("tun-bad-tcp", tun)
+
+	stream, _ := serverMux.OpenStream()
+	openFrame, _ := proto.EncodeJSONPayload(proto.FrameStreamOpen, stream.ID(), &proto.StreamOpen{
+		TunnelID: "tun-bad-tcp", RemoteAddr: "1.2.3.4:5678", Protocol: "tcp",
+	})
+	serverMux.GetFrameWriter().Write(openFrame)
+
+	clientStream, err := clientMux.AcceptStream()
+	if err != nil {
+		t.Fatalf("AcceptStream failed: %v", err)
+	}
+
+	// handleTCPStream should return without panic (dial will fail)
+	c.handleTCPStream(clientStream)
+
+	c1.Close()
+	c2.Close()
+}
+
+// --- handleStreams exit test ---
+
+func TestHandleStreamsExitOnMuxClose(t *testing.T) {
+	c1, c2 := net.Pipe()
+	clientMux := mux.New(c1, mux.DefaultConfig())
+	go clientMux.Run()
+
+	cfg := DefaultConfig()
+	c := New(cfg, nil)
+	c.mux = clientMux
+	c.connected.Store(true)
+
+	done := make(chan struct{})
+	go func() {
+		c.handleStreams()
+		close(done)
+	}()
+
+	// Close the mux to trigger handleStreams exit
+	c2.Close()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Error("handleStreams did not exit on mux close")
+	}
+}
+
+// --- authenticate new select paths ---
+
+func TestAuthenticateMuxDone(t *testing.T) {
+	c1, c2 := net.Pipe()
+
+	cfg := Config{HeartbeatInterval: time.Second}
+	c := New(cfg, slog.Default())
+	c.conn = c1
+	c.mux = mux.New(c1, mux.DefaultConfig())
+	go c.mux.Run()
+
+	// Server side: use a mux, accept the auth request, then close mux without response
+	serverMux := mux.New(c2, mux.DefaultConfig())
+	go serverMux.Run()
+	go func() {
+		// Drain control frame then close server mux.
+		select {
+		case <-serverMux.ControlFrame():
+		case <-serverMux.Done():
+		}
+		// Close the server-side connection to make client mux.Done() fire
+		c2.Close()
+	}()
+
+	err := c.authenticate()
+	if err == nil {
+		t.Fatal("Expected error when mux done fires during authenticate")
+	}
+	if !strings.Contains(err.Error(), "connection closed") {
+		t.Errorf("Expected 'connection closed' error, got: %v", err)
+	}
+	c1.Close()
+}
+
+func TestAuthenticateCtxDone(t *testing.T) {
+	c1, c2 := net.Pipe()
+
+	cfg := Config{HeartbeatInterval: time.Second}
+	c := New(cfg, slog.Default())
+	c.conn = c1
+	c.mux = mux.New(c1, mux.DefaultConfig())
+	go c.mux.Run()
+
+	// Server side: use a mux but never respond
+	serverMux := mux.New(c2, mux.DefaultConfig())
+	go serverMux.Run()
+
+	// Drain server control frames so it doesn't block
+	go func() {
+		for {
+			select {
+			case <-serverMux.ControlFrame():
+			case <-serverMux.Done():
+				return
+			}
+		}
+	}()
+
+	// Cancel client context while waiting for auth response
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		c.cancel()
+	}()
+
+	err := c.authenticate()
+	if err == nil {
+		t.Fatal("Expected error when ctx done fires during authenticate")
+	}
+	if !strings.Contains(err.Error(), "cancelled") {
+		t.Errorf("Expected 'cancelled' error, got: %v", err)
+	}
+	c1.Close()
+	c2.Close()
+}
+
+func TestAuthenticateUnexpectedFrameType(t *testing.T) {
+	c1, c2 := net.Pipe()
+
+	cfg := Config{HeartbeatInterval: time.Second}
+	c := New(cfg, slog.Default())
+	c.conn = c1
+	c.mux = mux.New(c1, mux.DefaultConfig())
+	go c.mux.Run()
+
+	serverMux := mux.New(c2, mux.DefaultConfig())
+	go serverMux.Run()
+	go func() {
+		select {
+		case <-serverMux.ControlFrame():
+		case <-serverMux.Done():
+			return
+		}
+		// Send a tunnel response frame instead of auth response
+		resp := &proto.TunnelResponse{OK: true, TunnelID: "tun-1"}
+		respFrame, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, proto.ControlStreamID, resp)
+		serverMux.GetFrameWriter().Write(respFrame)
+		<-serverMux.Done()
+	}()
+
+	err := c.authenticate()
+	if err == nil {
+		t.Fatal("Expected error for unexpected frame type")
+	}
+	if !strings.Contains(err.Error(), "unexpected frame type") {
+		t.Errorf("Expected 'unexpected frame type' error, got: %v", err)
+	}
+	c1.Close()
+	c2.Close()
+}
+
+// --- openTunnel new select paths ---
+
+func TestOpenTunnelMuxDone(t *testing.T) {
+	client, serverMux := makeConnectedClient(t)
+
+	go func() {
+		// Read and discard the tunnel request control frame, then close
+		select {
+		case <-serverMux.ControlFrame():
+		case <-serverMux.Done():
+		}
+		// Close the underlying connection to trigger mux.Done()
+		client.conn.Close()
+	}()
+
+	req := &proto.TunnelRequest{
+		Type:      proto.TunnelTypeHTTP,
+		LocalAddr: "localhost:3000",
+	}
+	_, err := client.openTunnel(req)
+	if err == nil {
+		t.Fatal("Expected error when mux done fires during openTunnel")
+	}
+	if !strings.Contains(err.Error(), "connection closed") {
+		t.Errorf("Expected 'connection closed' error, got: %v", err)
+	}
+}
+
+func TestOpenTunnelCtxDone(t *testing.T) {
+	client, serverMux := makeConnectedClient(t)
+
+	// Drain server control frames
+	go func() {
+		for {
+			select {
+			case <-serverMux.ControlFrame():
+			case <-serverMux.Done():
+				return
+			}
+		}
+	}()
+
+	// Cancel context while waiting for tunnel response
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		client.cancel()
+	}()
+
+	req := &proto.TunnelRequest{
+		Type:      proto.TunnelTypeHTTP,
+		LocalAddr: "localhost:3000",
+	}
+	_, err := client.openTunnel(req)
+	if err == nil {
+		t.Fatal("Expected error when ctx done fires during openTunnel")
+	}
+	if !strings.Contains(err.Error(), "cancelled") {
+		t.Errorf("Expected 'cancelled' error, got: %v", err)
+	}
+	client.conn.Close()
+}
+
+func TestOpenTunnelUnexpectedFrameType(t *testing.T) {
+	client, serverMux := makeConnectedClient(t)
+
+	go func() {
+		select {
+		case <-serverMux.ControlFrame():
+		case <-serverMux.Done():
+			return
+		}
+		// Send an auth response instead of tunnel response
+		resp := &proto.AuthResponse{OK: true, SessionID: "sess-1"}
+		respFrame, _ := proto.EncodeJSONPayload(proto.FrameAuthRes, proto.ControlStreamID, resp)
+		serverMux.GetFrameWriter().Write(respFrame)
+		<-serverMux.Done()
+	}()
+
+	req := &proto.TunnelRequest{
+		Type:      proto.TunnelTypeHTTP,
+		LocalAddr: "localhost:3000",
+	}
+	_, err := client.openTunnel(req)
+	if err == nil {
+		t.Fatal("Expected error for unexpected frame type")
+	}
+	if !strings.Contains(err.Error(), "unexpected frame type") {
+		t.Errorf("Expected 'unexpected frame type' error, got: %v", err)
+	}
+	client.conn.Close()
+}
+
+// Suppress unused import warnings - ensure all imports are used
+var _ = fmt.Sprintf
+var _ = bufio.NewReader
+var _ = httptest.NewServer
+var _ = strings.Contains
