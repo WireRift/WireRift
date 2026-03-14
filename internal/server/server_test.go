@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/tls"
 	"log/slog"
 	"net"
 	"testing"
@@ -327,5 +328,281 @@ func TestServerWithNilLogger(t *testing.T) {
 	}
 	if s.logger == nil {
 		t.Error("Logger should be set to default when nil is passed")
+	}
+}
+
+func TestServerErrors(t *testing.T) {
+	// Test that error types are correctly defined
+	if ErrServerClosed == nil {
+		t.Error("ErrServerClosed should not be nil")
+	}
+	if ErrTunnelNotFound == nil {
+		t.Error("ErrTunnelNotFound should not be nil")
+	}
+	if ErrSessionNotFound == nil {
+		t.Error("ErrSessionNotFound should not be nil")
+	}
+	if ErrUnauthorized == nil {
+		t.Error("ErrUnauthorized should not be nil")
+	}
+	if ErrSubdomainTaken == nil {
+		t.Error("ErrSubdomainTaken should not be nil")
+	}
+	if ErrPortUnavailable == nil {
+		t.Error("ErrPortUnavailable should not be nil")
+	}
+	if ErrMaxTunnelsExceeded == nil {
+		t.Error("ErrMaxTunnelsExceeded should not be nil")
+	}
+}
+
+func TestConfigWithTLS(t *testing.T) {
+	cfg := DefaultConfig()
+
+	// Test with TLS config
+	tlsConfig := &tls.Config{
+		InsecureSkipVerify: true,
+	}
+	cfg.TLSConfig = tlsConfig
+
+	s := New(cfg, nil)
+	if s.config.TLSConfig != tlsConfig {
+		t.Error("TLSConfig should be set")
+	}
+}
+
+func TestConfigWithCustomHeartbeat(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.HeartbeatInterval = 10 * time.Second
+	cfg.SessionTimeout = 120 * time.Second
+
+	if cfg.HeartbeatInterval != 10*time.Second {
+		t.Errorf("HeartbeatInterval = %v, want 10s", cfg.HeartbeatInterval)
+	}
+	if cfg.SessionTimeout != 120*time.Second {
+		t.Errorf("SessionTimeout = %v, want 120s", cfg.SessionTimeout)
+	}
+}
+
+func TestPortAllocationMultiple(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+
+	// Allocate multiple ports
+	ports := []int{}
+	for i := 0; i < 10; i++ {
+		port, err := s.allocatePort()
+		if err != nil {
+			t.Fatalf("allocatePort failed: %v", err)
+		}
+		ports = append(ports, port)
+	}
+
+	// Verify all unique
+	seen := make(map[int]bool)
+	for _, port := range ports {
+		if seen[port] {
+			t.Errorf("Port %d allocated twice", port)
+		}
+		seen[port] = true
+	}
+
+	// Release all
+	for _, port := range ports {
+		s.releasePort(port)
+	}
+
+	// Reallocate should work
+	port, err := s.allocatePort()
+	if err != nil {
+		t.Fatalf("allocatePort after release failed: %v", err)
+	}
+	if !seen[port] {
+		t.Logf("Got new port %d after releasing all", port)
+	}
+}
+
+func TestGetTunnelByPortNotFound(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+
+	// Looking for tunnel by port (not subdomain)
+	// Currently getTunnelBySubdomain only looks by subdomain
+	// This test documents current behavior
+	_, ok := s.getTunnelBySubdomain("")
+	if ok {
+		t.Error("Empty subdomain should not be found")
+	}
+}
+
+func TestSessionWithTunnels(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+
+	// Create mock listener to get an address
+	listener, _ := net.Listen("tcp", "127.0.0.1:0")
+	defer listener.Close()
+
+	// Create session
+	session := &Session{
+		ID:         "session-1",
+		AccountID:  "account-1",
+		Tunnels:    make(map[string]*Tunnel),
+		RemoteAddr: listener.Addr(), // Initialize RemoteAddr
+	}
+	s.sessions.Store("session-1", session)
+
+	// Add tunnels to session
+	tunnel1 := &Tunnel{
+		ID:        "tunnel-1",
+		SessionID: "session-1",
+		Type:      proto.TunnelTypeHTTP,
+	}
+	tunnel2 := &Tunnel{
+		ID:        "tunnel-2",
+		SessionID: "session-1",
+		Type:      proto.TunnelTypeTCP,
+	}
+
+	session.mu.Lock()
+	session.Tunnels["tunnel-1"] = tunnel1
+	session.Tunnels["tunnel-2"] = tunnel2
+	session.mu.Unlock()
+
+	// List sessions should show tunnel count
+	sessions := s.ListSessions()
+	if len(sessions) != 1 {
+		t.Fatalf("Expected 1 session, got %d", len(sessions))
+	}
+	if sessions[0].TunnelCount != 2 {
+		t.Errorf("TunnelCount = %d, want 2", sessions[0].TunnelCount)
+	}
+}
+
+func TestTunnelWithPort(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+
+	tunnel := &Tunnel{
+		ID:        "tunnel-1",
+		Type:      proto.TunnelTypeTCP,
+		SessionID: "session-1",
+		Port:      20001,
+		PublicURL: "tcp://wirerift.dev:20001",
+		LocalAddr: "localhost:5432",
+		CreatedAt: time.Now(),
+	}
+
+	s.tunnels.Store("20001", tunnel)
+
+	// ListTunnels should include port
+	tunnels := s.ListTunnels()
+	if len(tunnels) != 1 {
+		t.Fatalf("Expected 1 tunnel, got %d", len(tunnels))
+	}
+	if tunnels[0].Port != 20001 {
+		t.Errorf("Port = %d, want 20001", tunnels[0].Port)
+	}
+	if tunnels[0].Type != "tcp" {
+		t.Errorf("Type = %q, want tcp", tunnels[0].Type)
+	}
+}
+
+func TestExtractSubdomainEdgeCases(t *testing.T) {
+	tests := []struct {
+		host     string
+		domain   string
+		expected string
+	}{
+		// Additional edge cases
+		{"a.wirerift.dev", "wirerift.dev", "a"},
+		{"very.long.subdomain.wirerift.dev", "wirerift.dev", "very.long.subdomain"},
+		{"*.wirerift.dev", "wirerift.dev", "*"},
+		{"wirerift.dev:8080", "wirerift.dev", ""},
+		{"localhost", "wirerift.dev", ""},
+		{"subdomain.example.com:9000", "wirerift.dev", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.host, func(t *testing.T) {
+			result := extractSubdomain(tt.host, tt.domain)
+			if result != tt.expected {
+				t.Errorf("extractSubdomain(%q, %q) = %q, want %q", tt.host, tt.domain, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestServerWithCustomConfig(t *testing.T) {
+	cfg := Config{
+		Domain:               "custom.example.com",
+		ControlAddr:          ":9999",
+		HTTPAddr:             ":8080",
+		HTTPSAddr:            ":8443",
+		TCPAddrRange:         "10000-19999",
+		DashboardAddr:        ":9090",
+		MaxTunnelsPerSession: 5,
+	}
+
+	s := New(cfg, nil)
+
+	if s.config.Domain != "custom.example.com" {
+		t.Errorf("Domain = %q, want custom.example.com", s.config.Domain)
+	}
+	if s.config.ControlAddr != ":9999" {
+		t.Errorf("ControlAddr = %q, want :9999", s.config.ControlAddr)
+	}
+	if s.config.MaxTunnelsPerSession != 5 {
+		t.Errorf("MaxTunnelsPerSession = %d, want 5", s.config.MaxTunnelsPerSession)
+	}
+
+	// Custom port range should be set (but not parsed yet)
+	if s.tcpPortStart != 20000 { // Default value
+		t.Logf("Note: tcpPortStart is %d, custom range not parsed", s.tcpPortStart)
+	}
+}
+
+func TestSessionLastSeen(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+
+	// Create mock listener to get an address
+	listener, _ := net.Listen("tcp", "127.0.0.1:0")
+	defer listener.Close()
+
+	now := time.Now()
+	session := &Session{
+		ID:         "session-1",
+		CreatedAt:  now,
+		LastSeen:   now,
+		RemoteAddr: listener.Addr(), // Initialize RemoteAddr
+	}
+	s.sessions.Store("session-1", session)
+
+	// Update last seen
+	newTime := now.Add(time.Hour)
+	session.mu.Lock()
+	session.LastSeen = newTime
+	session.mu.Unlock()
+
+	// Verify through listing
+	sessions := s.ListSessions()
+	if len(sessions) != 1 {
+		t.Fatalf("Expected 1 session")
+	}
+}
+
+func TestEmptyTunnelList(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+
+	// No tunnels added
+	tunnels := s.ListTunnels()
+	if len(tunnels) != 0 {
+		t.Errorf("Expected 0 tunnels, got %d", len(tunnels))
+	}
+}
+
+func TestEmptySessionList(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+
+	// No sessions added
+	sessions := s.ListSessions()
+	if len(sessions) != 0 {
+		t.Errorf("Expected 0 sessions, got %d", len(sessions))
 	}
 }

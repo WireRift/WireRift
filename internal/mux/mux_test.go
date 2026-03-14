@@ -1,6 +1,7 @@
 package mux
 
 import (
+	"io"
 	"net"
 	"sync"
 	"testing"
@@ -715,4 +716,73 @@ func TestMuxConfigOverrides(t *testing.T) {
 
 	c1.Close()
 	c2.Close()
+}
+
+func TestMuxHandleHeartbeat(t *testing.T) {
+	client, server := newTestPipe(t)
+
+	// Start server to process heartbeat
+	go server.Run()
+
+	// Start a goroutine to read and verify heartbeat ack
+	ackReceived := make(chan bool, 1)
+	go func() {
+		for {
+			frame, err := client.frameReader.Read()
+			if err != nil {
+				return
+			}
+			if frame.Type == proto.FrameHeartbeatAck {
+				ackReceived <- true
+				return
+			}
+		}
+	}()
+
+	// Send heartbeat
+	frame := &proto.Frame{
+		Version:  proto.Version,
+		Type:     proto.FrameHeartbeat,
+		StreamID: 0,
+		Payload:  proto.HeartbeatPayload(),
+	}
+
+	if err := client.frameWriter.Write(frame); err != nil {
+		t.Fatalf("Send heartbeat: %v", err)
+	}
+
+	// Wait for ack
+	select {
+	case <-ackReceived:
+		// Success - heartbeat ack received
+	case <-time.After(1 * time.Second):
+		t.Error("Did not receive heartbeat ack")
+	}
+
+	client.Close()
+	server.Close()
+}
+
+func TestMuxOpenStreamAfterClose(t *testing.T) {
+	client, _ := newTestPipe(t)
+
+	client.Close()
+
+	_, err := client.OpenStream()
+	if err != ErrMuxClosed {
+		t.Errorf("Expected ErrMuxClosed, got %v", err)
+	}
+}
+
+func TestMuxAcceptStreamClosed(t *testing.T) {
+	client, _ := newTestPipe(t)
+
+	// Close the mux
+	client.Close()
+
+	// AcceptStream should return error
+	_, err := client.AcceptStream()
+	if err != io.EOF {
+		t.Errorf("Expected io.EOF, got %v", err)
+	}
 }

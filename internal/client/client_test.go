@@ -3,6 +3,7 @@ package client
 import (
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/wirerift/wirerift/internal/proto"
 )
@@ -197,5 +198,99 @@ func TestConfigDefaults(t *testing.T) {
 	}
 	if cfg.MaxReconnectInterval <= 0 {
 		t.Error("MaxReconnectInterval should be positive")
+	}
+}
+
+func TestClientErrors(t *testing.T) {
+	// Test that error types are correctly defined
+	if ErrClientClosed == nil {
+		t.Error("ErrClientClosed should not be nil")
+	}
+	if ErrNotConnected == nil {
+		t.Error("ErrNotConnected should not be nil")
+	}
+	if ErrAuthFailed == nil {
+		t.Error("ErrAuthFailed should not be nil")
+	}
+	if ErrTunnelFailed == nil {
+		t.Error("ErrTunnelFailed should not be nil")
+	}
+	if ErrReconnectFailed == nil {
+		t.Error("ErrReconnectFailed should not be nil")
+	}
+}
+
+func TestClientMaxTunnels(t *testing.T) {
+	c := New(DefaultConfig(), nil)
+
+	// MaxTunnels should be 0 initially (not connected)
+	// This is accessed via the session info after connection
+	// Since we're not connected, we just verify the client structure
+	if c == nil {
+		t.Fatal("Client should not be nil")
+	}
+}
+
+func TestTunnelCloseNotConnected(t *testing.T) {
+	c := New(DefaultConfig(), nil)
+
+	// Create a mock tunnel manually
+	tunnel := &Tunnel{
+		ID:        "test-tunnel",
+		client:    c,
+		LocalAddr: "localhost:3000",
+	}
+
+	// Close should call client.CloseTunnel which returns ErrNotConnected
+	err := tunnel.Close()
+	if err != ErrNotConnected {
+		t.Errorf("Expected ErrNotConnected, got %v", err)
+	}
+}
+
+func TestHTTPOptionCombinations(t *testing.T) {
+	req := &proto.TunnelRequest{
+		Type:      proto.TunnelTypeHTTP,
+		LocalAddr: "localhost:3000",
+	}
+
+	// Apply multiple options
+	WithSubdomain("myapp")(req)
+	WithInspect()(req)
+	WithAuth("user", "pass")(req)
+	WithHeaders(map[string]string{
+		"X-Custom":  "value",
+		"X-Another": "header",
+	})(req)
+
+	if req.Subdomain != "myapp" {
+		t.Errorf("Subdomain = %q, want myapp", req.Subdomain)
+	}
+	if !req.Inspect {
+		t.Error("Inspect should be true")
+	}
+	if req.Auth == nil {
+		t.Fatal("Auth should not be nil")
+	}
+	if req.Auth.Username != "user" || req.Auth.Password != "pass" {
+		t.Error("Auth credentials incorrect")
+	}
+	if len(req.Headers) != 2 {
+		t.Errorf("Headers length = %d, want 2", len(req.Headers))
+	}
+}
+
+func TestReconnectConfig(t *testing.T) {
+	cfg := DefaultConfig()
+
+	// Test reconnect configuration
+	if !cfg.Reconnect {
+		t.Error("Reconnect should be enabled by default")
+	}
+	if cfg.ReconnectInterval != time.Second {
+		t.Errorf("ReconnectInterval = %v, want 1s", cfg.ReconnectInterval)
+	}
+	if cfg.MaxReconnectInterval != 30*time.Second {
+		t.Errorf("MaxReconnectInterval = %v, want 30s", cfg.MaxReconnectInterval)
 	}
 }

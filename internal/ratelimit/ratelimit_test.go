@@ -151,3 +151,183 @@ func TestManagerRemove(t *testing.T) {
         t.Error("Allow() = false for new limiter after Remove, want true")
     }
 }
+
+func TestLimiterWait(t *testing.T) {
+    // High rate to avoid long waits
+    limiter := New(1000, 1)
+
+    // Consume the only token
+    limiter.Allow()
+
+    // Wait should block until token is available
+    done := make(chan bool)
+    go func() {
+        limiter.Wait()
+        done <- true
+    }()
+
+    select {
+    case <-done:
+        // Success - Wait returned after token refill
+    case <-time.After(100 * time.Millisecond):
+        t.Error("Wait() did not return in time")
+    }
+}
+
+func TestLimiterWaitN(t *testing.T) {
+    // High rate to avoid long waits
+    limiter := New(1000, 2)
+
+    // Consume all tokens
+    limiter.AllowN(2)
+
+    // WaitN should block until tokens are available
+    done := make(chan bool)
+    go func() {
+        limiter.WaitN(1)
+        done <- true
+    }()
+
+    select {
+    case <-done:
+        // Success
+    case <-time.After(100 * time.Millisecond):
+        t.Error("WaitN() did not return in time")
+    }
+}
+
+func TestLimiterReserve(t *testing.T) {
+    // Very low rate (1 token per second), burst of 1
+    limiter := New(1, 1)
+
+    // First reserve should be instant (1 token available)
+    wait := limiter.Reserve()
+    if wait != 0 {
+        t.Errorf("First Reserve() wait = %v, want 0", wait)
+    }
+
+    // Token consumed immediately, need to wait ~1 second for next
+    wait = limiter.Reserve()
+    // Should indicate wait time needed for 1 token at 1/sec
+    if wait < 500*time.Millisecond {
+        t.Errorf("Second Reserve() wait = %v, want >= 500ms", wait)
+    }
+}
+
+func TestLimiterReserveN(t *testing.T) {
+    // Very low rate (1 token per second), burst of 3
+    limiter := New(1, 3)
+
+    // Reserve 2 tokens - should be instant
+    wait := limiter.ReserveN(2)
+    if wait != 0 {
+        t.Errorf("ReserveN(2) wait = %v, want 0", wait)
+    }
+
+    // 1 token remains, need 2 more
+    wait = limiter.ReserveN(2)
+    // Need 1 more token at 1/sec = ~1 second
+    if wait < 500*time.Millisecond {
+        t.Errorf("ReserveN(2) wait = %v, want >= 500ms", wait)
+    }
+}
+
+func TestManagerAllowN(t *testing.T) {
+    mgr := NewManager(10, 5)
+
+    // Should allow burst of 5
+    if !mgr.AllowN("key1", 5) {
+        t.Error("AllowN(5) = false, want true")
+    }
+
+    // Should deny
+    if mgr.AllowN("key1", 1) {
+        t.Error("AllowN(1) after burst = true, want false")
+    }
+}
+
+func TestManagerClear(t *testing.T) {
+    mgr := NewManager(10, 3)
+
+    // Exhaust limiter
+    for i := 0; i < 3; i++ {
+        mgr.Allow("key1")
+    }
+    mgr.Allow("key2")
+
+    // Clear all
+    mgr.Clear()
+
+    // Both should work as new
+    if !mgr.Allow("key1") || !mgr.Allow("key2") {
+        t.Error("Allow() = false after Clear, want true")
+    }
+}
+
+func TestSlidingWindowAllow(t *testing.T) {
+    sw := NewSlidingWindow(time.Second, 3)
+
+    // Should allow first 3
+    for i := 0; i < 3; i++ {
+        if !sw.Allow() {
+            t.Errorf("Allow() = false at iteration %d, want true", i)
+        }
+    }
+
+    // Should deny 4th
+    if sw.Allow() {
+        t.Error("Allow() = true after max events, want false")
+    }
+}
+
+func TestSlidingWindowAllowAt(t *testing.T) {
+    sw := NewSlidingWindow(time.Second, 2)
+    now := time.Now()
+
+    // Allow events at specific times
+    if !sw.AllowAt(now) {
+        t.Error("AllowAt(now) = false, want true")
+    }
+    if !sw.AllowAt(now.Add(100 * time.Millisecond)) {
+        t.Error("AllowAt(now+100ms) = false, want true")
+    }
+    // 3rd event should be denied
+    if sw.AllowAt(now.Add(200 * time.Millisecond)) {
+        t.Error("AllowAt(now+200ms) = true, want false")
+    }
+}
+
+func TestSlidingWindowCount(t *testing.T) {
+    sw := NewSlidingWindow(time.Second, 5)
+    now := time.Now()
+
+    // Add events at different times
+    sw.AllowAt(now.Add(-500 * time.Millisecond))
+    sw.AllowAt(now.Add(-200 * time.Millisecond))
+    sw.AllowAt(now.Add(-2 * time.Second)) // Outside window
+
+    count := sw.Count()
+    if count != 2 {
+        t.Errorf("Count() = %d, want 2", count)
+    }
+}
+
+func TestSlidingWindowReset(t *testing.T) {
+    sw := NewSlidingWindow(time.Second, 2)
+
+    sw.Allow()
+    sw.Allow()
+
+    // Should deny
+    if sw.Allow() {
+        t.Error("Allow() = true after max, want false")
+    }
+
+    // Reset
+    sw.Reset()
+
+    // Should allow again
+    if !sw.Allow() {
+        t.Error("Allow() = false after Reset, want true")
+    }
+}
