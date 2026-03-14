@@ -1,6 +1,7 @@
 package client
 
 import (
+	"crypto/tls"
 	"log/slog"
 	"testing"
 	"time"
@@ -292,5 +293,93 @@ func TestReconnectConfig(t *testing.T) {
 	}
 	if cfg.MaxReconnectInterval != 30*time.Second {
 		t.Errorf("MaxReconnectInterval = %v, want 30s", cfg.MaxReconnectInterval)
+	}
+}
+
+func TestClientWithTLSConfig(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.TLSConfig = &tls.Config{
+		InsecureSkipVerify: true,
+	}
+
+	c := New(cfg, nil)
+	if c == nil {
+		t.Fatal("Client should not be nil")
+	}
+
+	// TLS config should be stored
+	if c.config.TLSConfig == nil {
+		t.Error("TLSConfig should be set")
+	}
+}
+
+func TestClientTunnelStruct(t *testing.T) {
+	tunnel := &Tunnel{
+		ID:        "test-tunnel",
+		Type:      proto.TunnelTypeHTTP,
+		PublicURL: "https://test.example.com",
+		LocalAddr: "localhost:8080",
+		Subdomain: "test",
+		Port:      0,
+	}
+
+	if tunnel.ID != "test-tunnel" {
+		t.Errorf("ID = %q, want test-tunnel", tunnel.ID)
+	}
+	if tunnel.Type != proto.TunnelTypeHTTP {
+		t.Errorf("Type = %v, want HTTP", tunnel.Type)
+	}
+	if tunnel.GetPublicURL() != "https://test.example.com" {
+		t.Errorf("GetPublicURL = %q, want https://test.example.com", tunnel.GetPublicURL())
+	}
+	if tunnel.GetLocalAddr() != "localhost:8080" {
+		t.Errorf("GetLocalAddr = %q, want localhost:8080", tunnel.GetLocalAddr())
+	}
+}
+
+func TestHTTPOptionFunctions(t *testing.T) {
+	tests := []struct {
+		name     string
+		opt      HTTPOption
+		validate func(*proto.TunnelRequest) bool
+	}{
+		{
+			name: "WithSubdomain",
+			opt:  WithSubdomain("myapp"),
+			validate: func(req *proto.TunnelRequest) bool {
+				return req.Subdomain == "myapp"
+			},
+		},
+		{
+			name: "WithInspect",
+			opt:  WithInspect(),
+			validate: func(req *proto.TunnelRequest) bool {
+				return req.Inspect == true
+			},
+		},
+		{
+			name: "WithAuth",
+			opt:  WithAuth("user", "pass"),
+			validate: func(req *proto.TunnelRequest) bool {
+				return req.Auth != nil && req.Auth.Username == "user" && req.Auth.Password == "pass"
+			},
+		},
+		{
+			name: "WithHeaders",
+			opt:  WithHeaders(map[string]string{"X-Test": "value"}),
+			validate: func(req *proto.TunnelRequest) bool {
+				return req.Headers["X-Test"] == "value"
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := &proto.TunnelRequest{}
+			tt.opt(req)
+			if !tt.validate(req) {
+				t.Errorf("Validation failed for %s", tt.name)
+			}
+		})
 	}
 }

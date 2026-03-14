@@ -4,6 +4,9 @@ import (
 	"crypto/tls"
 	"log/slog"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -604,5 +607,182 @@ func TestEmptySessionList(t *testing.T) {
 	sessions := s.ListSessions()
 	if len(sessions) != 0 {
 		t.Errorf("Expected 0 sessions, got %d", len(sessions))
+	}
+}
+
+// TestHandleControlConnection tests the handleControlConnection function
+func TestHandleControlConnection(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+
+	// Create a pipe
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	// Start handleControlConnection in a goroutine
+	go s.handleControlConnection(serverConn)
+
+	// Write magic from client
+	if err := proto.WriteMagic(clientConn); err != nil {
+		t.Fatalf("Failed to write magic: %v", err)
+	}
+
+	// Give it time to process
+	time.Sleep(100 * time.Millisecond)
+
+	// Connection should be handled (no panic, no error)
+}
+
+// TestHandleControlConnectionInvalidMagic tests handleControlConnection with invalid magic
+func TestHandleControlConnectionInvalidMagic(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+
+	// Create a pipe
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	// Start handleControlConnection in a goroutine
+	go s.handleControlConnection(serverConn)
+
+	// Write invalid data (not magic)
+	// Write may fail if server closes connection first, which is expected
+	_, _ = clientConn.Write([]byte("invalid data"))
+
+	// Give it time to process
+	time.Sleep(100 * time.Millisecond)
+
+	// Connection should be closed due to invalid magic - test passes if we get here
+}
+
+// TestHandleHTTPRequestInvalidHost tests handleHTTPRequest with invalid host
+func TestHandleHTTPRequestInvalidHost(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+
+	// Create HTTP request with invalid host (not matching domain)
+	req, _ := http.NewRequest("GET", "/", nil)
+	req.Host = "invalid.example.com"
+
+	rr := httptest.NewRecorder()
+	s.handleHTTPRequest(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400, got %d", rr.Code)
+	}
+	if body := rr.Body.String(); !strings.Contains(body, "Invalid host") {
+		t.Errorf("Expected 'Invalid host' in body, got: %s", body)
+	}
+}
+
+// TestHandleHTTPRequestTunnelNotFound tests handleHTTPRequest when tunnel not found
+func TestHandleHTTPRequestTunnelNotFound(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+
+	// Create HTTP request with valid domain but no tunnel
+	req, _ := http.NewRequest("GET", "/", nil)
+	req.Host = "nonexistent.wirerift.dev"
+
+	rr := httptest.NewRecorder()
+	s.handleHTTPRequest(rr, req)
+
+	if rr.Code != http.StatusBadGateway {
+		t.Errorf("Expected status 502, got %d", rr.Code)
+	}
+	if body := rr.Body.String(); !strings.Contains(body, "Tunnel not found") {
+		t.Errorf("Expected 'Tunnel not found' in body, got: %s", body)
+	}
+}
+
+// TestHandleHTTPRequestSessionNotFound tests handleHTTPRequest when session not found
+func TestHandleHTTPRequestSessionNotFound(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+
+	// Create a tunnel but no session
+	tunnel := &Tunnel{
+		ID:        "tunnel-1",
+		Type:      proto.TunnelTypeHTTP,
+		Subdomain: "test",
+		SessionID: "nonexistent-session",
+	}
+	s.tunnels.Store("test", tunnel)
+
+	// Create HTTP request
+	req, _ := http.NewRequest("GET", "/", nil)
+	req.Host = "test.wirerift.dev"
+
+	rr := httptest.NewRecorder()
+	s.handleHTTPRequest(rr, req)
+
+	if rr.Code != http.StatusBadGateway {
+		t.Errorf("Expected status 502, got %d", rr.Code)
+	}
+	if body := rr.Body.String(); !strings.Contains(body, "Session not found") {
+		t.Errorf("Expected 'Session not found' in body, got: %s", body)
+	}
+}
+
+// TestAcceptControlConnections tests the accept loop behavior
+func TestAcceptControlConnections(t *testing.T) {
+	serverCfg := DefaultConfig()
+	serverCfg.ControlAddr = "127.0.0.1:0"
+	serverCfg.HTTPAddr = "" // Don't start HTTP
+
+	s := New(serverCfg, nil)
+
+	// Use proper Start which sets up context and lifecycle
+	if err := s.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+
+	// Get the control address
+	controlAddr := s.controlListener.Addr().String()
+
+	// Connect a client
+	conn, err := net.Dial("tcp", controlAddr)
+	if err != nil {
+		s.Stop()
+		t.Fatalf("Failed to connect: %v", err)
+	}
+
+	// Write magic
+	if err := proto.WriteMagic(conn); err != nil {
+		conn.Close()
+		s.Stop()
+		t.Fatalf("Failed to write magic: %v", err)
+	}
+
+	// Give it time to be accepted
+	time.Sleep(100 * time.Millisecond)
+
+	// Clean close
+	conn.Close()
+	if err := s.Stop(); err != nil {
+		t.Errorf("Stop failed: %v", err)
+	}
+}
+
+// TestStartStopWithHTTP tests server start and stop with HTTP listener
+func TestStartStopWithHTTP(t *testing.T) {
+	serverCfg := DefaultConfig()
+	serverCfg.ControlAddr = "127.0.0.1:0"
+	serverCfg.HTTPAddr = "127.0.0.1:0"
+
+	s := New(serverCfg, nil)
+
+	if err := s.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+
+	// Verify listeners are set
+	if s.controlListener == nil {
+		t.Error("controlListener should be set")
+	}
+	if s.httpListener == nil {
+		t.Error("httpListener should be set")
+	}
+
+	// Stop
+	if err := s.Stop(); err != nil {
+		t.Errorf("Stop failed: %v", err)
 	}
 }
