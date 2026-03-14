@@ -405,3 +405,254 @@ func TestJsonError(t *testing.T) {
 		t.Errorf("Content-Type = %q, want %q", contentType, "application/json")
 	}
 }
+
+func TestHandleDomainActionsGet(t *testing.T) {
+	authMgr := auth.NewManager()
+	srv := server.New(server.DefaultConfig(), nil)
+	domainMgr := config.NewDomainManager("test.dev")
+	// Add a domain for testing
+	domainMgr.AddDomain("example.test.dev", "test-account")
+
+	d := New(Config{
+		Server:      srv,
+		AuthManager: authMgr,
+		DomainMgr:   domainMgr,
+	})
+
+	handler := d.Handler()
+
+	// GET /api/domains/example.test.dev
+	req := httptest.NewRequest("GET", "/api/domains/example.test.dev", nil)
+	req.Header.Set("Authorization", "Bearer "+authMgr.DevToken())
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+func TestHandleDomainActionsGetNotFound(t *testing.T) {
+	authMgr := auth.NewManager()
+	srv := server.New(server.DefaultConfig(), nil)
+	domainMgr := config.NewDomainManager("test.dev")
+
+	d := New(Config{
+		Server:      srv,
+		AuthManager: authMgr,
+		DomainMgr:   domainMgr,
+	})
+
+	handler := d.Handler()
+
+	// GET /api/domains/nonexistent.test.dev
+	req := httptest.NewRequest("GET", "/api/domains/nonexistent.test.dev", nil)
+	req.Header.Set("Authorization", "Bearer "+authMgr.DevToken())
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("Status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestHandleDomainActionsDelete(t *testing.T) {
+	authMgr := auth.NewManager()
+	srv := server.New(server.DefaultConfig(), nil)
+	domainMgr := config.NewDomainManager("test.dev")
+	// Add a domain for testing
+	domainMgr.AddDomain("todelete.test.dev", "test-account")
+
+	d := New(Config{
+		Server:      srv,
+		AuthManager: authMgr,
+		DomainMgr:   domainMgr,
+	})
+
+	handler := d.Handler()
+
+	// DELETE /api/domains/todelete.test.dev
+	req := httptest.NewRequest("DELETE", "/api/domains/todelete.test.dev", nil)
+	req.Header.Set("Authorization", "Bearer "+authMgr.DevToken())
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("Status = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+}
+
+func TestHandleDomainActionsNilManager(t *testing.T) {
+	authMgr := auth.NewManager()
+	srv := server.New(server.DefaultConfig(), nil)
+
+	d := New(Config{
+		Server:      srv,
+		AuthManager: authMgr,
+		DomainMgr:   nil,
+	})
+
+	handler := d.Handler()
+
+	// GET /api/domains/example.test.dev with nil domain manager
+	req := httptest.NewRequest("GET", "/api/domains/example.test.dev", nil)
+	req.Header.Set("Authorization", "Bearer "+authMgr.DevToken())
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("Status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestHandleDomainActionsDNS(t *testing.T) {
+	authMgr := auth.NewManager()
+	srv := server.New(server.DefaultConfig(), nil)
+	domainMgr := config.NewDomainManager("test.dev")
+	domainMgr.AddDomain("test.example.test.dev", "test-account")
+
+	d := New(Config{
+		Server:      srv,
+		AuthManager: authMgr,
+		DomainMgr:   domainMgr,
+	})
+
+	handler := d.Handler()
+
+	// GET /api/domains/test.example.test.dev/dns (POST to trigger action handler)
+	req := httptest.NewRequest("POST", "/api/domains/test.example.test.dev/dns", nil)
+	req.Header.Set("Authorization", "Bearer "+authMgr.DevToken())
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+func TestHandleDomainActionsVerify(t *testing.T) {
+	authMgr := auth.NewManager()
+	srv := server.New(server.DefaultConfig(), nil)
+	domainMgr := config.NewDomainManager("test.dev")
+	domainMgr.AddDomain("verify.test.dev", "test-account")
+
+	d := New(Config{
+		Server:      srv,
+		AuthManager: authMgr,
+		DomainMgr:   domainMgr,
+	})
+
+	handler := d.Handler()
+
+	// POST /api/domains/verify.test.dev/verify
+	req := httptest.NewRequest("POST", "/api/domains/verify.test.dev/verify", nil)
+	req.Header.Set("Authorization", "Bearer "+authMgr.DevToken())
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+func TestHandleDomainActionsUnknownAction(t *testing.T) {
+	authMgr := auth.NewManager()
+	srv := server.New(server.DefaultConfig(), nil)
+	domainMgr := config.NewDomainManager("test.dev")
+	domainMgr.AddDomain("unknown.test.dev", "test-account")
+
+	d := New(Config{
+		Server:      srv,
+		AuthManager: authMgr,
+		DomainMgr:   domainMgr,
+	})
+
+	handler := d.Handler()
+
+	// POST /api/domains/unknown.test.dev/unknown
+	req := httptest.NewRequest("POST", "/api/domains/unknown.test.dev/unknown", nil)
+	req.Header.Set("Authorization", "Bearer "+authMgr.DevToken())
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("Status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestHandleDomainActionsMethodNotAllowed(t *testing.T) {
+	authMgr := auth.NewManager()
+	srv := server.New(server.DefaultConfig(), nil)
+	domainMgr := config.NewDomainManager("test.dev")
+	domainMgr.AddDomain("method.test.dev", "test-account")
+
+	d := New(Config{
+		Server:      srv,
+		AuthManager: authMgr,
+		DomainMgr:   domainMgr,
+	})
+
+	handler := d.Handler()
+
+	// PUT /api/domains/method.test.dev (not allowed)
+	req := httptest.NewRequest("PUT", "/api/domains/method.test.dev", nil)
+	req.Header.Set("Authorization", "Bearer "+authMgr.DevToken())
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestServeIndex(t *testing.T) {
+	d := New(Config{})
+	req := httptest.NewRequest("GET", "/dashboard", nil)
+	rec := httptest.NewRecorder()
+
+	d.serveIndex(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	contentType := rec.Header().Get("Content-Type")
+	if contentType != "text/html; charset=utf-8" {
+		t.Errorf("Content-Type = %q, want %q", contentType, "text/html; charset=utf-8")
+	}
+
+	// Should contain HTML
+	body := rec.Body.String()
+	if !strings.Contains(body, "<!DOCTYPE html>") {
+		t.Error("Response should contain DOCTYPE html")
+	}
+}
+
+func TestHandleDomainsPostSuccess(t *testing.T) {
+	authMgr := auth.NewManager()
+	srv := server.New(server.DefaultConfig(), nil)
+	domainMgr := config.NewDomainManager("test.dev")
+
+	// Create account first
+	authMgr.CreateAccount("test@test.com", "Test Account")
+
+	d := New(Config{
+		Server:      srv,
+		AuthManager: authMgr,
+		DomainMgr:   domainMgr,
+	})
+
+	handler := d.Handler()
+
+	// POST /api/domains with valid JSON
+	body := strings.NewReader(`{"domain":"new.test.dev","account_id":"dev_account"}`)
+	req := httptest.NewRequest("POST", "/api/domains", body)
+	req.Header.Set("Authorization", "Bearer "+authMgr.DevToken())
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
