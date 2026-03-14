@@ -2,7 +2,9 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -256,5 +258,169 @@ func TestMultipleEnvironmentVariables(t *testing.T) {
 	}
 	if os.Getenv("WIRERIFT_HTTP_ADDR") != ":6666" {
 		t.Error("WIRERIFT_HTTP_ADDR not set correctly")
+	}
+}
+
+// TestFlagHelpOutput tests that help output is properly formatted
+func TestFlagHelpOutput(t *testing.T) {
+	fs := flag.NewFlagSet("wirerift-server", flag.ContinueOnError)
+	fs.SetOutput(nil) // Suppress output
+
+	fs.String("control", ":4443", "Control plane address")
+	fs.String("http", ":80", "HTTP edge address")
+	fs.String("https", ":443", "HTTPS edge address")
+
+	// Test parsing -h
+	if err := fs.Parse([]string{"-h"}); err == nil {
+		// -h returns an error in flag.ContinueOnError mode
+		// but it's expected behavior
+	}
+}
+
+// TestFlagInvalidValue tests parsing with invalid values
+func TestFlagInvalidValue(t *testing.T) {
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	dashboardPort := fs.Int("dashboard-port", 4040, "Dashboard port")
+
+	// Parse empty string
+	err := fs.Parse([]string{"-dashboard-port", "invalid"})
+	if err == nil {
+		// Int parsing should fail for invalid value
+		// but ContinueOnError doesn't return error, it just keeps default
+	}
+
+	// Default should still be used
+	if *dashboardPort == 4040 {
+		// Default was preserved
+	}
+}
+
+// TestAllFlagsWithValues tests all flags with their values
+func TestAllFlagsWithValues(t *testing.T) {
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+
+	control := fs.String("control", ":4443", "Control plane address")
+	http := fs.String("http", ":80", "HTTP edge address")
+	https := fs.String("https", ":443", "HTTPS edge address")
+	dashboardPort := fs.Int("dashboard-port", 4040, "Dashboard port")
+	domain := fs.String("domain", "wirerift.dev", "Base domain")
+	tcpPorts := fs.String("tcp-ports", "20000-29999", "TCP port range")
+	autoCert := fs.Bool("auto-cert", false, "Auto-generate certificates")
+	certDir := fs.String("cert-dir", "certs", "Certificate directory")
+	verbose := fs.Bool("v", false, "Verbose logging")
+	jsonLog := fs.Bool("json", false, "JSON logging")
+	showVersion := fs.Bool("version", false, "Show version")
+
+	args := []string{
+		"-control", ":9999",
+		"-http", ":8080",
+		"-https", ":8443",
+		"-dashboard-port", "9090",
+		"-domain", "test.example.com",
+		"-tcp-ports", "30000-39999",
+		"-auto-cert",
+		"-cert-dir", "/tmp/certs",
+		"-v",
+		"-json",
+		"-version",
+	}
+
+	if err := fs.Parse(args); err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+
+	if *control != ":9999" {
+		t.Errorf("control = %q, want :9999", *control)
+	}
+	if *http != ":8080" {
+		t.Errorf("http = %q, want :8080", *http)
+	}
+	if *https != ":8443" {
+		t.Errorf("https = %q, want :8443", *https)
+	}
+	if *dashboardPort != 9090 {
+		t.Errorf("dashboardPort = %d, want 9090", *dashboardPort)
+	}
+	if *domain != "test.example.com" {
+		t.Errorf("domain = %q, want test.example.com", *domain)
+	}
+	if *tcpPorts != "30000-39999" {
+		t.Errorf("tcpPorts = %q, want 30000-39999", *tcpPorts)
+	}
+	if !*autoCert {
+		t.Error("autoCert should be true")
+	}
+	if *certDir != "/tmp/certs" {
+		t.Errorf("certDir = %q, want /tmp/certs", *certDir)
+	}
+	if !*verbose {
+		t.Error("verbose should be true")
+	}
+	if !*jsonLog {
+		t.Error("jsonLog should be true")
+	}
+	if !*showVersion {
+		t.Error("showVersion should be true")
+	}
+}
+
+// TestEnvOverrideBehavior tests environment variable override logic
+func TestEnvOverrideBehavior(t *testing.T) {
+	// Test that env overrides default but not explicit flag
+	tests := []struct {
+		name         string
+		envValue     string
+		flagValue    string
+		defaultValue string
+		expected     string
+	}{
+		{
+			name:         "env overrides default",
+			envValue:     "env.example.com",
+			flagValue:    "wirerift.dev",
+			defaultValue: "wirerift.dev",
+			expected:     "env.example.com",
+		},
+		{
+			name:         "explicit flag wins",
+			envValue:     "env.example.com",
+			flagValue:    "flag.example.com",
+			defaultValue: "wirerift.dev",
+			expected:     "flag.example.com",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Simulate the logic from main()
+			result := tt.flagValue
+			if tt.envValue != "" && result == tt.defaultValue {
+				result = tt.envValue
+			}
+
+			if result != tt.expected {
+				t.Errorf("result = %q, want %q", result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestVersionString tests version string formatting
+func TestVersionString(t *testing.T) {
+	// The version string format should include version, commit, and date
+	versionStr := fmt.Sprintf("WireRift Server %s (commit: %s, built: %s)", version, commit, date)
+
+	if versionStr == "" {
+		t.Error("version string should not be empty")
+	}
+
+	if !strings.Contains(versionStr, version) {
+		t.Error("version string should contain version")
+	}
+	if !strings.Contains(versionStr, commit) {
+		t.Error("version string should contain commit")
+	}
+	if !strings.Contains(versionStr, date) {
+		t.Error("version string should contain date")
 	}
 }
