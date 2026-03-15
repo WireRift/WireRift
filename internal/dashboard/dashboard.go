@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -59,6 +60,8 @@ func (d *Dashboard) Handler() http.Handler {
 	mux.HandleFunc("/api/stats", d.authMiddleware(d.handleStats))
 	mux.HandleFunc("/api/domains", d.authMiddleware(d.handleDomains))
 	mux.HandleFunc("/api/domains/", d.authMiddleware(d.handleDomainActions))
+	mux.HandleFunc("/api/requests", d.authMiddleware(d.handleRequests))
+	mux.HandleFunc("/api/requests/", d.authMiddleware(d.handleRequestActions))
 
 	// Static files - fs.Sub on embedded FS always succeeds
 	staticContent, _ := fs.Sub(staticFS, "static")
@@ -238,6 +241,48 @@ func (d *Dashboard) handleDomainActions(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
+// handleRequests handles GET /api/requests
+func (d *Dashboard) handleRequests(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		d.jsonError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	tunnelID := r.URL.Query().Get("tunnel_id")
+	limit := 50
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+
+	logs := d.server.GetRequestLogs(tunnelID, limit)
+	d.jsonResponse(w, logs)
+}
+
+// handleRequestActions handles POST /api/requests/{id}/replay
+func (d *Dashboard) handleRequestActions(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/requests/")
+	parts := strings.Split(path, "/")
+	if len(parts) < 2 || parts[1] != "replay" {
+		d.jsonError(w, "Not found", http.StatusNotFound)
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		d.jsonError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	logID := parts[0]
+	result, err := d.server.ReplayRequest(logID)
+	if err != nil {
+		d.jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	d.jsonResponse(w, result)
+}
+
 // serveIndex serves the main index.html
 func (d *Dashboard) serveIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -356,6 +401,22 @@ var indexHTML = `<!DOCTYPE html>
         .error-msg { color: var(--error); font-size: 0.875rem; margin-top: 0.5rem; text-align: center; }
         .empty-state { text-align: center; padding: 2rem; color: var(--text-secondary); }
         .mono { font-family: monospace; background: var(--bg-primary); padding: 0.25rem 0.5rem; border-radius: 0.25rem; }
+        .req-row { cursor: pointer; }
+        .req-row:hover { background: var(--bg-tertiary); }
+        .req-detail { display: none; }
+        .req-detail td { padding: 0.5rem 1rem; background: var(--bg-primary); }
+        .req-detail pre { font-size: 0.8rem; white-space: pre-wrap; word-break: break-all; color: var(--text-secondary); margin: 0; }
+        .req-detail h4 { font-size: 0.8rem; color: var(--text-primary); margin: 0.5rem 0 0.25rem 0; }
+        .method-badge { font-family: monospace; font-weight: 600; font-size: 0.8rem; }
+        .method-GET { color: var(--success); }
+        .method-POST { color: var(--accent); }
+        .method-PUT { color: var(--warning); }
+        .method-DELETE { color: var(--error); }
+        .status-ok { color: var(--success); }
+        .status-err { color: var(--error); }
+        .status-warn { color: var(--warning); }
+        .btn-sm { background: var(--accent); color: white; border: none; padding: 0.25rem 0.5rem; border-radius: 0.25rem; cursor: pointer; font-size: 0.75rem; }
+        .btn-sm:hover { background: var(--accent-hover); }
     </style>
 </head>
 <body>
@@ -391,6 +452,22 @@ var indexHTML = `<!DOCTYPE html>
                 <tbody id="sessionsBody"></tbody>
             </table>
             <div class="empty-state" id="sessionsEmpty" style="display:none;">No connected sessions</div>
+        </div>
+        <div class="section">
+            <div class="section-header">
+                <h2>Traffic Inspector</h2>
+                <div style="display:flex;gap:0.5rem;align-items:center;">
+                    <select id="tunnelFilter" class="btn-outline" style="padding:0.5rem;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border);border-radius:0.375rem;">
+                        <option value="">All Tunnels</option>
+                    </select>
+                    <button class="btn-outline" id="refreshRequests">Refresh</button>
+                </div>
+            </div>
+            <table id="requestsTable">
+                <thead><tr><th>Time</th><th>Method</th><th>Path</th><th>Status</th><th>Duration</th><th>Client IP</th><th>Actions</th></tr></thead>
+                <tbody id="requestsBody"></tbody>
+            </table>
+            <div class="empty-state" id="requestsEmpty" style="display:none;">No captured requests</div>
         </div>
     </div>
     <div class="overlay" id="loginOverlay">
@@ -430,6 +507,8 @@ var indexHTML = `<!DOCTYPE html>
                     $('authBtn').onclick = logout;
                     loadAll();
                     setInterval(loadAll, 5000);
+                    if (reqInterval) clearInterval(reqInterval);
+                    reqInterval = setInterval(loadRequests, 2000);
                 } else {
                     sessionStorage.removeItem('wirerift_token');
                     $('loginError').textContent = 'Invalid token';
@@ -444,7 +523,7 @@ var indexHTML = `<!DOCTYPE html>
             return r.json();
         }
 
-        async function loadAll() { loadStats(); loadTunnels(); loadSessions(); }
+        async function loadAll() { loadStats(); loadTunnels(); loadSessions(); loadRequests(); }
 
         async function loadStats() {
             try {
@@ -501,6 +580,100 @@ var indexHTML = `<!DOCTYPE html>
             } catch (e) { console.error('Sessions:', e); }
         }
 
+        let reqInterval = null;
+        async function loadRequests() {
+            try {
+                const filter = $('tunnelFilter').value;
+                let url = '/api/requests?limit=50';
+                if (filter) url += '&tunnel_id=' + encodeURIComponent(filter);
+                const logs = await apiFetch(url);
+                const tbody = $('requestsBody');
+                const empty = $('requestsEmpty');
+                tbody.textContent = '';
+                if (!logs || logs.length === 0) { empty.style.display = 'block'; return; }
+                empty.style.display = 'none';
+                logs.forEach(l => {
+                    const tr = document.createElement('tr');
+                    tr.className = 'req-row';
+                    tr.appendChild(cell(fmtTime(l.timestamp)));
+                    const mtd = document.createElement('td');
+                    const mspan = document.createElement('span');
+                    mspan.className = 'method-badge method-' + l.method;
+                    mspan.textContent = l.method;
+                    mtd.appendChild(mspan);
+                    tr.appendChild(mtd);
+                    tr.appendChild(cell(l.path, 'code'));
+                    const std = document.createElement('td');
+                    const sspan = document.createElement('span');
+                    sspan.textContent = l.status_code;
+                    sspan.className = l.status_code < 300 ? 'status-ok' : l.status_code < 400 ? 'status-warn' : 'status-err';
+                    std.appendChild(sspan);
+                    tr.appendChild(std);
+                    tr.appendChild(cell((l.duration_ms / 1000000).toFixed(1) + 'ms'));
+                    tr.appendChild(cell(l.client_ip || '-'));
+                    const actTd = document.createElement('td');
+                    const replayBtn = document.createElement('button');
+                    replayBtn.className = 'btn-sm';
+                    replayBtn.textContent = 'Replay';
+                    replayBtn.onclick = function(e) { e.stopPropagation(); replayRequest(l.id); };
+                    actTd.appendChild(replayBtn);
+                    tr.appendChild(actTd);
+                    tbody.appendChild(tr);
+                    // Detail row (expandable headers)
+                    const detailTr = document.createElement('tr');
+                    detailTr.className = 'req-detail';
+                    const detailTd = document.createElement('td');
+                    detailTd.colSpan = 7;
+                    buildHeaderDetail(detailTd, 'Request Headers', l.req_headers);
+                    buildHeaderDetail(detailTd, 'Response Headers', l.res_headers);
+                    detailTr.appendChild(detailTd);
+                    tbody.appendChild(detailTr);
+                    tr.onclick = function() { detailTr.style.display = detailTr.style.display === 'table-row' ? 'none' : 'table-row'; };
+                });
+                updateTunnelFilter(logs);
+            } catch (e) { console.error('Requests:', e); }
+        }
+
+        function buildHeaderDetail(parent, title, headers) {
+            const h = document.createElement('h4');
+            h.textContent = title;
+            parent.appendChild(h);
+            const pre = document.createElement('pre');
+            let text = '';
+            if (headers) Object.keys(headers).forEach(k => { text += k + ': ' + headers[k] + '\n'; });
+            else text = '(none)';
+            pre.textContent = text;
+            parent.appendChild(pre);
+        }
+
+        function updateTunnelFilter(logs) {
+            const sel = $('tunnelFilter');
+            const current = sel.value;
+            const ids = new Set();
+            logs.forEach(l => { if (l.tunnel_id) ids.add(l.tunnel_id); });
+            const existing = new Set();
+            for (let i = 1; i < sel.options.length; i++) existing.add(sel.options[i].value);
+            ids.forEach(id => {
+                if (!existing.has(id)) {
+                    const opt = document.createElement('option');
+                    opt.value = id;
+                    opt.textContent = id;
+                    sel.appendChild(opt);
+                }
+            });
+            sel.value = current;
+        }
+
+        async function replayRequest(id) {
+            try {
+                await fetch('/api/requests/' + id + '/replay', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + apiToken }
+                });
+                loadRequests();
+            } catch (e) { console.error('Replay:', e); }
+        }
+
         function cell(text, cls) {
             const td = document.createElement('td');
             if (cls) { const el = document.createElement(cls); el.textContent = text; td.appendChild(el); }
@@ -531,6 +704,8 @@ var indexHTML = `<!DOCTYPE html>
         $('loginBtn').onclick = login;
         $('refreshTunnels').onclick = loadTunnels;
         $('refreshSessions').onclick = loadSessions;
+        $('refreshRequests').onclick = loadRequests;
+        $('tunnelFilter').onchange = loadRequests;
         $('token').addEventListener('keypress', e => { if (e.key === 'Enter') login(); });
 
         // Init

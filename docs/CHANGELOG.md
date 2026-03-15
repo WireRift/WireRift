@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-03-16
+
+### Added
+- **Basic Auth** for HTTP tunnels (`-auth user:pass`) with constant-time comparison
+- **Custom Response Headers** (`-header "X-Robots:noindex,Cache-Control:no-store"`)
+- **Traffic Inspector** - real-time request/response capture with dashboard UI
+- **Request Replay** - replay any captured request from dashboard or API
+- **File Server Mode** (`wirerift serve ./dist`) - serve static files through tunnel
+- **Webhook Relay** - fan-out incoming requests to multiple local endpoints
+- Dashboard Traffic Inspector panel with auto-refresh, filtering, and expandable details
+- API endpoints: `GET /api/requests`, `POST /api/requests/{id}/replay`
+- Config file support for `auth`, `inspect`, and `headers` per tunnel
+- CLI flags: `-auth`, `-inspect`, `-header` for HTTP tunnels
+
 ## [1.1.1] - 2026-03-15
 
 ### Added

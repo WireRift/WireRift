@@ -107,6 +107,11 @@ type Server struct {
 	bytesIn  atomic.Int64
 	bytesOut atomic.Int64
 
+	// Traffic inspector
+	requestLogs []RequestLog
+	logMu       sync.RWMutex
+	maxLogs     int
+
 	// Lifecycle
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -135,10 +140,31 @@ type Tunnel struct {
 	Port       int    // for TCP tunnels
 	PublicURL  string
 	LocalAddr  string
-	AllowedIPs []string // IP whitelist (empty = allow all)
-	PIN        string   // PIN protection (empty = no PIN)
+	AllowedIPs []string          // IP whitelist (empty = allow all)
+	PIN        string            // PIN protection (empty = no PIN)
+	Auth       *proto.TunnelAuth // Basic auth (nil = no auth)
+	Headers    map[string]string // Custom response headers
+	Inspect    bool              // Traffic inspection enabled
 	CreatedAt  time.Time
 	mu         sync.RWMutex
+}
+
+// RequestLog represents a captured HTTP request/response for inspection.
+type RequestLog struct {
+	ID         string            `json:"id"`
+	TunnelID   string            `json:"tunnel_id"`
+	Method     string            `json:"method"`
+	Path       string            `json:"path"`
+	StatusCode int               `json:"status_code"`
+	Duration   time.Duration     `json:"duration_ms"`
+	ReqHeaders map[string]string `json:"req_headers"`
+	ResHeaders map[string]string `json:"res_headers"`
+	ReqBody    string            `json:"req_body,omitempty"`
+	ResBody    string            `json:"res_body,omitempty"`
+	ReqSize    int64             `json:"req_size"`
+	ResSize    int64             `json:"res_size"`
+	ClientIP   string            `json:"client_ip"`
+	Timestamp  time.Time         `json:"timestamp"`
 }
 
 // New creates a new server.
@@ -168,7 +194,8 @@ func New(config Config, logger *slog.Logger) *Server {
 		cancel:       cancel,
 		tcpPortStart: portStart,
 		tcpPortEnd:   portEnd,
-		rateLimiter:  ratelimit.NewManager(100, 50), // 100 req/s, burst 50
+		rateLimiter:  ratelimit.NewManager(100, 50),
+		maxLogs:      500, // Keep last 500 requests for inspection
 	}
 
 	// Store portStart-1 so first Add(1) yields portStart
@@ -495,6 +522,9 @@ func (s *Server) handleTunnelRequest(m *mux.Mux, session *Session, frame *proto.
 			LocalAddr:  req.LocalAddr,
 			AllowedIPs: req.AllowedIPs,
 			PIN:        req.PIN,
+			Auth:       req.Auth,
+			Headers:    req.Headers,
+			Inspect:    req.Inspect,
 			CreatedAt:  time.Now(),
 		}
 		s.tunnels.Store(subdomain, tunnel)
@@ -785,6 +815,9 @@ func (s *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
 	tunnel.mu.RLock()
 	allowedIPs := tunnel.AllowedIPs
 	pin := tunnel.PIN
+	tunnelAuth := tunnel.Auth
+	customHeaders := tunnel.Headers
+	inspect := tunnel.Inspect
 	tunnel.mu.RUnlock()
 
 	if len(allowedIPs) > 0 {
@@ -794,10 +827,17 @@ func (s *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Check Basic Auth
+	if tunnelAuth != nil && tunnelAuth.Type == "basic" {
+		if !s.checkBasicAuth(w, r, tunnelAuth.Username, tunnelAuth.Password) {
+			return
+		}
+	}
+
 	// Check PIN protection
 	if pin != "" {
 		if !s.checkPIN(w, r, pin, subdomain) {
-			return // response already written by checkPIN
+			return
 		}
 	}
 
@@ -808,8 +848,26 @@ func (s *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Track request start for inspector
+	var reqStart time.Time
+	if inspect {
+		reqStart = time.Now()
+	}
+
+	// Wrap response writer to capture status/headers for inspection and custom headers
+	wrapped := &inspectResponseWriter{
+		ResponseWriter: w,
+		customHeaders:  customHeaders,
+		statusCode:     200,
+	}
+
 	// Forward request through tunnel
-	s.forwardHTTPRequest(w, r, session, tunnel)
+	s.forwardHTTPRequest(wrapped, r, session, tunnel)
+
+	// Log request for inspection
+	if inspect {
+		s.logRequest(tunnel, r, wrapped, clientIP, reqStart)
+	}
 }
 
 // forwardHTTPRequest forwards an HTTP request through the tunnel.
@@ -1005,6 +1063,193 @@ func (s *Server) isIPAllowed(clientIP string, allowedIPs []string) bool {
 	return false
 }
 
+// checkBasicAuth validates HTTP Basic Authentication on a tunnel.
+func (s *Server) checkBasicAuth(w http.ResponseWriter, r *http.Request, username, password string) bool {
+	u, p, ok := r.BasicAuth()
+	if !ok || subtle.ConstantTimeCompare([]byte(u), []byte(username)) != 1 ||
+		subtle.ConstantTimeCompare([]byte(p), []byte(password)) != 1 {
+		w.Header().Set("WWW-Authenticate", `Basic realm="WireRift Tunnel"`)
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return false
+	}
+	return true
+}
+
+// inspectResponseWriter wraps http.ResponseWriter to capture status and inject custom headers.
+type inspectResponseWriter struct {
+	http.ResponseWriter
+	customHeaders map[string]string
+	statusCode    int
+	written       bool
+}
+
+func (w *inspectResponseWriter) WriteHeader(code int) {
+	if w.written {
+		return
+	}
+	w.written = true
+	w.statusCode = code
+	// Inject custom response headers before writing
+	for k, v := range w.customHeaders {
+		w.ResponseWriter.Header().Set(k, v)
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *inspectResponseWriter) Write(b []byte) (int, error) {
+	if !w.written {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(b)
+}
+
+// logRequest captures a request/response pair for the traffic inspector.
+func (s *Server) logRequest(tunnel *Tunnel, r *http.Request, w *inspectResponseWriter, clientIP string, start time.Time) {
+	reqHeaders := make(map[string]string)
+	for k := range r.Header {
+		reqHeaders[k] = r.Header.Get(k)
+	}
+	resHeaders := make(map[string]string)
+	for k := range w.Header() {
+		resHeaders[k] = w.Header().Get(k)
+	}
+
+	log := RequestLog{
+		ID:         fmt.Sprintf("req_%s", generateSubdomain()),
+		TunnelID:   tunnel.ID,
+		Method:     r.Method,
+		Path:       r.URL.Path,
+		StatusCode: w.statusCode,
+		Duration:   time.Since(start),
+		ReqHeaders: reqHeaders,
+		ResHeaders: resHeaders,
+		ReqSize:    r.ContentLength,
+		ClientIP:   clientIP,
+		Timestamp:  start,
+	}
+
+	s.logMu.Lock()
+	s.requestLogs = append(s.requestLogs, log)
+	if len(s.requestLogs) > s.maxLogs {
+		s.requestLogs = s.requestLogs[len(s.requestLogs)-s.maxLogs:]
+	}
+	s.logMu.Unlock()
+}
+
+// GetRequestLogs returns captured request logs, optionally filtered by tunnel ID.
+func (s *Server) GetRequestLogs(tunnelID string, limit int) []RequestLog {
+	s.logMu.RLock()
+	defer s.logMu.RUnlock()
+
+	if limit <= 0 || limit > len(s.requestLogs) {
+		limit = len(s.requestLogs)
+	}
+
+	var result []RequestLog
+	// Iterate backwards (newest first)
+	for i := len(s.requestLogs) - 1; i >= 0 && len(result) < limit; i-- {
+		if tunnelID == "" || s.requestLogs[i].TunnelID == tunnelID {
+			result = append(result, s.requestLogs[i])
+		}
+	}
+	return result
+}
+
+// ReplayRequest replays a captured request by ID.
+func (s *Server) ReplayRequest(logID string) (*RequestLog, error) {
+	s.logMu.RLock()
+	var original *RequestLog
+	for i := range s.requestLogs {
+		if s.requestLogs[i].ID == logID {
+			orig := s.requestLogs[i]
+			original = &orig
+			break
+		}
+	}
+	s.logMu.RUnlock()
+
+	if original == nil {
+		return nil, fmt.Errorf("request log not found: %s", logID)
+	}
+
+	// Find the tunnel
+	tunnel, ok := s.getTunnelByID(original.TunnelID)
+	if !ok {
+		return nil, fmt.Errorf("tunnel not found: %s", original.TunnelID)
+	}
+
+	session, ok := s.getSession(tunnel.SessionID)
+	if !ok {
+		return nil, fmt.Errorf("session not found")
+	}
+
+	// Create a new HTTP request from the log
+	req, _ := http.NewRequest(original.Method, original.Path, nil)
+	for k, v := range original.ReqHeaders {
+		req.Header.Set(k, v)
+	}
+	req.Host = tunnel.Subdomain + "." + s.config.Domain
+
+	// Open stream and forward
+	stream, err := session.Mux.OpenStream()
+	if err != nil {
+		return nil, fmt.Errorf("open stream: %w", err)
+	}
+	defer stream.Close()
+
+	openFrame, _ := StreamOpenForHTTP(tunnel.ID, stream.ID(), original.ClientIP)
+	if err := session.Mux.GetFrameWriter().Write(openFrame); err != nil {
+		return nil, fmt.Errorf("send stream open: %w", err)
+	}
+
+	reqData, _ := SerializeRequest(req)
+	stream.Write(reqData)
+
+	respData, _ := io.ReadAll(io.LimitReader(stream, 64*1024*1024))
+	resp, err := DeserializeResponse(respData)
+	if err != nil {
+		return nil, fmt.Errorf("deserialize: %w", err)
+	}
+	defer resp.Body.Close()
+
+	resHeaders := make(map[string]string)
+	for k := range resp.Header {
+		resHeaders[k] = resp.Header.Get(k)
+	}
+
+	replay := &RequestLog{
+		ID:         fmt.Sprintf("req_%s", generateSubdomain()),
+		TunnelID:   original.TunnelID,
+		Method:     original.Method,
+		Path:       original.Path,
+		StatusCode: resp.StatusCode,
+		Duration:   0,
+		ReqHeaders: original.ReqHeaders,
+		ResHeaders: resHeaders,
+		ClientIP:   "replay",
+		Timestamp:  time.Now(),
+	}
+
+	s.logMu.Lock()
+	s.requestLogs = append(s.requestLogs, *replay)
+	s.logMu.Unlock()
+
+	return replay, nil
+}
+
+// getTunnelByID looks up a tunnel by ID across all stored tunnels.
+func (s *Server) getTunnelByID(tunnelID string) (*Tunnel, bool) {
+	var found *Tunnel
+	s.tunnels.Range(func(key, value any) bool {
+		if t, ok := value.(*Tunnel); ok && t.ID == tunnelID {
+			found = t
+			return false
+		}
+		return true
+	})
+	return found, found != nil
+}
+
 // pinMAC computes an HMAC of the PIN for safe cookie storage.
 func pinMAC(pin, subdomain string) string {
 	mac := hmac.New(sha256.New, []byte("wirerift-pin-key-"+subdomain))
@@ -1180,6 +1425,8 @@ type TunnelInfo struct {
 	Status     string    `json:"status"`
 	AllowedIPs []string  `json:"allowed_ips,omitempty"`
 	HasPIN     bool      `json:"has_pin,omitempty"`
+	HasAuth    bool      `json:"has_auth,omitempty"`
+	Inspect    bool      `json:"inspect,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 }
 
@@ -1207,6 +1454,8 @@ func (s *Server) ListTunnels() []TunnelInfo {
 				Status:     "active",
 				AllowedIPs: t.AllowedIPs,
 				HasPIN:     t.PIN != "",
+				HasAuth:    t.Auth != nil,
+				Inspect:    t.Inspect,
 				CreatedAt:  t.CreatedAt,
 			}
 			t.mu.RUnlock()

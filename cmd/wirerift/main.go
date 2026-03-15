@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -44,6 +45,8 @@ func run(args []string) error {
 		return doHTTP(context.Background(), args)
 	case "tcp":
 		return doTCP(context.Background(), args)
+	case "serve":
+		return doServe(context.Background(), args)
 	case "start":
 		return doStart(context.Background(), args)
 	case "list":
@@ -71,6 +74,7 @@ Usage:
 Commands:
   http <local-port> [subdomain]   Create an HTTP tunnel
   tcp <local-port>                Create a TCP tunnel
+  serve <directory>               Serve static files via HTTP tunnel
   start [config-file]             Start tunnels from config file
   list                            List active tunnels
   config                          Show/edit configuration
@@ -83,6 +87,7 @@ Examples:
   wirerift http 8080 -pin 1234          Create PIN-protected tunnel
   wirerift http 8080 -whitelist 1.2.3.4 Create IP-restricted tunnel
   wirerift tcp 25565                    Create TCP tunnel on port 25565
+  wirerift serve ./dist                 Serve static files and tunnel
   wirerift start wirerift.yaml          Start tunnels from config
 
 Environment Variables:
@@ -138,6 +143,9 @@ func doHTTP(parentCtx context.Context, args []string) error {
 	subdomain := fs.String("subdomain", "", "Requested subdomain")
 	whitelist := fs.String("whitelist", "", "Comma-separated IP whitelist (e.g., 1.2.3.4,10.0.0.0/8)")
 	pin := fs.String("pin", "", "PIN protection for tunnel access")
+	auth := fs.String("auth", "", "Basic auth in user:pass format (e.g., admin:secret)")
+	inspect := fs.Bool("inspect", false, "Enable traffic inspection")
+	header := fs.String("header", "", "Custom response headers, comma-separated Key:Value (e.g., X-Robots:noindex,Cache-Control:no-store)")
 	verbose := fs.Bool("v", false, "Verbose output")
 
 	fs.Usage = func() {
@@ -218,6 +226,20 @@ func doHTTP(parentCtx context.Context, args []string) error {
 	if *pin != "" {
 		tunnelOpts = append(tunnelOpts, client.WithPIN(*pin))
 	}
+	if *auth != "" {
+		parts := strings.SplitN(*auth, ":", 2)
+		if len(parts) != 2 {
+			return fmt.Errorf("invalid -auth format, expected user:pass")
+		}
+		tunnelOpts = append(tunnelOpts, client.WithAuth(parts[0], parts[1]))
+	}
+	if *inspect {
+		tunnelOpts = append(tunnelOpts, client.WithInspect())
+	}
+	if *header != "" {
+		headers := parseHeaders(*header)
+		tunnelOpts = append(tunnelOpts, client.WithHeaders(headers))
+	}
 
 	tunnel, err := c.HTTP(fmt.Sprintf("localhost:%d", localPort), tunnelOpts...)
 	if err != nil {
@@ -233,6 +255,15 @@ func doHTTP(parentCtx context.Context, args []string) error {
 	}
 	if *pin != "" {
 		fmt.Printf("PIN Protected: yes\n")
+	}
+	if *auth != "" {
+		fmt.Printf("Basic Auth: enabled\n")
+	}
+	if *inspect {
+		fmt.Printf("Inspect: enabled\n")
+	}
+	if *header != "" {
+		fmt.Printf("Custom Headers: %s\n", *header)
 	}
 
 	// Wait for context
@@ -387,6 +418,18 @@ func doStart(parentCtx context.Context, args []string) error {
 			if t.PIN != "" {
 				opts = append(opts, client.WithPIN(t.PIN))
 			}
+			if t.Auth != "" {
+				parts := strings.SplitN(t.Auth, ":", 2)
+				if len(parts) == 2 {
+					opts = append(opts, client.WithAuth(parts[0], parts[1]))
+				}
+			}
+			if t.Inspect {
+				opts = append(opts, client.WithInspect())
+			}
+			if t.Headers != "" {
+				opts = append(opts, client.WithHeaders(parseHeaders(t.Headers)))
+			}
 			tunnel, err := c.HTTP(fmt.Sprintf("localhost:%d", t.LocalPort), opts...)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Failed to create HTTP tunnel: %v\n", err)
@@ -419,6 +462,9 @@ type TunnelConfig struct {
 	Subdomain string `yaml:"subdomain"`
 	Whitelist string `yaml:"whitelist"`
 	PIN       string `yaml:"pin"`
+	Auth      string `yaml:"auth"`
+	Inspect   bool   `yaml:"inspect"`
+	Headers   string `yaml:"headers"`
 }
 
 // ConfigFile represents the config file structure
@@ -485,6 +531,12 @@ func loadConfig(path string) (*ConfigFile, error) {
 				cfg.Tunnels[tunnelIdx].Whitelist = value
 			case "pin":
 				cfg.Tunnels[tunnelIdx].PIN = value
+			case "auth":
+				cfg.Tunnels[tunnelIdx].Auth = value
+			case "inspect":
+				cfg.Tunnels[tunnelIdx].Inspect = value == "true"
+			case "headers":
+				cfg.Tunnels[tunnelIdx].Headers = value
 			}
 		} else {
 			switch key {
@@ -497,6 +549,144 @@ func loadConfig(path string) (*ConfigFile, error) {
 	}
 
 	return cfg, nil
+}
+
+// parseHeaders parses a comma-separated "Key:Value" string into a map.
+func parseHeaders(raw string) map[string]string {
+	headers := make(map[string]string)
+	for _, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		parts := strings.SplitN(entry, ":", 2)
+		if len(parts) == 2 {
+			headers[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+		}
+	}
+	return headers
+}
+
+// doServe starts a static file server and creates an HTTP tunnel to it.
+func doServe(parentCtx context.Context, args []string) error {
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	server := fs.String("server", "", "Server address (default: localhost:4443)")
+	token := fs.String("token", "", "Authentication token")
+	subdomain := fs.String("subdomain", "", "Requested subdomain")
+	whitelist := fs.String("whitelist", "", "Comma-separated IP whitelist (e.g., 1.2.3.4,10.0.0.0/8)")
+	pin := fs.String("pin", "", "PIN protection for tunnel access")
+	auth := fs.String("auth", "", "Basic auth in user:pass format (e.g., admin:secret)")
+	inspect := fs.Bool("inspect", false, "Enable traffic inspection")
+	header := fs.String("header", "", "Custom response headers, comma-separated Key:Value (e.g., X-Robots:noindex,Cache-Control:no-store)")
+	verbose := fs.Bool("v", false, "Verbose output")
+
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: wirerift serve [options] <directory>\n\n")
+		fmt.Fprintf(os.Stderr, "Serve static files via an HTTP tunnel.\n\n")
+		fmt.Fprintf(os.Stderr, "Options:\n")
+		fs.PrintDefaults()
+		fmt.Fprintf(os.Stderr, "\nExamples:\n")
+		fmt.Fprintf(os.Stderr, "  wirerift serve ./dist\n")
+		fmt.Fprintf(os.Stderr, "  wirerift serve -subdomain myapp ./public\n")
+	}
+
+	if err := fs.Parse(args[2:]); err != nil {
+		return err
+	}
+
+	fargs := fs.Args()
+	if len(fargs) < 1 {
+		fs.Usage()
+		return fmt.Errorf("missing directory argument")
+	}
+
+	dir := fargs[0]
+
+	// Verify directory exists
+	info, err := os.Stat(dir)
+	if err != nil {
+		return fmt.Errorf("cannot access directory: %v", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s is not a directory", dir)
+	}
+
+	// Start a local file server on a random port
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return fmt.Errorf("failed to start file server: %v", err)
+	}
+	localPort := listener.Addr().(*net.TCPAddr).Port
+
+	fileServer := http.FileServer(http.Dir(dir))
+	go http.Serve(listener, fileServer)
+
+	opts := parseCommonOptions()
+	if *server != "" {
+		opts.server = *server
+	}
+	if *token != "" {
+		opts.token = *token
+	}
+
+	logger := createLogger(*verbose)
+
+	// Create client
+	clientCfg := client.DefaultConfig()
+	clientCfg.ServerAddr = opts.server
+	clientCfg.Token = opts.token
+	clientCfg.Reconnect = false
+	c := client.New(clientCfg, logger)
+
+	ctx, cancel := context.WithCancel(parentCtx)
+	defer cancel()
+
+	go handleSignals(ctx, cancel)
+
+	if err := c.Connect(); err != nil {
+		listener.Close()
+		return fmt.Errorf("failed to connect: %v", err)
+	}
+
+	// Build tunnel options
+	var tunnelOpts []client.HTTPOption
+	if *subdomain != "" {
+		tunnelOpts = append(tunnelOpts, client.WithSubdomain(*subdomain))
+	}
+	if *whitelist != "" {
+		ips := strings.Split(*whitelist, ",")
+		for i := range ips {
+			ips[i] = strings.TrimSpace(ips[i])
+		}
+		tunnelOpts = append(tunnelOpts, client.WithAllowedIPs(ips))
+	}
+	if *pin != "" {
+		tunnelOpts = append(tunnelOpts, client.WithPIN(*pin))
+	}
+	if *auth != "" {
+		parts := strings.SplitN(*auth, ":", 2)
+		if len(parts) != 2 {
+			listener.Close()
+			return fmt.Errorf("invalid -auth format, expected user:pass")
+		}
+		tunnelOpts = append(tunnelOpts, client.WithAuth(parts[0], parts[1]))
+	}
+	if *inspect {
+		tunnelOpts = append(tunnelOpts, client.WithInspect())
+	}
+	if *header != "" {
+		tunnelOpts = append(tunnelOpts, client.WithHeaders(parseHeaders(*header)))
+	}
+
+	tunnel, err := c.HTTP(fmt.Sprintf("localhost:%d", localPort), tunnelOpts...)
+	if err != nil {
+		listener.Close()
+		return fmt.Errorf("failed to create tunnel: %v", err)
+	}
+
+	fmt.Printf("Serving %s at %s\n", dir, tunnel.PublicURL)
+
+	<-ctx.Done()
+	listener.Close()
+	c.Close()
+	return nil
 }
 
 // doList lists active tunnels.
