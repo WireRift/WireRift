@@ -108,6 +108,10 @@ type Server struct {
 	tcpPorts     sync.Map // map[int]bool (allocated ports)
 	nextPort     atomic.Int32
 
+	// Traffic counters
+	bytesIn  atomic.Int64
+	bytesOut atomic.Int64
+
 	// Lifecycle
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -648,6 +652,23 @@ func (s *Server) startTCPTunnelListener(port int, tunnel *Tunnel, session *Sessi
 
 // proxyTCPConnection proxies a TCP connection through the mux.
 func (s *Server) proxyTCPConnection(conn net.Conn, tunnel *Tunnel, session *Session) {
+	// Check IP whitelist for TCP tunnels
+	tunnel.mu.RLock()
+	allowedIPs := tunnel.AllowedIPs
+	tunnel.mu.RUnlock()
+
+	if len(allowedIPs) > 0 {
+		remoteAddr := conn.RemoteAddr().String()
+		clientIP := remoteAddr
+		if idx := strings.LastIndex(clientIP, ":"); idx > 0 {
+			clientIP = clientIP[:idx]
+		}
+		if !s.isIPAllowed(clientIP, allowedIPs) {
+			s.logger.Warn("TCP connection rejected by whitelist", "tunnel", tunnel.ID, "remote", remoteAddr)
+			return
+		}
+	}
+
 	// Open a stream through the mux
 	stream, err := session.Mux.OpenStream()
 	if err != nil {
@@ -662,17 +683,19 @@ func (s *Server) proxyTCPConnection(conn net.Conn, tunnel *Tunnel, session *Sess
 		return
 	}
 
-	// Bidirectional copy
+	// Bidirectional copy with bytes tracking
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		io.Copy(stream, conn)
+		n, _ := io.Copy(stream, conn)
+		s.bytesIn.Add(n)
 		stream.Close()
 	}()
 	go func() {
 		defer wg.Done()
-		io.Copy(conn, stream)
+		n, _ := io.Copy(conn, stream)
+		s.bytesOut.Add(n)
 		conn.Close()
 	}()
 	wg.Wait()
@@ -828,6 +851,10 @@ func (s *Server) forwardHTTPRequest(w http.ResponseWriter, r *http.Request, sess
 		return
 	}
 	defer resp.Body.Close()
+
+	// Track bytes
+	s.bytesIn.Add(int64(len(reqData)))
+	s.bytesOut.Add(int64(len(respData)))
 
 	// 6. Write the response back to the edge HTTP client
 	WriteResponse(w, resp)
@@ -1125,14 +1152,16 @@ func (s *Server) HTTPAddr() string {
 
 // TunnelInfo represents tunnel information for API responses.
 type TunnelInfo struct {
-	ID        string    `json:"id"`
-	Type      string    `json:"type"`
-	URL       string    `json:"url,omitempty"`
-	Port      int       `json:"port,omitempty"`
-	Target    string    `json:"target"`
-	LocalPort int       `json:"local_port,omitempty"`
-	Status    string    `json:"status"`
-	CreatedAt time.Time `json:"created_at"`
+	ID         string    `json:"id"`
+	Type       string    `json:"type"`
+	URL        string    `json:"url,omitempty"`
+	Port       int       `json:"port,omitempty"`
+	Target     string    `json:"target"`
+	LocalPort  int       `json:"local_port,omitempty"`
+	Status     string    `json:"status"`
+	AllowedIPs []string  `json:"allowed_ips,omitempty"`
+	HasPIN     bool      `json:"has_pin,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 // SessionInfo represents session information for API responses.
@@ -1151,13 +1180,15 @@ func (s *Server) ListTunnels() []TunnelInfo {
 		if t, ok := value.(*Tunnel); ok {
 			t.mu.RLock()
 			info := TunnelInfo{
-				ID:        t.ID,
-				Type:      string(t.Type),
-				URL:       t.PublicURL,
-				Port:      t.Port,
-				Target:    t.LocalAddr,
-				Status:    "active",
-				CreatedAt: t.CreatedAt,
+				ID:         t.ID,
+				Type:       string(t.Type),
+				URL:        t.PublicURL,
+				Port:       t.Port,
+				Target:     t.LocalAddr,
+				Status:     "active",
+				AllowedIPs: t.AllowedIPs,
+				HasPIN:     t.PIN != "",
+				CreatedAt:  t.CreatedAt,
 			}
 			t.mu.RUnlock()
 			tunnels = append(tunnels, info)
@@ -1191,7 +1222,6 @@ func (s *Server) ListSessions() []SessionInfo {
 // Stats returns server statistics.
 func (s *Server) Stats() map[string]interface{} {
 	var tunnelCount, sessionCount int
-	var bytesIn, bytesOut int64
 
 	s.tunnels.Range(func(key, value any) bool {
 		tunnelCount++
@@ -1206,8 +1236,8 @@ func (s *Server) Stats() map[string]interface{} {
 	return map[string]interface{}{
 		"active_tunnels":  tunnelCount,
 		"active_sessions": sessionCount,
-		"bytes_in":        bytesIn,
-		"bytes_out":       bytesOut,
+		"bytes_in":        s.bytesIn.Load(),
+		"bytes_out":       s.bytesOut.Load(),
 	}
 }
 

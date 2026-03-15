@@ -1,3 +1,4 @@
+import { Link } from 'react-router'
 import { CodeBlock } from '@/components/ui/CodeBlock'
 import { Callout } from '@/components/ui/Callout'
 
@@ -142,10 +143,10 @@ curl http://your-server:4040/api/stats | jq .`}
 
       <h2>Next Steps</h2>
       <ul>
-        <li><a href="/docs/configuration">Configuration</a> - All server and client options</li>
-        <li><a href="/docs/http-tunnels">HTTP Tunnels</a> - Advanced HTTP tunnel features</li>
-        <li><a href="/docs/tcp-tunnels">TCP Tunnels</a> - TCP tunnel details</li>
-        <li><a href="/docs/security">Security</a> - TLS, auth, and rate limiting</li>
+        <li><Link to="/docs/configuration">Configuration</Link> - All server and client options</li>
+        <li><Link to="/docs/http-tunnels">HTTP Tunnels</Link> - Advanced HTTP tunnel features</li>
+        <li><Link to="/docs/tcp-tunnels">TCP Tunnels</Link> - TCP tunnel details</li>
+        <li><Link to="/docs/security">Security</Link> - TLS, auth, and rate limiting</li>
       </ul>
     </>
   ),

@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"sync"
 	"time"
@@ -199,9 +201,9 @@ func isValidDomainChar(c rune, pos int) bool {
 }
 
 func generateVerificationCode(domain string) string {
-	// Simple hash-like verification code
-	// In production, use proper crypto
-	return "v_" + domain[:min(8, len(domain))]
+	b := make([]byte, 16)
+	rand.Read(b)
+	return "wrv_" + hex.EncodeToString(b)
 }
 
 func min(a, b int) int {

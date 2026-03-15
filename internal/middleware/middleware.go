@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"compress/gzip"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -121,8 +122,7 @@ func CORS(allowedOrigins []string) func(http.Handler) http.Handler {
 	}
 }
 
-// Compress returns a middleware that compresses responses.
-// Note: This is a simplified version. For production, use proper compression.
+// Compress returns a middleware that compresses responses with gzip.
 func Compress() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -132,16 +132,53 @@ func Compress() func(http.Handler) http.Handler {
 				return
 			}
 
-			// Skip for small responses or already compressed
+			// Skip if already compressed
 			if r.Header.Get("Content-Encoding") != "" {
 				next.ServeHTTP(w, r)
 				return
 			}
 
-			// For now, just pass through - full gzip support would require
-			// wrapping the response writer with gzip.Writer
-			next.ServeHTTP(w, r)
+			grw := &gzipResponseWriter{ResponseWriter: w}
+			defer grw.finish()
+
+			w.Header().Set("Vary", "Accept-Encoding")
+			next.ServeHTTP(grw, r)
 		})
+	}
+}
+
+// gzipResponseWriter wraps http.ResponseWriter to lazily initialize gzip.
+type gzipResponseWriter struct {
+	http.ResponseWriter
+	gz         *gzip.Writer
+	decided    bool
+	compressed bool
+}
+
+func (g *gzipResponseWriter) Write(b []byte) (int, error) {
+	if !g.decided {
+		g.decided = true
+		// Only compress responses >= 256 bytes
+		if len(b) >= 256 {
+			g.compressed = true
+			g.ResponseWriter.Header().Set("Content-Encoding", "gzip")
+			g.ResponseWriter.Header().Del("Content-Length")
+			g.gz, _ = gzip.NewWriterLevel(g.ResponseWriter, gzip.DefaultCompression)
+		}
+	}
+	if g.compressed && g.gz != nil {
+		return g.gz.Write(b)
+	}
+	return g.ResponseWriter.Write(b)
+}
+
+func (g *gzipResponseWriter) WriteHeader(status int) {
+	g.ResponseWriter.WriteHeader(status)
+}
+
+func (g *gzipResponseWriter) finish() {
+	if g.gz != nil {
+		g.gz.Close()
 	}
 }
 

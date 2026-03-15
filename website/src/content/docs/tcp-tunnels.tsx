@@ -1,3 +1,4 @@
+import { Link } from 'react-router'
 import { CodeBlock } from '@/components/ui/CodeBlock'
 import { Callout } from '@/components/ui/Callout'
 
@@ -152,9 +153,9 @@ tunnels:
 
       <h2>Next Steps</h2>
       <ul>
-        <li><a href="/docs/http-tunnels">HTTP Tunnels</a> - HTTP tunnel features</li>
-        <li><a href="/docs/architecture">Architecture</a> - How the protocol works</li>
-        <li><a href="/docs/security">Security</a> - Securing your tunnels</li>
+        <li><Link to="/docs/http-tunnels">HTTP Tunnels</Link> - HTTP tunnel features</li>
+        <li><Link to="/docs/architecture">Architecture</Link> - How the protocol works</li>
+        <li><Link to="/docs/security">Security</Link> - Securing your tunnels</li>
       </ul>
     </>
   ),

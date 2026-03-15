@@ -376,7 +376,7 @@ var indexHTML = `<!DOCTYPE html>
                 <button class="btn-outline" id="refreshTunnels">Refresh</button>
             </div>
             <table id="tunnelsTable">
-                <thead><tr><th>ID</th><th>Type</th><th>URL / Port</th><th>Target</th><th>Status</th><th>Created</th></tr></thead>
+                <thead><tr><th>ID</th><th>Type</th><th>URL / Port</th><th>Target</th><th>Protection</th><th>Status</th><th>Created</th></tr></thead>
                 <tbody id="tunnelsBody"></tbody>
             </table>
             <div class="empty-state" id="tunnelsEmpty" style="display:none;">No active tunnels</div>
@@ -411,7 +411,7 @@ var indexHTML = `<!DOCTYPE html>
 
         function showLogin() { $('loginOverlay').classList.add('show'); $('token').focus(); }
         function hideLogin() { $('loginOverlay').classList.remove('show'); }
-        function logout() { localStorage.removeItem('wirerift_token'); apiToken = ''; location.reload(); }
+        function logout() { sessionStorage.removeItem('wirerift_token'); apiToken = ''; location.reload(); }
 
         function login() {
             const token = $('token').value.trim();
@@ -424,14 +424,14 @@ var indexHTML = `<!DOCTYPE html>
             try {
                 const r = await fetch('/api/stats', { headers: { 'Authorization': 'Bearer ' + apiToken } });
                 if (r.ok) {
-                    localStorage.setItem('wirerift_token', apiToken);
+                    sessionStorage.setItem('wirerift_token', apiToken);
                     hideLogin();
                     $('authBtn').textContent = 'Logout';
                     $('authBtn').onclick = logout;
                     loadAll();
                     setInterval(loadAll, 5000);
                 } else {
-                    localStorage.removeItem('wirerift_token');
+                    sessionStorage.removeItem('wirerift_token');
                     $('loginError').textContent = 'Invalid token';
                     showLogin();
                 }
@@ -470,6 +470,10 @@ var indexHTML = `<!DOCTYPE html>
                     tr.appendChild(cell(t.type));
                     tr.appendChild(cell(t.type === 'http' ? t.url : 'Port ' + t.port, 'mono'));
                     tr.appendChild(cell(t.target || 'localhost:' + t.local_port));
+                    const badges = [];
+                    if (t.allowed_ips && t.allowed_ips.length > 0) badges.push('IP');
+                    if (t.has_pin) badges.push('PIN');
+                    tr.appendChild(cell(badges.length > 0 ? badges.join(' + ') : '-'));
                     tr.appendChild(statusCell('Active', 'active'));
                     tr.appendChild(cell(fmtTime(t.created_at)));
                     tbody.appendChild(tr);
@@ -530,7 +534,7 @@ var indexHTML = `<!DOCTYPE html>
         $('token').addEventListener('keypress', e => { if (e.key === 'Enter') login(); });
 
         // Init
-        const saved = localStorage.getItem('wirerift_token');
+        const saved = sessionStorage.getItem('wirerift_token');
         if (saved) { apiToken = saved; verifyAndLoad(); } else { showLogin(); }
     })();
     </script>

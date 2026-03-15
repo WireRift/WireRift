@@ -1,5 +1,5 @@
 import { Sun, Moon } from 'lucide-react'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 import { useTheme } from '@/hooks/useTheme'
 import { cn } from '@/lib/utils'
 
@@ -23,15 +23,17 @@ export function ThemeToggle({ className }: ThemeToggleProps) {
       )}
       aria-label={`Switch to ${isDark ? 'light' : 'dark'} mode`}
     >
-      <motion.div
-        key={theme}
-        initial={{ rotate: -90, scale: 0 }}
-        animate={{ rotate: 0, scale: 1 }}
-        exit={{ rotate: 90, scale: 0 }}
-        transition={{ duration: 0.3, ease: 'easeInOut' }}
-      >
-        {isDark ? <Sun className="w-[18px] h-[18px]" /> : <Moon className="w-[18px] h-[18px]" />}
-      </motion.div>
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={theme}
+          initial={{ rotate: -90, scale: 0 }}
+          animate={{ rotate: 0, scale: 1 }}
+          exit={{ rotate: 90, scale: 0 }}
+          transition={{ duration: 0.3, ease: 'easeInOut' }}
+        >
+          {isDark ? <Sun className="w-[18px] h-[18px]" /> : <Moon className="w-[18px] h-[18px]" />}
+        </motion.div>
+      </AnimatePresence>
     </button>
   )
 }

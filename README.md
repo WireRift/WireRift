@@ -19,6 +19,8 @@ Open-source, zero-dependency tunnel server and client. Written in Go.
 - **Built-in Dashboard** — web UI for monitoring active tunnels
 - **Stream Multiplexing** — multiple connections over single TCP
 - **Flow Control** — backpressure handling per stream
+- **IP Whitelist** — restrict tunnel access by IP address or CIDR range
+- **PIN Protection** — require a PIN to access tunnels via browser, header, or URL
 - **Rate Limiting** — per-IP HTTP and per-session tunnel creation limits
 - **Auto Reconnect** — automatic reconnection with tunnel re-creation
 - **Session Timeout** — inactive sessions cleaned up automatically
@@ -64,6 +66,14 @@ make build
 # TCP tunnel - expose any TCP service
 ./bin/wirerift tcp 5432
 # → tcp://wirerift.dev:20001
+
+# PIN-protected tunnel
+./bin/wirerift http 3000 -pin mysecret
+# → Visitors must enter PIN to access
+
+# IP-restricted tunnel
+./bin/wirerift http 3000 -whitelist 1.2.3.4,10.0.0.0/8
+# → Only whitelisted IPs can connect
 ```
 
 ## Configuration
@@ -79,7 +89,9 @@ token: ""  # Your API token
 tunnels:
   - type: http
     local_port: 8080
-    subdomain: ""  # Empty = random subdomain
+    subdomain: ""            # Empty = random subdomain
+    # whitelist: "1.2.3.4"   # Restrict by IP (comma-separated, CIDR supported)
+    # pin: "secret123"       # Require PIN to access
 
   - type: tcp
     local_port: 25565
@@ -261,18 +273,55 @@ Commands:
   config                    Show/edit configuration
   version                   Show version
 
-Options:
+HTTP Options:
   -server string
         Server address (default "localhost:4443")
   -token string
         Authentication token
+  -subdomain string
+        Requested subdomain
+  -whitelist string
+        Comma-separated IP whitelist (e.g., "1.2.3.4,10.0.0.0/8")
+  -pin string
+        PIN protection for tunnel access
   -v    Verbose output
 ```
+
+## Access Control
+
+### IP Whitelist
+
+Restrict tunnel access to specific IP addresses or CIDR ranges:
+
+```bash
+# Single IP
+wirerift http 8080 -whitelist 203.0.113.50
+
+# Multiple IPs and CIDR
+wirerift http 8080 -whitelist "203.0.113.50,10.0.0.0/8,192.168.1.0/24"
+```
+
+Works for both HTTP and TCP tunnels. Non-whitelisted connections get `403 Forbidden` (HTTP) or are silently dropped (TCP).
+
+### PIN Protection
+
+Require a PIN code to access HTTP tunnels:
+
+```bash
+wirerift http 8080 -pin mysecret
+```
+
+PIN can be provided via:
+- **Browser form** — auto-shown on first visit, sets HttpOnly cookie for 24h
+- **HTTP Header** — `X-WireRift-PIN: mysecret` (ideal for API/CLI access)
+- **Query parameter** — `?pin=mysecret` (auto-redirects to clean URL after cookie set)
 
 ## Security
 
 - Token-based authentication for all connections
 - TLS support for encrypted communication
+- IP whitelist for tunnel-level access control
+- PIN protection for sensitive tunnels
 - Rate limiting per session
 - Domain verification for custom domains
 - Stream isolation with independent flow control

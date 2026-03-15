@@ -1,3 +1,4 @@
+import { Link } from 'react-router'
 import { CodeBlock } from '@/components/ui/CodeBlock'
 import { Callout } from '@/components/ui/Callout'
 
@@ -161,9 +162,9 @@ wirerift start wirerift.yaml
 
       <h2>Next Steps</h2>
       <ul>
-        <li><a href="/docs/tcp-tunnels">TCP Tunnels</a> - Forward raw TCP connections</li>
-        <li><a href="/docs/api-reference">API Reference</a> - Custom domain management API</li>
-        <li><a href="/docs/security">Security</a> - TLS and authentication</li>
+        <li><Link to="/docs/tcp-tunnels">TCP Tunnels</Link> - Forward raw TCP connections</li>
+        <li><Link to="/docs/api-reference">API Reference</Link> - Custom domain management API</li>
+        <li><Link to="/docs/security">Security</Link> - TLS and authentication</li>
       </ul>
     </>
   ),

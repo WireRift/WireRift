@@ -37,8 +37,19 @@ const goInstallCmd = 'go install github.com/wirerift/wirerift/cmd/wirerift@lates
 /* ─── install bar ─── */
 function InstallBar({ isDark }: { isDark: boolean }) {
   const [copied, setCopied] = useState(false)
-  const copy = useCallback(() => {
-    navigator.clipboard.writeText(goInstallCmd)
+  const copy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(goInstallCmd)
+    } catch {
+      const textarea = document.createElement('textarea')
+      textarea.value = goInstallCmd
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textarea)
+    }
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }, [])

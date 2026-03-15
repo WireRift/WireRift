@@ -1,3 +1,4 @@
+import { Link } from 'react-router'
 import { CodeBlock } from '@/components/ui/CodeBlock'
 import { Callout } from '@/components/ui/Callout'
 
@@ -271,8 +272,8 @@ When window reaches 0:
 
       <h2>Next Steps</h2>
       <ul>
-        <li><a href="/docs/security">Security</a> - TLS, auth, and rate limiting details</li>
-        <li><a href="/docs/api-reference">API Reference</a> - Dashboard REST API</li>
+        <li><Link to="/docs/security">Security</Link> - TLS, auth, and rate limiting details</li>
+        <li><Link to="/docs/api-reference">API Reference</Link> - Dashboard REST API</li>
       </ul>
     </>
   ),

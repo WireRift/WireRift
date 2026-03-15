@@ -1,3 +1,4 @@
+import { Link } from 'react-router'
 import { CodeBlock } from '@/components/ui/CodeBlock'
 import { Callout } from '@/components/ui/Callout'
 
@@ -184,8 +185,8 @@ mytunnel.com {
 
       <h2>Next Steps</h2>
       <ul>
-        <li><a href="/docs/architecture">Architecture</a> - Understanding the protocol</li>
-        <li><a href="/docs/troubleshooting">Troubleshooting</a> - Common issues and solutions</li>
+        <li><Link to="/docs/architecture">Architecture</Link> - Understanding the protocol</li>
+        <li><Link to="/docs/troubleshooting">Troubleshooting</Link> - Common issues and solutions</li>
       </ul>
     </>
   ),

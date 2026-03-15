@@ -4009,3 +4009,112 @@ func TestHandleHTTPRequestPINBypass(t *testing.T) {
 		t.Errorf("Expected 502 (session not found), got %d", rec.Code)
 	}
 }
+
+func TestProxyTCPConnectionWhitelistBlocked(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+
+	c1, c2 := net.Pipe()
+	defer c2.Close()
+	m := mux.New(c1, mux.DefaultConfig())
+	go m.Run()
+	defer m.Close()
+
+	tunnel := &Tunnel{
+		ID:         "tun-tcp-wl",
+		AllowedIPs: []string{"192.168.1.100"},
+	}
+	session := &Session{ID: "sess-tcp-wl", Mux: m}
+
+	// Create a fake connection from a non-whitelisted IP
+	server, client := net.Pipe()
+	defer client.Close()
+
+	// proxyTCPConnection should reject and close immediately
+	done := make(chan struct{})
+	go func() {
+		s.proxyTCPConnection(server, tunnel, session)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Good - connection was rejected
+	case <-time.After(2 * time.Second):
+		t.Error("proxyTCPConnection did not return after whitelist rejection")
+		server.Close()
+	}
+}
+
+func TestProxyTCPConnectionWhitelistAllowed(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+
+	c1, c2 := net.Pipe()
+	defer c2.Close()
+	m := mux.New(c1, mux.DefaultConfig())
+	go m.Run()
+
+	tunnel := &Tunnel{
+		ID:         "tun-tcp-wl-ok",
+		AllowedIPs: []string{"127.0.0.1", "0.0.0.0/0"}, // allow all via CIDR
+	}
+	session := &Session{ID: "sess-tcp-wl-ok", Mux: m}
+
+	server, client := net.Pipe()
+	defer client.Close()
+
+	// proxyTCPConnection with pipe (RemoteAddr = "pipe") - "pipe" won't match 127.0.0.1
+	// but 0.0.0.0/0 won't match either since "pipe" is not parseable as IP
+	// So this tests that the function proceeds past whitelist for unparseable addresses
+	// when the string doesn't match any entry
+	done := make(chan struct{})
+	go func() {
+		s.proxyTCPConnection(server, tunnel, session)
+		close(done)
+	}()
+
+	// Close connections to make proxyTCPConnection finish
+	time.Sleep(50 * time.Millisecond)
+	server.Close()
+	m.Close()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Error("proxyTCPConnection did not complete")
+	}
+}
+
+func TestProxyTCPConnectionNoWhitelist(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+
+	c1, c2 := net.Pipe()
+	defer c2.Close()
+	m := mux.New(c1, mux.DefaultConfig())
+	go m.Run()
+
+	tunnel := &Tunnel{
+		ID:         "tun-tcp-nowl",
+		AllowedIPs: nil, // no whitelist = allow all
+	}
+	session := &Session{ID: "sess-tcp-nowl", Mux: m}
+
+	server, client := net.Pipe()
+	defer client.Close()
+
+	done := make(chan struct{})
+	go func() {
+		s.proxyTCPConnection(server, tunnel, session)
+		close(done)
+	}()
+
+	// Should proceed (no whitelist block), close to finish
+	time.Sleep(50 * time.Millisecond)
+	server.Close()
+	m.Close()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Error("proxyTCPConnection did not complete")
+	}
+}

@@ -1,3 +1,4 @@
+import { Link } from 'react-router'
 import { CodeBlock } from '@/components/ui/CodeBlock'
 import { Callout } from '@/components/ui/Callout'
 
@@ -118,8 +119,8 @@ sudo ufw allow 20000:29999/tcp  # TCP tunnel ports`}
 
       <h2>Next Steps</h2>
       <ul>
-        <li><a href="/docs/quick-start">Quick Start</a> - Create your first tunnel</li>
-        <li><a href="/docs/configuration">Configuration</a> - Configure the server</li>
+        <li><Link to="/docs/quick-start">Quick Start</Link> - Create your first tunnel</li>
+        <li><Link to="/docs/configuration">Configuration</Link> - Configure the server</li>
       </ul>
     </>
   ),

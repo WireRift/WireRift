@@ -9,8 +9,12 @@ import App from './App'
 const redirect = sessionStorage.getItem('spa-redirect')
 if (redirect) {
   sessionStorage.removeItem('spa-redirect')
-  const url = new URL(redirect, window.location.origin)
-  window.history.replaceState(null, '', url.pathname + url.search + url.hash)
+  try {
+    const url = new URL(redirect, window.location.origin)
+    window.history.replaceState(null, '', url.pathname + url.search + url.hash)
+  } catch {
+    // Ignore malformed redirect URLs
+  }
 }
 
 createRoot(document.getElementById('root')!).render(

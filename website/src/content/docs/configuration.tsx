@@ -1,3 +1,4 @@
+import { Link } from 'react-router'
 import { CodeBlock } from '@/components/ui/CodeBlock'
 import { Callout } from '@/components/ui/Callout'
 
@@ -247,9 +248,9 @@ sudo journalctl -u wirerift -f`}
 
       <h2>Next Steps</h2>
       <ul>
-        <li><a href="/docs/http-tunnels">HTTP Tunnels</a> - HTTP tunnel features in detail</li>
-        <li><a href="/docs/tcp-tunnels">TCP Tunnels</a> - TCP tunnel features in detail</li>
-        <li><a href="/docs/security">Security</a> - TLS and authentication setup</li>
+        <li><Link to="/docs/http-tunnels">HTTP Tunnels</Link> - HTTP tunnel features in detail</li>
+        <li><Link to="/docs/tcp-tunnels">TCP Tunnels</Link> - TCP tunnel features in detail</li>
+        <li><Link to="/docs/security">Security</Link> - TLS and authentication setup</li>
       </ul>
     </>
   ),

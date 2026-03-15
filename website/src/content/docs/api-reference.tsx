@@ -1,3 +1,4 @@
+import { Link } from 'react-router'
 import { CodeBlock } from '@/components/ui/CodeBlock'
 import { Callout } from '@/components/ui/Callout'
 
@@ -248,8 +249,8 @@ Content-Type: application/json
 
       <h2>Next Steps</h2>
       <ul>
-        <li><a href="/docs/architecture">Architecture</a> - Understanding the protocol</li>
-        <li><a href="/docs/security">Security</a> - Securing the dashboard</li>
+        <li><Link to="/docs/architecture">Architecture</Link> - Understanding the protocol</li>
+        <li><Link to="/docs/security">Security</Link> - Securing the dashboard</li>
       </ul>
     </>
   ),

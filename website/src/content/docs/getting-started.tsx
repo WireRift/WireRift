@@ -1,3 +1,4 @@
+import { Link } from 'react-router'
 import { CodeBlock } from '@/components/ui/CodeBlock'
 import { Callout } from '@/components/ui/Callout'
 
@@ -95,10 +96,10 @@ wirerift http 8080
 
       <h2>Next Steps</h2>
       <ul>
-        <li><a href="/docs/installation">Installation</a> - Install WireRift on your system</li>
-        <li><a href="/docs/quick-start">Quick Start</a> - Step-by-step first tunnel guide</li>
-        <li><a href="/docs/configuration">Configuration</a> - Explore all options</li>
-        <li><a href="/docs/architecture">Architecture</a> - Understand the internals</li>
+        <li><Link to="/docs/installation">Installation</Link> - Install WireRift on your system</li>
+        <li><Link to="/docs/quick-start">Quick Start</Link> - Step-by-step first tunnel guide</li>
+        <li><Link to="/docs/configuration">Configuration</Link> - Explore all options</li>
+        <li><Link to="/docs/architecture">Architecture</Link> - Understand the internals</li>
       </ul>
     </>
   ),

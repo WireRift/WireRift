@@ -360,23 +360,47 @@ func TestCompressNoGzip(t *testing.T) {
 	}
 }
 
-func TestCompressWithGzip(t *testing.T) {
+func TestCompressWithGzipSmall(t *testing.T) {
+	// Small responses (< 256 bytes) should not be compressed
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("test"))
 	})
 
 	compressHandler := Compress()(handler)
 
-	// With Accept-Encoding: gzip
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Header.Set("Accept-Encoding", "gzip")
 	rec := httptest.NewRecorder()
 
 	compressHandler.ServeHTTP(rec, req)
 
-	// Response passes through (simplified implementation)
+	// Small response should pass through uncompressed
 	if rec.Body.String() != "test" {
-		t.Errorf("Body = %q, want %q", rec.Body.String(), "test")
+		t.Errorf("Small body should not be compressed, got %q", rec.Body.String())
+	}
+}
+
+func TestCompressWithGzipLarge(t *testing.T) {
+	// Large responses should be gzip compressed
+	largeBody := strings.Repeat("hello world ", 100) // ~1200 bytes
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(largeBody))
+	})
+
+	compressHandler := Compress()(handler)
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+
+	compressHandler.ServeHTTP(rec, req)
+
+	// Should be compressed (smaller than original)
+	if rec.Body.Len() >= len(largeBody) {
+		t.Errorf("Expected compressed body to be smaller than %d, got %d", len(largeBody), rec.Body.Len())
+	}
+	if rec.Header().Get("Content-Encoding") != "gzip" {
+		t.Error("Expected Content-Encoding: gzip header")
 	}
 }
 

@@ -11,8 +11,9 @@ const NotFoundPage = lazy(() => import('@/pages/NotFoundPage'))
 
 function LoadingFallback() {
   return (
-    <div className="flex items-center justify-center min-h-[50vh]">
+    <div className="flex items-center justify-center min-h-[50vh]" role="status">
       <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+      <span className="sr-only">Loading</span>
     </div>
   )
 }

@@ -9,8 +9,19 @@ export function CTA() {
   const isDark = useThemeStore((s) => s.resolved) === 'dark'
   const installCmd = SITE.installCommand
   const [copied, setCopied] = useState(false)
-  const copy = useCallback(() => {
-    navigator.clipboard.writeText(installCmd)
+  const copy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(installCmd)
+    } catch {
+      const textarea = document.createElement('textarea')
+      textarea.value = installCmd
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textarea)
+    }
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }, [installCmd])
