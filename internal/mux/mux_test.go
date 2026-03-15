@@ -2103,3 +2103,37 @@ func TestMuxControlFrameChannelFullThenClose(t *testing.T) {
 	}
 }
 
+
+func TestLastHeartbeat(t *testing.T) {
+	client, server := newTestPipe(t)
+	if !client.LastHeartbeat().IsZero() {
+		t.Error("LastHeartbeat should be zero initially")
+	}
+
+	go server.Run()
+
+	frame := &proto.Frame{
+		Version:  proto.Version,
+		Type:     proto.FrameHeartbeat,
+		StreamID: 0,
+		Payload:  proto.HeartbeatPayload(),
+	}
+	client.GetFrameWriter().Write(frame)
+
+	ackFrame, err := client.frameReader.Read()
+	if err != nil {
+		t.Fatalf("Read ack: %v", err)
+	}
+	client.handleFrame(ackFrame)
+
+	hb := client.LastHeartbeat()
+	if hb.IsZero() {
+		t.Error("LastHeartbeat should be set after ack")
+	}
+	if time.Since(hb) > 5*time.Second {
+		t.Error("LastHeartbeat should be recent")
+	}
+
+	client.Close()
+	server.Close()
+}

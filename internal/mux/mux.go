@@ -63,6 +63,8 @@ type Mux struct {
 	done      chan struct{}
 	err       atomic.Value // error that caused shutdown
 
+	lastHeartbeat atomic.Int64 // unix nano of last heartbeat ack
+
 	// Server-side stream ID allocation (odd numbers)
 	serverStreamID atomic.Uint32
 
@@ -340,8 +342,17 @@ func (m *Mux) handleHeartbeat(frame *proto.Frame) error {
 
 // handleHeartbeatAck handles a HEARTBEAT_ACK frame.
 func (m *Mux) handleHeartbeatAck(frame *proto.Frame) error {
-	// TODO: Update last heartbeat time
+	m.lastHeartbeat.Store(time.Now().UnixNano())
 	return nil
+}
+
+// LastHeartbeat returns the time of the last heartbeat ack.
+func (m *Mux) LastHeartbeat() time.Time {
+	ns := m.lastHeartbeat.Load()
+	if ns == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, ns)
 }
 
 // handleGoAway handles a GO_AWAY frame.
