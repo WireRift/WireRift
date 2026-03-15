@@ -14,6 +14,7 @@ go install github.com/wirerift/wirerift/cmd/wirerift@latest
 # Install the server
 go install github.com/wirerift/wirerift/cmd/wirerift-server@latest`,
     language: 'bash',
+    filename: 'install.sh',
   },
   {
     icon: Server,
@@ -26,6 +27,7 @@ wirerift-server \\
   -auto-cert \\
   -v`,
     language: 'bash',
+    filename: 'server.sh',
   },
   {
     icon: Zap,
@@ -38,6 +40,7 @@ wirerift http 8080
 # Your service is now available at:
 # https://<random-id>.mytunnel.com`,
     language: 'bash',
+    filename: 'tunnel.sh',
   },
 ]
 
@@ -112,6 +115,8 @@ export function QuickStart() {
                     <CodeBlock
                       code={step.code}
                       language={step.language}
+                      filename={step.filename}
+                      lineNumbers={true}
                     />
                   </div>
                 </div>

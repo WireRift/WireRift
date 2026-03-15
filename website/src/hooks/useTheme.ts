@@ -4,6 +4,7 @@ type Theme = 'light' | 'dark'
 
 interface ThemeState {
   theme: Theme
+  resolved: Theme
   setTheme: (theme: Theme) => void
   toggleTheme: () => void
 }
@@ -22,22 +23,26 @@ function applyTheme(theme: Theme): void {
   localStorage.setItem('wirerift-theme', theme)
 }
 
-export const useTheme = create<ThemeState>((set) => {
+export const useThemeStore = create<ThemeState>((set) => {
   const initial = getInitialTheme()
   applyTheme(initial)
 
   return {
     theme: initial,
+    resolved: initial,
     setTheme: (theme: Theme) => {
       applyTheme(theme)
-      set({ theme })
+      set({ theme, resolved: theme })
     },
     toggleTheme: () => {
       set((state) => {
         const next = state.theme === 'dark' ? 'light' : 'dark'
         applyTheme(next)
-        return { theme: next }
+        return { theme: next, resolved: next }
       })
     },
   }
 })
+
+// Backward compatible alias
+export const useTheme = useThemeStore

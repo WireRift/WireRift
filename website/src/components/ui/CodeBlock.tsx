@@ -1,5 +1,5 @@
 import { CodeBlock as CodeShineBlock } from '@oxog/codeshine/react'
-import { useTheme } from '@/hooks/useTheme'
+import { useThemeStore } from '@/hooks/useTheme'
 import { cn } from '@/lib/utils'
 
 interface CodeBlockProps {
@@ -7,25 +7,29 @@ interface CodeBlockProps {
   language?: string
   filename?: string
   lineNumbers?: boolean
-  highlightLines?: (number | string)[]
+  highlightLines?: string
   className?: string
   copyButton?: boolean
+  showLanguageBadge?: boolean
+  maxHeight?: string
 }
 
 export function CodeBlock({
   code,
   language = 'bash',
   filename,
-  lineNumbers = false,
+  lineNumbers = true,
   highlightLines,
   className,
   copyButton = true,
+  showLanguageBadge = true,
+  maxHeight,
 }: CodeBlockProps) {
-  const { theme } = useTheme()
-  const codeshineTheme = theme === 'dark' ? 'tokyo-night' : 'github-light'
+  const resolved = useThemeStore((s) => s.resolved)
+  const codeshineTheme = resolved === 'dark' ? 'github-dark' : 'github-light'
 
   return (
-    <div className={cn('relative group', className)}>
+    <div className={cn('codeblock-wrapper', className)}>
       <CodeShineBlock
         code={code.trim()}
         language={language}
@@ -34,7 +38,9 @@ export function CodeBlock({
         highlightLines={highlightLines}
         copyButton={copyButton}
         filename={filename}
-        wrapLines
+        showLanguageBadge={showLanguageBadge}
+        maxHeight={maxHeight}
+        tabSize={2}
       />
     </div>
   )

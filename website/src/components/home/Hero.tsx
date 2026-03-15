@@ -142,6 +142,8 @@ export function Hero() {
                 code={heroCode}
                 language="bash"
                 filename="terminal"
+                lineNumbers={true}
+                showLanguageBadge={true}
               />
             </div>
           </motion.div>
