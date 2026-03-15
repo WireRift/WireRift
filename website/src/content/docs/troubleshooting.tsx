@@ -169,6 +169,34 @@ journalctl -u wirerift -f`}
         it re-creates the tunnels.
       </p>
 
+      <h3>How do I see traffic going through my tunnel?</h3>
+      <p>
+        Use the <code>-inspect</code> flag to enable the traffic inspector. All requests and responses
+        are captured and viewable in the dashboard at <code>http://localhost:4040</code>. You can also
+        replay any request from the dashboard.
+      </p>
+
+      <h3>Basic Auth returns 401 even with correct credentials</h3>
+      <p>
+        Make sure the format is <code>-auth "user:password"</code> (with colon separator).
+        When using <code>curl</code>, pass credentials with <code>-u user:password</code>.
+        If combining with PIN, the auth check runs first.
+      </p>
+
+      <h3>PIN cookie is not working across subdomains</h3>
+      <p>
+        PIN cookies are scoped to each subdomain (<code>wirerift_pin_&lt;subdomain&gt;</code>).
+        Each tunnel has its own independent PIN session. Cookies use <code>SameSite=Strict</code>
+        and <code>HttpOnly</code> for security.
+      </p>
+
+      <h3>Whitelist blocks my IP even though it should be allowed</h3>
+      <p>
+        Check if you are behind a NAT or proxy. The server sees the connecting IP, not your internal IP.
+        Use <code>-v</code> on the server to see which IP is being checked. CIDR notation
+        like <code>10.0.0.0/8</code> covers the entire range.
+      </p>
+
       <Callout variant="info" title="Need more help?">
         If your issue is not covered here, open an issue on{' '}
         <a href="https://github.com/wirerift/wirerift/issues" target="_blank" rel="noopener noreferrer" className="underline">
