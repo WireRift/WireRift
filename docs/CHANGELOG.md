@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.2] - 2026-03-15
 
+### Added
+- IP whitelist for HTTP tunnels (`-whitelist 1.2.3.4,10.0.0.0/8`) - restrict tunnel access by IP/CIDR
+- PIN protection for HTTP tunnels (`-pin 1234`) - require PIN to access tunnel via browser, header, or query param
+- PIN challenge page with dark theme UI for browser-based access
+- `WithAllowedIPs()` and `WithPIN()` client library options
+- Config file support for `whitelist` and `pin` per tunnel
+- Rate limiter eviction to prevent memory leak from unique client IPs
+
 ### Security
 - Fix: Mask dev token in server startup logs to prevent credential leakage
 - Fix: Use constant-time comparison in BasicAuth to prevent timing attacks

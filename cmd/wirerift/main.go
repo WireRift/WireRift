@@ -80,6 +80,8 @@ Commands:
 Examples:
   wirerift http 8080                    Create HTTP tunnel on port 8080
   wirerift http 8080 myapp              Create HTTP tunnel with subdomain
+  wirerift http 8080 -pin 1234          Create PIN-protected tunnel
+  wirerift http 8080 -whitelist 1.2.3.4 Create IP-restricted tunnel
   wirerift tcp 25565                    Create TCP tunnel on port 25565
   wirerift start wirerift.yaml          Start tunnels from config
 
@@ -134,6 +136,8 @@ func doHTTP(parentCtx context.Context, args []string) error {
 	server := fs.String("server", "", "Server address (default: localhost:4443)")
 	token := fs.String("token", "", "Authentication token")
 	subdomain := fs.String("subdomain", "", "Requested subdomain")
+	whitelist := fs.String("whitelist", "", "Comma-separated IP whitelist (e.g., 1.2.3.4,10.0.0.0/8)")
+	pin := fs.String("pin", "", "PIN protection for tunnel access")
 	verbose := fs.Bool("v", false, "Verbose output")
 
 	fs.Usage = func() {
@@ -204,6 +208,16 @@ func doHTTP(parentCtx context.Context, args []string) error {
 	if reqSubdomain != "" {
 		tunnelOpts = append(tunnelOpts, client.WithSubdomain(reqSubdomain))
 	}
+	if *whitelist != "" {
+		ips := strings.Split(*whitelist, ",")
+		for i := range ips {
+			ips[i] = strings.TrimSpace(ips[i])
+		}
+		tunnelOpts = append(tunnelOpts, client.WithAllowedIPs(ips))
+	}
+	if *pin != "" {
+		tunnelOpts = append(tunnelOpts, client.WithPIN(*pin))
+	}
 
 	tunnel, err := c.HTTP(fmt.Sprintf("localhost:%d", localPort), tunnelOpts...)
 	if err != nil {
@@ -213,6 +227,12 @@ func doHTTP(parentCtx context.Context, args []string) error {
 	fmt.Printf("HTTP tunnel created: %s -> http://localhost:%d\n", tunnel.PublicURL, localPort)
 	if tunnel.Subdomain != "" {
 		fmt.Printf("Subdomain: %s\n", tunnel.Subdomain)
+	}
+	if *whitelist != "" {
+		fmt.Printf("IP Whitelist: %s\n", *whitelist)
+	}
+	if *pin != "" {
+		fmt.Printf("PIN Protected: yes\n")
 	}
 
 	// Wait for context
@@ -357,6 +377,16 @@ func doStart(parentCtx context.Context, args []string) error {
 			if t.Subdomain != "" {
 				opts = append(opts, client.WithSubdomain(t.Subdomain))
 			}
+			if t.Whitelist != "" {
+				ips := strings.Split(t.Whitelist, ",")
+				for i := range ips {
+					ips[i] = strings.TrimSpace(ips[i])
+				}
+				opts = append(opts, client.WithAllowedIPs(ips))
+			}
+			if t.PIN != "" {
+				opts = append(opts, client.WithPIN(t.PIN))
+			}
 			tunnel, err := c.HTTP(fmt.Sprintf("localhost:%d", t.LocalPort), opts...)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Failed to create HTTP tunnel: %v\n", err)
@@ -387,6 +417,8 @@ type TunnelConfig struct {
 	Type      string `yaml:"type"`
 	LocalPort int    `yaml:"local_port"`
 	Subdomain string `yaml:"subdomain"`
+	Whitelist string `yaml:"whitelist"`
+	PIN       string `yaml:"pin"`
 }
 
 // ConfigFile represents the config file structure
@@ -449,6 +481,10 @@ func loadConfig(path string) (*ConfigFile, error) {
 				cfg.Tunnels[tunnelIdx].LocalPort = port
 			case "subdomain":
 				cfg.Tunnels[tunnelIdx].Subdomain = value
+			case "whitelist":
+				cfg.Tunnels[tunnelIdx].Whitelist = value
+			case "pin":
+				cfg.Tunnels[tunnelIdx].PIN = value
 			}
 		} else {
 			switch key {
@@ -602,7 +638,9 @@ token: ""  # Set your API token here
 tunnels:
   - type: http
     local_port: 8080
-    subdomain: ""  # Leave empty for random subdomain
+    subdomain: ""       # Leave empty for random subdomain
+    # whitelist: ""     # Comma-separated IPs (e.g., 1.2.3.4,10.0.0.0/8)
+    # pin: ""           # PIN protection for tunnel access
   # - type: tcp
   #   local_port: 25565
 `

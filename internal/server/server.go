@@ -129,15 +129,17 @@ type Session struct {
 
 // Tunnel represents an active tunnel.
 type Tunnel struct {
-	ID        string
-	Type      proto.TunnelType
-	SessionID string
-	Subdomain string // for HTTP tunnels
-	Port      int    // for TCP tunnels
-	PublicURL string
-	LocalAddr string
-	CreatedAt time.Time
-	mu        sync.RWMutex
+	ID         string
+	Type       proto.TunnelType
+	SessionID  string
+	Subdomain  string // for HTTP tunnels
+	Port       int    // for TCP tunnels
+	PublicURL  string
+	LocalAddr  string
+	AllowedIPs []string // IP whitelist (empty = allow all)
+	PIN        string   // PIN protection (empty = no PIN)
+	CreatedAt  time.Time
+	mu         sync.RWMutex
 }
 
 // New creates a new server.
@@ -473,13 +475,15 @@ func (s *Server) handleTunnelRequest(m *mux.Mux, session *Session, frame *proto.
 		}
 
 		tunnel := &Tunnel{
-			ID:        tunnelID,
-			Type:      proto.TunnelTypeHTTP,
-			SessionID: session.ID,
-			Subdomain: subdomain,
-			PublicURL: fmt.Sprintf("http://%s.%s", subdomain, s.config.Domain),
-			LocalAddr: req.LocalAddr,
-			CreatedAt: time.Now(),
+			ID:         tunnelID,
+			Type:       proto.TunnelTypeHTTP,
+			SessionID:  session.ID,
+			Subdomain:  subdomain,
+			PublicURL:  fmt.Sprintf("http://%s.%s", subdomain, s.config.Domain),
+			LocalAddr:  req.LocalAddr,
+			AllowedIPs: req.AllowedIPs,
+			PIN:        req.PIN,
+			CreatedAt:  time.Now(),
 		}
 		s.tunnels.Store(subdomain, tunnel)
 
@@ -508,13 +512,14 @@ func (s *Server) handleTunnelRequest(m *mux.Mux, session *Session, frame *proto.
 		}
 
 		tunnel := &Tunnel{
-			ID:        tunnelID,
-			Type:      proto.TunnelTypeTCP,
-			SessionID: session.ID,
-			Port:      port,
-			PublicURL: fmt.Sprintf("tcp://%s:%d", s.config.Domain, port),
-			LocalAddr: req.LocalAddr,
-			CreatedAt: time.Now(),
+			ID:         tunnelID,
+			Type:       proto.TunnelTypeTCP,
+			SessionID:  session.ID,
+			Port:       port,
+			PublicURL:  fmt.Sprintf("tcp://%s:%d", s.config.Domain, port),
+			LocalAddr:  req.LocalAddr,
+			AllowedIPs: req.AllowedIPs,
+			CreatedAt:  time.Now(),
 		}
 
 		portKey := fmt.Sprintf("tcp:%d", port)
@@ -745,6 +750,26 @@ func (s *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check IP whitelist
+	tunnel.mu.RLock()
+	allowedIPs := tunnel.AllowedIPs
+	pin := tunnel.PIN
+	tunnel.mu.RUnlock()
+
+	if len(allowedIPs) > 0 {
+		if !s.isIPAllowed(clientIP, allowedIPs) {
+			http.Error(w, "Forbidden: your IP is not whitelisted", http.StatusForbidden)
+			return
+		}
+	}
+
+	// Check PIN protection
+	if pin != "" {
+		if !s.checkPIN(w, r, pin, subdomain) {
+			return // response already written by checkPIN
+		}
+	}
+
 	// Get session
 	session, ok := s.getSession(tunnel.SessionID)
 	if !ok {
@@ -910,6 +935,149 @@ func (s *Server) allocatePort() (int, error) {
 // releasePort releases a TCP port.
 func (s *Server) releasePort(port int) {
 	s.tcpPorts.Delete(port)
+}
+
+// isIPAllowed checks if the given client IP is in the allowed list.
+// Supports exact IP match and CIDR notation.
+func (s *Server) isIPAllowed(clientIP string, allowedIPs []string) bool {
+	// Strip brackets from IPv6
+	clientIP = strings.TrimPrefix(clientIP, "[")
+	clientIP = strings.TrimSuffix(clientIP, "]")
+
+	parsedClient := net.ParseIP(clientIP)
+
+	for _, allowed := range allowedIPs {
+		// Try CIDR match
+		if strings.Contains(allowed, "/") {
+			_, cidr, err := net.ParseCIDR(allowed)
+			if err == nil && parsedClient != nil && cidr.Contains(parsedClient) {
+				return true
+			}
+			continue
+		}
+
+		// Exact IP match
+		allowedIP := net.ParseIP(allowed)
+		if allowedIP != nil && parsedClient != nil && allowedIP.Equal(parsedClient) {
+			return true
+		}
+
+		// String match fallback (e.g. unresolvable formats)
+		if clientIP == allowed {
+			return true
+		}
+	}
+	return false
+}
+
+// checkPIN validates PIN protection for a tunnel.
+// Returns true if access is allowed, false if response was written (PIN page or error).
+func (s *Server) checkPIN(w http.ResponseWriter, r *http.Request, pin, subdomain string) bool {
+	cookieName := "wirerift_pin_" + subdomain
+
+	// Check PIN cookie first
+	if cookie, err := r.Cookie(cookieName); err == nil && cookie.Value == pin {
+		return true
+	}
+
+	// Check X-WireRift-PIN header (for API/CLI access)
+	if r.Header.Get("X-WireRift-PIN") == pin {
+		return true
+	}
+
+	// Check ?pin= query parameter
+	if r.URL.Query().Get("pin") == pin {
+		// Set cookie so subsequent requests don't need the query param
+		http.SetCookie(w, &http.Cookie{
+			Name:     cookieName,
+			Value:    pin,
+			Path:     "/",
+			MaxAge:   86400, // 24 hours
+			HttpOnly: true,
+			SameSite: http.SameSiteStrictMode,
+		})
+		// Redirect to clean URL (strip pin param)
+		q := r.URL.Query()
+		q.Del("pin")
+		cleanURL := r.URL.Path
+		if encoded := q.Encode(); encoded != "" {
+			cleanURL += "?" + encoded
+		}
+		http.Redirect(w, r, cleanURL, http.StatusFound)
+		return false
+	}
+
+	// Handle POST from PIN form
+	if r.Method == http.MethodPost && r.Header.Get("Content-Type") == "application/x-www-form-urlencoded" {
+		r.ParseForm()
+		submittedPIN := r.FormValue("pin")
+		if submittedPIN == pin {
+			http.SetCookie(w, &http.Cookie{
+				Name:     cookieName,
+				Value:    pin,
+				Path:     "/",
+				MaxAge:   86400,
+				HttpOnly: true,
+				SameSite: http.SameSiteStrictMode,
+			})
+			http.Redirect(w, r, r.URL.Path, http.StatusFound)
+			return false
+		}
+		// Wrong PIN - show form again with error
+		s.servePINPage(w, subdomain, true)
+		return false
+	}
+
+	// Show PIN entry page
+	s.servePINPage(w, subdomain, false)
+	return false
+}
+
+// servePINPage serves the PIN entry HTML page.
+func (s *Server) servePINPage(w http.ResponseWriter, subdomain string, showError bool) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusUnauthorized)
+
+	errorHTML := ""
+	if showError {
+		errorHTML = `<p style="color:#ef4444;margin-bottom:16px;font-size:14px">Invalid PIN. Please try again.</p>`
+	}
+
+	fmt.Fprintf(w, `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PIN Required - WireRift</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#0f172a;color:#e2e8f0;display:flex;align-items:center;justify-content:center;min-height:100vh}
+.card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:40px;max-width:400px;width:90%%;text-align:center}
+.logo{font-size:24px;font-weight:700;margin-bottom:8px;color:#fff}
+.sub{color:#94a3b8;font-size:14px;margin-bottom:24px}
+%s
+form{display:flex;flex-direction:column;gap:12px}
+input[type=password]{background:#0f172a;border:1px solid #475569;border-radius:8px;padding:12px 16px;color:#e2e8f0;font-size:16px;text-align:center;letter-spacing:8px;outline:none}
+input[type=password]:focus{border-color:#6366f1}
+button{background:#6366f1;color:#fff;border:none;border-radius:8px;padding:12px;font-size:16px;font-weight:600;cursor:pointer}
+button:hover{background:#4f46e5}
+.hint{color:#64748b;font-size:12px;margin-top:16px}
+</style>
+</head>
+<body>
+<div class="card">
+<div class="logo">WireRift</div>
+<p class="sub">This tunnel is PIN protected</p>
+%s
+<form method="POST">
+<input type="password" name="pin" placeholder="Enter PIN" autocomplete="off" autofocus required maxlength="32">
+<button type="submit">Unlock</button>
+</form>
+<p class="hint">You can also pass the PIN via header: X-WireRift-PIN</p>
+</div>
+</body>
+</html>`, errorHTML, errorHTML)
 }
 
 // extractSubdomain extracts the subdomain from a host.

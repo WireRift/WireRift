@@ -43,13 +43,15 @@ type TunnelAuth struct {
 
 // TunnelRequest is sent by the client to open a tunnel.
 type TunnelRequest struct {
-	Type       TunnelType       `json:"type"`
-	Subdomain  string           `json:"subdomain,omitempty"`
-	RemotePort int              `json:"remote_port,omitempty"`
-	LocalAddr  string           `json:"local_addr"`
-	Inspect    bool             `json:"inspect,omitempty"`
-	Auth       *TunnelAuth      `json:"auth,omitempty"`
+	Type       TunnelType        `json:"type"`
+	Subdomain  string            `json:"subdomain,omitempty"`
+	RemotePort int               `json:"remote_port,omitempty"`
+	LocalAddr  string            `json:"local_addr"`
+	Inspect    bool              `json:"inspect,omitempty"`
+	Auth       *TunnelAuth       `json:"auth,omitempty"`
 	Headers    map[string]string `json:"headers,omitempty"`
+	AllowedIPs []string          `json:"allowed_ips,omitempty"`
+	PIN        string            `json:"pin,omitempty"`
 }
 
 // TunnelMetadata contains tunnel-specific metadata.

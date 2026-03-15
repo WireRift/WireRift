@@ -506,6 +506,22 @@ func WithHeaders(headers map[string]string) HTTPOption {
 	}
 }
 
+// WithAllowedIPs sets the IP whitelist for the tunnel.
+// Only requests from these IPs will be allowed. Supports CIDR notation.
+func WithAllowedIPs(ips []string) HTTPOption {
+	return func(req *proto.TunnelRequest) {
+		req.AllowedIPs = ips
+	}
+}
+
+// WithPIN sets PIN protection for the tunnel.
+// Visitors must enter the PIN to access the tunnel.
+func WithPIN(pin string) HTTPOption {
+	return func(req *proto.TunnelRequest) {
+		req.PIN = pin
+	}
+}
+
 // Close closes the tunnel.
 func (t *Tunnel) Close() error {
 	return t.client.CloseTunnel(t.ID)

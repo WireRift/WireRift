@@ -3753,3 +3753,259 @@ func TestForwardWebSocketBufferedDataPath(t *testing.T) {
 	c1.Close()
 	c2.Close()
 }
+
+// --- Whitelist and PIN Protection Tests ---
+
+func TestIsIPAllowed(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+
+	tests := []struct {
+		name     string
+		clientIP string
+		allowed  []string
+		want     bool
+	}{
+		{"exact match", "1.2.3.4", []string{"1.2.3.4"}, true},
+		{"no match", "1.2.3.4", []string{"5.6.7.8"}, false},
+		{"CIDR match", "10.0.1.5", []string{"10.0.0.0/8"}, true},
+		{"CIDR no match", "192.168.1.1", []string{"10.0.0.0/8"}, false},
+		{"multiple IPs match second", "5.6.7.8", []string{"1.2.3.4", "5.6.7.8"}, true},
+		{"mixed CIDR and exact", "10.0.5.5", []string{"1.2.3.4", "10.0.0.0/16"}, true},
+		{"IPv6 exact", "::1", []string{"::1"}, true},
+		{"empty allowed", "1.2.3.4", []string{}, false},
+		{"bracketed IPv6", "[::1]", []string{"::1"}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := s.isIPAllowed(tt.clientIP, tt.allowed)
+			if got != tt.want {
+				t.Errorf("isIPAllowed(%q, %v) = %v, want %v", tt.clientIP, tt.allowed, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCheckPINWithHeader(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+
+	req := httptest.NewRequest("GET", "/test", nil)
+	req.Header.Set("X-WireRift-PIN", "1234")
+	rec := httptest.NewRecorder()
+
+	result := s.checkPIN(rec, req, "1234", "myapp")
+	if !result {
+		t.Error("checkPIN should return true for correct header PIN")
+	}
+}
+
+func TestCheckPINWithWrongHeader(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+
+	req := httptest.NewRequest("GET", "/test", nil)
+	req.Header.Set("X-WireRift-PIN", "wrong")
+	rec := httptest.NewRecorder()
+
+	result := s.checkPIN(rec, req, "1234", "myapp")
+	if result {
+		t.Error("checkPIN should return false for wrong header PIN")
+	}
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("Expected 401, got %d", rec.Code)
+	}
+}
+
+func TestCheckPINWithQueryParam(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+
+	req := httptest.NewRequest("GET", "/test?pin=5678", nil)
+	rec := httptest.NewRecorder()
+
+	result := s.checkPIN(rec, req, "5678", "myapp")
+	if result {
+		t.Error("checkPIN with query param should return false (redirect)")
+	}
+	if rec.Code != http.StatusFound {
+		t.Errorf("Expected 302 redirect, got %d", rec.Code)
+	}
+	// Check cookie was set
+	cookies := rec.Result().Cookies()
+	found := false
+	for _, c := range cookies {
+		if c.Name == "wirerift_pin_myapp" && c.Value == "5678" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("Expected PIN cookie to be set")
+	}
+}
+
+func TestCheckPINWithCookie(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+
+	req := httptest.NewRequest("GET", "/test", nil)
+	req.AddCookie(&http.Cookie{Name: "wirerift_pin_myapp", Value: "secret"})
+	rec := httptest.NewRecorder()
+
+	result := s.checkPIN(rec, req, "secret", "myapp")
+	if !result {
+		t.Error("checkPIN should return true for correct cookie")
+	}
+}
+
+func TestCheckPINShowsForm(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+
+	req := httptest.NewRequest("GET", "/", nil)
+	rec := httptest.NewRecorder()
+
+	result := s.checkPIN(rec, req, "1234", "myapp")
+	if result {
+		t.Error("checkPIN should return false and show PIN page")
+	}
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("Expected 401, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "PIN") {
+		t.Error("Expected PIN form in response body")
+	}
+}
+
+func TestCheckPINPostCorrect(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+
+	req := httptest.NewRequest("POST", "/", strings.NewReader("pin=1234"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+
+	result := s.checkPIN(rec, req, "1234", "myapp")
+	if result {
+		t.Error("checkPIN POST should return false (redirect after success)")
+	}
+	if rec.Code != http.StatusFound {
+		t.Errorf("Expected 302 redirect, got %d", rec.Code)
+	}
+}
+
+func TestCheckPINPostWrong(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+
+	req := httptest.NewRequest("POST", "/", strings.NewReader("pin=wrong"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+
+	result := s.checkPIN(rec, req, "1234", "myapp")
+	if result {
+		t.Error("checkPIN POST with wrong PIN should return false")
+	}
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("Expected 401, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "Invalid PIN") {
+		t.Error("Expected error message in response body")
+	}
+}
+
+func TestHandleHTTPRequestWhitelist(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.ControlAddr = "127.0.0.1:0"
+	cfg.HTTPAddr = "127.0.0.1:0"
+	cfg.Domain = "test.dev"
+	s := New(cfg, nil)
+
+	// Add a tunnel with whitelist
+	tunnel := &Tunnel{
+		ID:         "tun-wl",
+		Type:       proto.TunnelTypeHTTP,
+		SessionID:  "sess-1",
+		Subdomain:  "wltest",
+		PublicURL:  "http://wltest.test.dev",
+		AllowedIPs: []string{"192.168.1.100"},
+		CreatedAt:  time.Now(),
+	}
+	s.tunnels.Store("wltest", tunnel)
+
+	// Request from non-whitelisted IP
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Host = "wltest.test.dev"
+	req.RemoteAddr = "10.0.0.1:12345"
+	rec := httptest.NewRecorder()
+
+	s.handleHTTPRequest(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("Expected 403 Forbidden for non-whitelisted IP, got %d", rec.Code)
+	}
+}
+
+func TestHandleHTTPRequestPIN(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.ControlAddr = "127.0.0.1:0"
+	cfg.HTTPAddr = "127.0.0.1:0"
+	cfg.Domain = "test.dev"
+	s := New(cfg, nil)
+
+	// Add a tunnel with PIN
+	tunnel := &Tunnel{
+		ID:        "tun-pin",
+		Type:      proto.TunnelTypeHTTP,
+		SessionID: "sess-1",
+		Subdomain: "pintest",
+		PublicURL: "http://pintest.test.dev",
+		PIN:       "9999",
+		CreatedAt: time.Now(),
+	}
+	s.tunnels.Store("pintest", tunnel)
+
+	// Request without PIN
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Host = "pintest.test.dev"
+	req.RemoteAddr = "10.0.0.1:12345"
+	rec := httptest.NewRecorder()
+
+	s.handleHTTPRequest(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("Expected 401 for missing PIN, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "PIN") {
+		t.Error("Expected PIN form in response")
+	}
+}
+
+func TestHandleHTTPRequestPINBypass(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.ControlAddr = "127.0.0.1:0"
+	cfg.HTTPAddr = "127.0.0.1:0"
+	cfg.Domain = "test.dev"
+	s := New(cfg, nil)
+
+	// Add a tunnel with PIN + session
+	tunnel := &Tunnel{
+		ID:        "tun-pin2",
+		Type:      proto.TunnelTypeHTTP,
+		SessionID: "sess-noexist",
+		Subdomain: "pinbypass",
+		PublicURL: "http://pinbypass.test.dev",
+		PIN:       "4321",
+		CreatedAt: time.Now(),
+	}
+	s.tunnels.Store("pinbypass", tunnel)
+
+	// Request with correct PIN header - should pass PIN check but fail on session lookup
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Host = "pinbypass.test.dev"
+	req.RemoteAddr = "10.0.0.1:12345"
+	req.Header.Set("X-WireRift-PIN", "4321")
+	rec := httptest.NewRecorder()
+
+	s.handleHTTPRequest(rec, req)
+
+	// Should get past PIN check and hit "Session not found"
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("Expected 502 (session not found), got %d", rec.Code)
+	}
+}
