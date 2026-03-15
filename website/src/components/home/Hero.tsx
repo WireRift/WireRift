@@ -23,14 +23,17 @@ const scaleIn = {
 }
 
 const heroCode = `# Start your tunnel server
-wirerift-server -domain mytunnel.com -auto-cert -v
+wirerift-server -domain mytunnel.com -auto-cert
 
 # Expose any local service instantly
 wirerift http 8080 myapp
-# → https://myapp.mytunnel.com
 
-# Forward raw TCP (databases, games, SSH...)
-wirerift tcp 5432`
+# Serve static files directly
+wirerift serve ./dist -subdomain mysite
+
+# Add access control
+wirerift http 8080 -auth "admin:pass" -inspect
+wirerift http 8080 -pin secret -whitelist "10.0.0.0/8"`
 
 const goInstallCmd = 'go install github.com/wirerift/wirerift/cmd/wirerift@latest'
 
@@ -135,7 +138,7 @@ export function Hero() {
               }}>
               <span className="px-2.5 py-1 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase tracking-wider leading-none">New</span>
               <span className="text-[13px] transition-colors" style={{ color: isDark ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.4)' }}>
-                v{SITE.version} — Open Source Release
+                v{SITE.version} — Traffic Inspector, Auth & File Serve
               </span>
               <ArrowRight className="w-3 h-3" style={{ color: isDark ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.2)' }} />
             </Link>
@@ -165,7 +168,7 @@ export function Hero() {
           <motion.p variants={rise} className="mt-6 md:mt-8 text-center text-[15px] sm:text-base md:text-lg max-w-xl mx-auto leading-relaxed"
             style={{ color: subColor }}>
             Connect any local service to the internet in one line —
-            with built-in security, stream multiplexing, and traffic management.
+            with traffic inspection, access control, and real-time debugging.
           </motion.p>
 
           {/* CTA */}
@@ -213,7 +216,7 @@ export function Hero() {
 
           {/* Stats */}
           <motion.div variants={rise} className="mt-14 md:mt-16 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-[13px]" style={{ color: statColor }}>
-            {['Zero dependencies', 'Single binary', 'Auto TLS', '100% test coverage', 'MIT License'].map((s, i) => (
+            {['Zero dependencies', 'Single binary', 'Traffic Inspector', 'Access Control', 'MIT License'].map((s, i) => (
               <span key={s} className="flex items-center gap-6">
                 {i > 0 && <span className="hidden sm:inline" style={{ color: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)' }}>·</span>}
                 {s}

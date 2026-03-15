@@ -75,7 +75,7 @@ export function Architecture() {
               <FlowBox
                 icon={<Server className="w-6 h-6" />}
                 title="WireRift Server"
-                items={['Mux Engine', 'Auth & Routing']}
+                items={['Mux Engine', 'Auth & Inspector']}
                 gradient="from-violet-500/20 to-purple-600/20"
                 borderColor="border-violet-500/30"
                 iconColor="text-violet-400"

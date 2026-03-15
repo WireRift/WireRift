@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion'
-import { Download, Server, Zap } from 'lucide-react'
+import { Download, Server, Zap, Shield, Eye } from 'lucide-react'
 import { CodeBlock } from '@/components/ui/CodeBlock'
 
 const steps = [
@@ -8,10 +8,7 @@ const steps = [
     number: '01',
     title: 'Install',
     description: 'Install the WireRift client and server binaries with Go.',
-    code: `# Install the client
-go install github.com/wirerift/wirerift/cmd/wirerift@latest
-
-# Install the server
+    code: `go install github.com/wirerift/wirerift/cmd/wirerift@latest
 go install github.com/wirerift/wirerift/cmd/wirerift-server@latest`,
     language: 'bash',
     filename: 'install.sh',
@@ -21,11 +18,7 @@ go install github.com/wirerift/wirerift/cmd/wirerift-server@latest`,
     number: '02',
     title: 'Start Server',
     description: 'Run the tunnel server on your VPS or cloud instance.',
-    code: `# Start with auto TLS on your domain
-wirerift-server \\
-  -domain mytunnel.com \\
-  -auto-cert \\
-  -v`,
+    code: `wirerift-server -domain mytunnel.com -auto-cert`,
     language: 'bash',
     filename: 'server.sh',
   },
@@ -33,14 +26,49 @@ wirerift-server \\
     icon: Zap,
     number: '03',
     title: 'Create Tunnel',
-    description: 'Expose your local service to the internet instantly.',
-    code: `# Expose local HTTP server on port 8080
-wirerift http 8080
+    description: 'Expose your local service or serve static files.',
+    code: `# HTTP tunnel
+wirerift http 8080 myapp
 
-# Your service is now available at:
-# https://<random-id>.mytunnel.com`,
+# Serve static files
+wirerift serve ./dist -subdomain mysite
+
+# TCP tunnel (databases, SSH, games)
+wirerift tcp 5432`,
     language: 'bash',
     filename: 'tunnel.sh',
+  },
+  {
+    icon: Shield,
+    number: '04',
+    title: 'Secure It',
+    description: 'Add access control with auth, PIN, or IP whitelist.',
+    code: `# Basic Auth
+wirerift http 8080 -auth "admin:secret"
+
+# PIN protection
+wirerift http 8080 -pin mysecret
+
+# IP whitelist + custom headers
+wirerift http 8080 -whitelist "10.0.0.0/8" \\
+  -header "X-Frame-Options:DENY"`,
+    language: 'bash',
+    filename: 'secure.sh',
+  },
+  {
+    icon: Eye,
+    number: '05',
+    title: 'Inspect Traffic',
+    description: 'Enable the traffic inspector and replay requests from the dashboard.',
+    code: `# Enable traffic inspector
+wirerift http 8080 -inspect
+
+# Dashboard at http://localhost:4040
+# → Live request/response log
+# → One-click request replay
+# → Header inspection`,
+    language: 'bash',
+    filename: 'inspect.sh',
   },
 ]
 
@@ -73,7 +101,7 @@ export function QuickStart() {
             Up and running in minutes
           </h2>
           <p className="mt-4 text-lg text-[var(--color-text-muted)] max-w-2xl mx-auto">
-            Three steps to expose your local services to the internet. No configuration files needed.
+            Five steps from install to production-ready tunnels with full access control.
           </p>
         </motion.div>
 
