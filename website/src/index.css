@@ -199,29 +199,25 @@ a {
   border: 1px solid var(--color-border) !important;
 }
 
-.codeshine pre {
+.codeshine pre,
+.cs-codeblock {
   margin: 0 !important;
   white-space: pre !important;
-  word-wrap: normal !important;
   overflow-x: auto !important;
 }
 
-.codeshine pre code {
+.cs-codeblock code,
+.cs-code {
   white-space: pre !important;
-  word-wrap: normal !important;
   display: block !important;
 }
 
-.codeshine code {
-  white-space: pre !important;
-}
-
-.codeshine .line {
+.cs-line {
   display: block !important;
 }
 
-.codeshine code span {
-  white-space: pre !important;
+.cs-line-content {
+  display: inline !important;
 }
 
 /* ============================================
