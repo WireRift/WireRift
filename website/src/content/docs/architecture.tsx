@@ -232,20 +232,12 @@ When window reaches 0:
             <td>Web dashboard UI and REST API</td>
           </tr>
           <tr>
-            <td><code>internal/metrics</code></td>
-            <td>Prometheus-style metrics collection</td>
-          </tr>
-          <tr>
             <td><code>internal/ratelimit</code></td>
             <td>Token bucket and sliding window rate limiting</td>
           </tr>
           <tr>
-            <td><code>internal/middleware</code></td>
-            <td>HTTP middleware chain</td>
-          </tr>
-          <tr>
             <td><code>internal/utils</code></td>
-            <td>ID generation, subdomain extraction</td>
+            <td>Subdomain validation utilities</td>
           </tr>
         </tbody>
       </table>

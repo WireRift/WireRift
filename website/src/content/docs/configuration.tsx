@@ -112,6 +112,10 @@ wirerift-server \\
         code={`# HTTP tunnel
 wirerift http <local_port> [subdomain]
 
+# HTTP tunnel with access control
+wirerift http <local_port> -pin <secret>
+wirerift http <local_port> -whitelist <ip1,ip2,cidr>
+
 # TCP tunnel
 wirerift tcp <local_port>
 
@@ -143,6 +147,17 @@ tunnels:
   # HTTP tunnel with auto-generated subdomain
   - type: http
     local_port: 3000
+
+  # PIN-protected tunnel
+  - type: http
+    local_port: 9090
+    subdomain: admin
+    pin: "mysecret"
+
+  # IP-restricted tunnel
+  - type: http
+    local_port: 8081
+    whitelist: "10.0.0.0/8,192.168.1.100"
 
   # TCP tunnel
   - type: tcp
@@ -195,6 +210,16 @@ tunnels:
             <td><code>tunnels[].subdomain</code></td>
             <td>string</td>
             <td>Requested subdomain (HTTP only, optional)</td>
+          </tr>
+          <tr>
+            <td><code>tunnels[].whitelist</code></td>
+            <td>string</td>
+            <td>Comma-separated IP whitelist with CIDR support (optional)</td>
+          </tr>
+          <tr>
+            <td><code>tunnels[].pin</code></td>
+            <td>string</td>
+            <td>PIN code required to access the tunnel (HTTP only, optional)</td>
           </tr>
         </tbody>
       </table>

@@ -151,6 +151,17 @@ tunnels:
         multiplexed connection. There is no protocol parsing or header rewriting.
       </Callout>
 
+      <h2>IP Whitelist</h2>
+      <p>
+        TCP tunnels support IP whitelist to restrict which clients can connect.
+        Non-whitelisted connections are silently dropped at the server level.
+      </p>
+      <CodeBlock
+        code={`# Only allow specific IPs to connect to TCP tunnel
+wirerift tcp 5432 -whitelist "10.0.0.1,192.168.1.0/24"`}
+        language="bash"
+      />
+
       <h2>Next Steps</h2>
       <ul>
         <li><Link to="/docs/http-tunnels">HTTP Tunnels</Link> - HTTP tunnel features</li>

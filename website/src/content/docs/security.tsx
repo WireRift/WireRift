@@ -183,6 +183,31 @@ mytunnel.com {
         Use a reverse proxy for automated certificate management.
       </Callout>
 
+      <h2>Tunnel Access Control</h2>
+      <p>
+        WireRift provides per-tunnel access control in addition to server-level authentication.
+      </p>
+
+      <h3>PIN Protection</h3>
+      <p>
+        PIN-protected tunnels require a secret code before granting access.
+        Security measures include:
+      </p>
+      <ul>
+        <li>PIN comparisons use <strong>constant-time</strong> algorithms to prevent timing attacks</li>
+        <li>Cookies store an <strong>HMAC digest</strong>, never the raw PIN value</li>
+        <li>Cookies are <code>HttpOnly</code> and <code>SameSite=Strict</code> to mitigate XSS</li>
+        <li>Cookie lifetime is 24 hours with automatic expiration</li>
+      </ul>
+
+      <h3>IP Whitelist</h3>
+      <p>
+        IP whitelisting restricts tunnel access to specific addresses or CIDR ranges.
+        Works for both HTTP tunnels (returns <code>403 Forbidden</code>) and
+        TCP tunnels (silently drops non-whitelisted connections).
+        Supports IPv4, IPv6, and CIDR notation.
+      </p>
+
       <h2>Next Steps</h2>
       <ul>
         <li><Link to="/docs/architecture">Architecture</Link> - Understanding the protocol</li>

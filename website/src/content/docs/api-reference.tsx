@@ -40,6 +40,8 @@ export const apiReference = {
       "subdomain": "myapp",
       "url": "https://myapp.mytunnel.com",
       "local_port": 8080,
+      "allowed_ips": ["10.0.0.0/8"],
+      "has_pin": true,
       "created_at": "2025-01-15T10:30:00Z"
     },
     {

@@ -160,6 +160,46 @@ wirerift start wirerift.yaml
         language="bash"
       />
 
+      <h2>Access Control</h2>
+      <p>
+        HTTP tunnels support two access control mechanisms that can be used independently or combined.
+      </p>
+
+      <h3>PIN Protection</h3>
+      <p>
+        Require visitors to enter a PIN code before accessing the tunnel:
+      </p>
+      <CodeBlock
+        code={`# Create a PIN-protected tunnel
+wirerift http 8080 -pin mysecret`}
+        language="bash"
+      />
+      <p>
+        Visitors see a PIN entry form on first access. After entering the correct PIN,
+        an HttpOnly cookie is set for 24 hours. API clients can pass the PIN via the{' '}
+        <code>X-WireRift-PIN</code> header or <code>?pin=</code> query parameter.
+      </p>
+
+      <h3>IP Whitelist</h3>
+      <p>
+        Restrict tunnel access to specific IP addresses or CIDR ranges:
+      </p>
+      <CodeBlock
+        code={`# Single IP
+wirerift http 8080 -whitelist 203.0.113.50
+
+# Multiple IPs and CIDR ranges
+wirerift http 8080 -whitelist "203.0.113.50,10.0.0.0/8,192.168.1.0/24"
+
+# Combine with PIN
+wirerift http 8080 -whitelist "10.0.0.0/8" -pin secret`}
+        language="bash"
+      />
+      <p>
+        Non-whitelisted requests receive <code>403 Forbidden</code>.
+        IPv6 addresses and CIDR notation are both supported.
+      </p>
+
       <h2>Next Steps</h2>
       <ul>
         <li><Link to="/docs/tcp-tunnels">TCP Tunnels</Link> - Forward raw TCP connections</li>
