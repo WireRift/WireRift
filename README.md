@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <img src="wirerift.png" alt="WireRift Overview" width="700">
+  <img src="wirerift.png" alt="WireRift Overview" width="100%">
 </p>
 
 Open-source, zero-dependency tunnel server and client. Written in Go.
