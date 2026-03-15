@@ -25,15 +25,15 @@ type CustomDomain struct {
 	VerifiedAt  time.Time // when verified
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
-	Certificate []byte    // TLS certificate
-	PrivateKey  []byte    // TLS private key
+	Certificate []byte // TLS certificate
+	PrivateKey  []byte // TLS private key
 }
 
 // DNSRecord represents a DNS record for verification.
 type DNSRecord struct {
 	Type  string // "CNAME" or "TXT"
 	Name  string // e.g., "_wirerift.app"
-	Value string // e.g., "verify.wirerift.dev" or verification code
+	Value string // e.g., "verify.wirerift.com" or verification code
 	TTL   int    // seconds
 }
 
@@ -50,7 +50,7 @@ type DomainManager struct {
 // NewDomainManager creates a new domain manager.
 func NewDomainManager(baseDomain string) *DomainManager {
 	if baseDomain == "" {
-		baseDomain = "wirerift.dev"
+		baseDomain = "wirerift.com"
 	}
 	return &DomainManager{
 		baseDomain: baseDomain,

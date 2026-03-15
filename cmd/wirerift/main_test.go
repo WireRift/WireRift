@@ -177,7 +177,7 @@ func TestLoadConfigInvalidLine(t *testing.T) {
 
 // --- run() tests ---
 
-func TestRun_NoArgs(t *testing.T)        { assertErr(t, run([]string{"wirerift"})) }
+func TestRun_NoArgs(t *testing.T)         { assertErr(t, run([]string{"wirerift"})) }
 func TestRun_Version(t *testing.T)        { assertNoErr(t, run([]string{"wirerift", "version"})) }
 func TestRun_UnknownCommand(t *testing.T) { assertErr(t, run([]string{"wirerift", "bogus"})) }
 
@@ -206,7 +206,7 @@ func TestRun_List_Error(t *testing.T) {
 
 // --- showConfig / initConfig tests ---
 
-func TestShowConfig_NoFile(t *testing.T)  { withTempDir(t, func() { showConfig() }) }
+func TestShowConfig_NoFile(t *testing.T) { withTempDir(t, func() { showConfig() }) }
 func TestShowConfig_WithFile(t *testing.T) {
 	withTempDir(t, func() {
 		os.WriteFile("wirerift.yaml", []byte("server: test\n"), 0644)
@@ -257,7 +257,9 @@ func TestDoConfig_Show(t *testing.T) {
 func TestDoConfig_Init(t *testing.T) {
 	withTempDir(t, func() { assertNoErr(t, doConfig([]string{"wirerift", "config", "init"})) })
 }
-func TestDoConfig_Unknown(t *testing.T) { assertErr(t, doConfig([]string{"wirerift", "config", "badcmd"})) }
+func TestDoConfig_Unknown(t *testing.T) {
+	assertErr(t, doConfig([]string{"wirerift", "config", "badcmd"}))
+}
 
 // --- doHTTP error tests ---
 
@@ -341,13 +343,13 @@ func TestDoList_FlagParseError(t *testing.T) {
 // --- doList with mock HTTP server ---
 
 func TestDoList_JSON_MockServer(t *testing.T) {
-	srv := startMockListServer(t, `[{"id":"t1","type":"http","url":"http://test.wirerift.dev","target":"localhost:8080","status":"active"}]`)
+	srv := startMockListServer(t, `[{"id":"t1","type":"http","url":"http://test.wirerift.com","target":"localhost:8080","status":"active"}]`)
 	defer srv.Close()
 	assertNoErr(t, doList([]string{"wirerift", "list", "-json", "-server", "127.0.0.1:4040"}))
 }
 
 func TestDoList_Table_MockServer(t *testing.T) {
-	srv := startMockListServer(t, `[{"id":"t1","type":"http","url":"http://test.wirerift.dev","target":"localhost:8080","status":"active"},{"id":"t2","type":"tcp","port":20001,"target":"localhost:25565","status":"active"}]`)
+	srv := startMockListServer(t, `[{"id":"t1","type":"http","url":"http://test.wirerift.com","target":"localhost:8080","status":"active"},{"id":"t2","type":"tcp","port":20001,"target":"localhost:25565","status":"active"}]`)
 	defer srv.Close()
 	assertNoErr(t, doList([]string{"wirerift", "list", "-server", "127.0.0.1:4040", "-token", "tok"}))
 }
@@ -482,7 +484,7 @@ func handleMockClient(conn net.Conn) {
 				OK:        true,
 				TunnelID:  "tun-test-123",
 				Type:      req.Type,
-				PublicURL: "https://test.wirerift.dev",
+				PublicURL: "https://test.wirerift.com",
 			}
 			respFrame, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, 0, resp)
 			fw.Write(respFrame)
@@ -845,7 +847,7 @@ func TestDoList_DirectHTTP(t *testing.T) {
 		URL    string `json:"url"`
 		Target string `json:"target"`
 		Status string `json:"status"`
-	}{{ID: "t1", Type: "http", URL: "http://test.wirerift.dev", Target: "localhost:8080", Status: "active"}}
+	}{{ID: "t1", Type: "http", URL: "http://test.wirerift.com", Target: "localhost:8080", Status: "active"}}
 	data, _ := json.Marshal(tunnels)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

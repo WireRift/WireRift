@@ -54,7 +54,7 @@ func TestRun_AllCustomFlags(t *testing.T) {
 			"-http", httpAddr,
 			"-https", httpsAddr,
 			"-dashboard-port", dashPort,
-			"-domain", "all-flags.wirerift.dev",
+			"-domain", "all-flags.wirerift.com",
 			"-tcp-ports", "31000-31099",
 		})
 	}()
@@ -101,7 +101,7 @@ func TestRun_StartAndShutdown(t *testing.T) {
 			"-control", controlAddr,
 			"-http", httpAddr,
 			"-dashboard-port", dashPort,
-			"-domain", "test.wirerift.dev",
+			"-domain", "test.wirerift.com",
 			"-tcp-ports", "30200-30299",
 		})
 	}()
@@ -143,7 +143,7 @@ func TestRun_StartAndShutdown_Verbose(t *testing.T) {
 			"-control", controlAddr,
 			"-http", httpAddr,
 			"-dashboard-port", dashPort,
-			"-domain", "test.wirerift.dev",
+			"-domain", "test.wirerift.com",
 			"-tcp-ports", "30300-30399",
 			"-v",
 		})
@@ -239,7 +239,7 @@ func TestRun_AutoCert(t *testing.T) {
 			"-dashboard-port", dashPort,
 			"-auto-cert",
 			"-cert-dir", tmpDir,
-			"-domain", "test.wirerift.dev",
+			"-domain", "test.wirerift.com",
 			"-tcp-ports", "30400-30499",
 		})
 	}()
@@ -270,7 +270,7 @@ func TestRun_EnvOverrides(t *testing.T) {
 	_, dashPort, _ := net.SplitHostPort(dashLn.Addr().String())
 	dashLn.Close()
 
-	os.Setenv("WIRERIFT_DOMAIN", "env.wirerift.dev")
+	os.Setenv("WIRERIFT_DOMAIN", "env.wirerift.com")
 	os.Setenv("WIRERIFT_CONTROL_ADDR", controlAddr)
 	os.Setenv("WIRERIFT_HTTP_ADDR", httpAddr)
 	defer os.Unsetenv("WIRERIFT_DOMAIN")
@@ -314,7 +314,7 @@ func TestRun_EnvOverrides_NoOverrideWhenExplicit(t *testing.T) {
 	dashLn.Close()
 
 	// Set env vars, but pass explicit flags - flags should win
-	os.Setenv("WIRERIFT_DOMAIN", "env.wirerift.dev")
+	os.Setenv("WIRERIFT_DOMAIN", "env.wirerift.com")
 	os.Setenv("WIRERIFT_CONTROL_ADDR", "should-not-be-used")
 	os.Setenv("WIRERIFT_HTTP_ADDR", "should-not-be-used")
 	defer os.Unsetenv("WIRERIFT_DOMAIN")
@@ -329,7 +329,7 @@ func TestRun_EnvOverrides_NoOverrideWhenExplicit(t *testing.T) {
 			"-control", controlAddr,
 			"-http", httpAddr,
 			"-dashboard-port", dashPort,
-			"-domain", "explicit.wirerift.dev",
+			"-domain", "explicit.wirerift.com",
 			"-tcp-ports", "30600-30699",
 		})
 	}()
@@ -393,7 +393,7 @@ func TestRun_AutoCert_InvalidPath(t *testing.T) {
 	err := run(context.Background(), []string{
 		"-auto-cert",
 		"-cert-dir", filepath.Join(tmpFile, "subdir"),
-		"-domain", "test.wirerift.dev",
+		"-domain", "test.wirerift.com",
 		"-control", "127.0.0.1:0",
 		"-http", "127.0.0.1:0",
 	})

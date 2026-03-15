@@ -26,13 +26,13 @@ func TestExtractSubdomain(t *testing.T) {
 		domain   string
 		expected string
 	}{
-		{"myapp.wirerift.dev", "wirerift.dev", "myapp"},
-		{"myapp.wirerift.dev:8080", "wirerift.dev", "myapp"},
-		{"test.wirerift.dev", "wirerift.dev", "test"},
-		{"wirerift.dev", "wirerift.dev", ""},
-		{"other.example.com", "wirerift.dev", ""},
-		{"sub.sub.wirerift.dev", "wirerift.dev", "sub.sub"},
-		{"", "wirerift.dev", ""},
+		{"myapp.wirerift.com", "wirerift.com", "myapp"},
+		{"myapp.wirerift.com:8080", "wirerift.com", "myapp"},
+		{"test.wirerift.com", "wirerift.com", "test"},
+		{"wirerift.com", "wirerift.com", ""},
+		{"other.example.com", "wirerift.com", ""},
+		{"sub.sub.wirerift.com", "wirerift.com", "sub.sub"},
+		{"", "wirerift.com", ""},
 	}
 
 	for _, tt := range tests {
@@ -192,7 +192,7 @@ func TestListTunnelsWithData(t *testing.T) {
 		Type:      proto.TunnelTypeHTTP,
 		SessionID: "session-1",
 		Subdomain: "myapp",
-		PublicURL: "https://myapp.wirerift.dev",
+		PublicURL: "https://myapp.wirerift.com",
 		LocalAddr: "localhost:3000",
 		CreatedAt: time.Now(),
 	}
@@ -489,7 +489,7 @@ func TestTunnelWithPort(t *testing.T) {
 		Type:      proto.TunnelTypeTCP,
 		SessionID: "session-1",
 		Port:      20001,
-		PublicURL: "tcp://wirerift.dev:20001",
+		PublicURL: "tcp://wirerift.com:20001",
 		LocalAddr: "localhost:5432",
 		CreatedAt: time.Now(),
 	}
@@ -516,12 +516,12 @@ func TestExtractSubdomainEdgeCases(t *testing.T) {
 		expected string
 	}{
 		// Additional edge cases
-		{"a.wirerift.dev", "wirerift.dev", "a"},
-		{"very.long.subdomain.wirerift.dev", "wirerift.dev", "very.long.subdomain"},
-		{"*.wirerift.dev", "wirerift.dev", "*"},
-		{"wirerift.dev:8080", "wirerift.dev", ""},
-		{"localhost", "wirerift.dev", ""},
-		{"subdomain.example.com:9000", "wirerift.dev", ""},
+		{"a.wirerift.com", "wirerift.com", "a"},
+		{"very.long.subdomain.wirerift.com", "wirerift.com", "very.long.subdomain"},
+		{"*.wirerift.com", "wirerift.com", "*"},
+		{"wirerift.com:8080", "wirerift.com", ""},
+		{"localhost", "wirerift.com", ""},
+		{"subdomain.example.com:9000", "wirerift.com", ""},
 	}
 
 	for _, tt := range tests {
@@ -713,7 +713,7 @@ func TestHandleHTTPRequestTunnelNotFound(t *testing.T) {
 
 	// Create HTTP request with valid domain but no tunnel
 	req, _ := http.NewRequest("GET", "/", nil)
-	req.Host = "nonexistent.wirerift.dev"
+	req.Host = "nonexistent.wirerift.com"
 
 	rr := httptest.NewRecorder()
 	s.handleHTTPRequest(rr, req)
@@ -741,7 +741,7 @@ func TestHandleHTTPRequestSessionNotFound(t *testing.T) {
 
 	// Create HTTP request
 	req, _ := http.NewRequest("GET", "/", nil)
-	req.Host = "test.wirerift.dev"
+	req.Host = "test.wirerift.com"
 
 	rr := httptest.NewRecorder()
 	s.handleHTTPRequest(rr, req)
@@ -892,7 +892,7 @@ func TestForwardHTTPRequestMuxClosed(t *testing.T) {
 	}
 
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "http://test.wirerift.dev/", nil)
+	req := httptest.NewRequest("GET", "http://test.wirerift.com/", nil)
 
 	s.forwardHTTPRequest(rr, req, session, tunnel)
 
@@ -997,8 +997,8 @@ func TestHandleHTTPRequestWithSessionFound(t *testing.T) {
 	}()
 
 	// Make HTTP request
-	req := httptest.NewRequest("GET", "http://fulltest.wirerift.dev/path", nil)
-	req.Host = "fulltest.wirerift.dev"
+	req := httptest.NewRequest("GET", "http://fulltest.wirerift.com/path", nil)
+	req.Host = "fulltest.wirerift.com"
 	rr := httptest.NewRecorder()
 
 	s.handleHTTPRequest(rr, req)
@@ -2289,7 +2289,7 @@ func TestForwardHTTPRequestStreamOpenWriteError(t *testing.T) {
 	session := &Session{ID: "sess-1", AccountID: "account-1", Mux: m}
 
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "http://test.wirerift.dev/", nil)
+	req := httptest.NewRequest("GET", "http://test.wirerift.com/", nil)
 	s.forwardHTTPRequest(rr, req, session, tunnel)
 
 	if rr.Code != http.StatusBadGateway {
@@ -2340,8 +2340,8 @@ func TestForwardHTTPRequestSerializeError(t *testing.T) {
 	}()
 
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "http://test.wirerift.dev/", &errorReader{})
-	req.Host = "test.wirerift.dev"
+	req := httptest.NewRequest("POST", "http://test.wirerift.com/", &errorReader{})
+	req.Host = "test.wirerift.com"
 
 	s.forwardHTTPRequest(rr, req, session, tunnel)
 
@@ -2385,8 +2385,8 @@ func TestForwardHTTPRequestStreamWriteError(t *testing.T) {
 	session := &Session{ID: "sess-1", AccountID: "account-1", Mux: m}
 
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "http://test.wirerift.dev/", nil)
-	req.Host = "test.wirerift.dev"
+	req := httptest.NewRequest("GET", "http://test.wirerift.com/", nil)
+	req.Host = "test.wirerift.com"
 
 	s.forwardHTTPRequest(rr, req, session, tunnel)
 
@@ -2429,8 +2429,8 @@ func TestForwardHTTPRequestReadError(t *testing.T) {
 	}()
 
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "http://test.wirerift.dev/", nil)
-	req.Host = "test.wirerift.dev"
+	req := httptest.NewRequest("GET", "http://test.wirerift.com/", nil)
+	req.Host = "test.wirerift.com"
 
 	s.forwardHTTPRequest(rr, req, session, tunnel)
 
@@ -2481,8 +2481,8 @@ func TestForwardHTTPRequestDeserializeError(t *testing.T) {
 	}()
 
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "http://test.wirerift.dev/", nil)
-	req.Host = "test.wirerift.dev"
+	req := httptest.NewRequest("GET", "http://test.wirerift.com/", nil)
+	req.Host = "test.wirerift.com"
 
 	s.forwardHTTPRequest(rr, req, session, tunnel)
 
@@ -2683,7 +2683,7 @@ func TestForwardWebSocketFullFlow(t *testing.T) {
 
 	hw := newHijackableResponseWriter(edgeConn)
 
-	req := httptest.NewRequest("GET", "http://wstest.wirerift.dev/ws", nil)
+	req := httptest.NewRequest("GET", "http://wstest.wirerift.com/ws", nil)
 	req.Header.Set("Upgrade", "websocket")
 	req.Header.Set("Connection", "Upgrade")
 
@@ -2729,7 +2729,7 @@ func TestForwardWebSocketHijackNotSupported(t *testing.T) {
 
 	// httptest.NewRecorder does NOT implement http.Hijacker
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "http://test.wirerift.dev/ws", nil)
+	req := httptest.NewRequest("GET", "http://test.wirerift.com/ws", nil)
 	req.Header.Set("Upgrade", "websocket")
 
 	s.forwardWebSocket(rr, req, session, tunnel)
@@ -2758,7 +2758,7 @@ func TestForwardWebSocketOpenStreamError(t *testing.T) {
 	defer edgeRemote.Close()
 	hw := newHijackableResponseWriter(edgeConn)
 
-	req := httptest.NewRequest("GET", "http://test.wirerift.dev/ws", nil)
+	req := httptest.NewRequest("GET", "http://test.wirerift.com/ws", nil)
 	req.Header.Set("Upgrade", "websocket")
 
 	s.forwardWebSocket(hw, req, session, tunnel)
@@ -2784,7 +2784,7 @@ func TestForwardWebSocketStreamOpenWriteError(t *testing.T) {
 	defer edgeRemote.Close()
 	hw := newHijackableResponseWriter(edgeConn)
 
-	req := httptest.NewRequest("GET", "http://test.wirerift.dev/ws", nil)
+	req := httptest.NewRequest("GET", "http://test.wirerift.com/ws", nil)
 	req.Header.Set("Upgrade", "websocket")
 
 	s.forwardWebSocket(hw, req, session, tunnel)
@@ -2829,7 +2829,7 @@ func TestForwardWebSocketSerializeError(t *testing.T) {
 	hw := newHijackableResponseWriter(edgeConn)
 
 	// Request with a body that returns an error on read
-	req := httptest.NewRequest("POST", "http://test.wirerift.dev/ws", &errorReader{})
+	req := httptest.NewRequest("POST", "http://test.wirerift.com/ws", &errorReader{})
 	req.Header.Set("Upgrade", "websocket")
 
 	s.forwardWebSocket(hw, req, session, tunnel)
@@ -2869,7 +2869,7 @@ func TestForwardWebSocketStreamWriteError(t *testing.T) {
 	defer edgeRemote.Close()
 	hw := newHijackableResponseWriter(edgeConn)
 
-	req := httptest.NewRequest("GET", "http://test.wirerift.dev/ws", nil)
+	req := httptest.NewRequest("GET", "http://test.wirerift.com/ws", nil)
 	req.Header.Set("Upgrade", "websocket")
 
 	s.forwardWebSocket(hw, req, session, tunnel)
@@ -2918,7 +2918,7 @@ func TestForwardWebSocketHijackError(t *testing.T) {
 	hw := newHijackableResponseWriter(edgeConn)
 	hw.hijErr = fmt.Errorf("hijack failed")
 
-	req := httptest.NewRequest("GET", "http://test.wirerift.dev/ws", nil)
+	req := httptest.NewRequest("GET", "http://test.wirerift.com/ws", nil)
 	req.Header.Set("Upgrade", "websocket")
 
 	s.forwardWebSocket(hw, req, session, tunnel)
@@ -2980,7 +2980,7 @@ func TestForwardWebSocketWithBufferedData(t *testing.T) {
 
 	hw := newHijackableResponseWriter(edgeConn)
 
-	req := httptest.NewRequest("GET", "http://wstest.wirerift.dev/ws", nil)
+	req := httptest.NewRequest("GET", "http://wstest.wirerift.com/ws", nil)
 	req.Header.Set("Upgrade", "websocket")
 	req.Header.Set("Connection", "Upgrade")
 
@@ -3015,7 +3015,7 @@ func TestForwardHTTPRequestWebSocketDetection(t *testing.T) {
 	// httptest.NewRecorder does NOT implement Hijacker, so forwardWebSocket
 	// will write "WebSocket not supported" 500 error
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "http://test.wirerift.dev/ws", nil)
+	req := httptest.NewRequest("GET", "http://test.wirerift.com/ws", nil)
 	req.Header.Set("Upgrade", "websocket")
 
 	s.forwardHTTPRequest(rr, req, session, tunnel)
@@ -3177,8 +3177,8 @@ func TestHandleHTTPRequestRateLimited(t *testing.T) {
 	s.rateLimiter.Allow("127.0.0.1")
 	s.rateLimiter.Allow("127.0.0.1")
 
-	req := httptest.NewRequest("GET", "http://test.wirerift.dev/", nil)
-	req.Host = "test.wirerift.dev"
+	req := httptest.NewRequest("GET", "http://test.wirerift.com/", nil)
+	req.Host = "test.wirerift.com"
 	req.RemoteAddr = "127.0.0.1:12345"
 
 	rr := httptest.NewRecorder()
@@ -3319,7 +3319,7 @@ func TestForwardWebSocketBufferedDataPath(t *testing.T) {
 		bufrw:            bufrw,
 	}
 
-	req := httptest.NewRequest("GET", "http://wsbufdata.wirerift.dev/ws", nil)
+	req := httptest.NewRequest("GET", "http://wsbufdata.wirerift.com/ws", nil)
 	req.Header.Set("Upgrade", "websocket")
 	req.Header.Set("Connection", "Upgrade")
 

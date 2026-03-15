@@ -5,7 +5,7 @@ import (
 )
 
 func TestDomainManagerAddDomain(t *testing.T) {
-	m := NewDomainManager("wirerift.dev")
+	m := NewDomainManager("wirerift.com")
 
 	domain, err := m.AddDomain("app.example.com", "acc_123")
 	if err != nil {
@@ -20,7 +20,7 @@ func TestDomainManagerAddDomain(t *testing.T) {
 }
 
 func TestDomainManagerDuplicateDomain(t *testing.T) {
-	m := NewDomainManager("wirerift.dev")
+	m := NewDomainManager("wirerift.com")
 
 	_, err := m.AddDomain("app.example.com", "acc_123")
 	if err != nil {
@@ -34,7 +34,7 @@ func TestDomainManagerDuplicateDomain(t *testing.T) {
 }
 
 func TestDomainManagerGetDomain(t *testing.T) {
-	m := NewDomainManager("wirerift.dev")
+	m := NewDomainManager("wirerift.com")
 
 	m.AddDomain("app.example.com", "acc_123")
 
@@ -53,7 +53,7 @@ func TestDomainManagerGetDomain(t *testing.T) {
 }
 
 func TestDomainManagerVerifyDomain(t *testing.T) {
-	m := NewDomainManager("wirerift.dev")
+	m := NewDomainManager("wirerift.com")
 
 	m.AddDomain("app.example.com", "acc_123")
 
@@ -72,7 +72,7 @@ func TestDomainManagerVerifyDomain(t *testing.T) {
 }
 
 func TestDomainManagerSetTunnel(t *testing.T) {
-	m := NewDomainManager("wirerift.dev")
+	m := NewDomainManager("wirerift.com")
 
 	m.AddDomain("app.example.com", "acc_123")
 
@@ -96,7 +96,7 @@ func TestDomainManagerSetTunnel(t *testing.T) {
 }
 
 func TestDomainManagerRemoveDomain(t *testing.T) {
-	m := NewDomainManager("wirerift.dev")
+	m := NewDomainManager("wirerift.com")
 
 	m.AddDomain("app.example.com", "acc_123")
 	m.RemoveDomain("app.example.com")
@@ -108,7 +108,7 @@ func TestDomainManagerRemoveDomain(t *testing.T) {
 }
 
 func TestDomainManagerListDomains(t *testing.T) {
-	m := NewDomainManager("wirerift.dev")
+	m := NewDomainManager("wirerift.com")
 
 	m.AddDomain("app1.example.com", "acc_123")
 	m.AddDomain("app2.example.com", "acc_123")
@@ -121,7 +121,7 @@ func TestDomainManagerListDomains(t *testing.T) {
 }
 
 func TestDomainManagerGetDNSRecords(t *testing.T) {
-	m := NewDomainManager("wirerift.dev")
+	m := NewDomainManager("wirerift.com")
 
 	records, err := m.GetDNSRecords("app.example.com")
 	if err != nil {
@@ -135,8 +135,8 @@ func TestDomainManagerGetDNSRecords(t *testing.T) {
 	if records[0].Type != "CNAME" {
 		t.Errorf("First record type = %q, want CNAME", records[0].Type)
 	}
-	if records[0].Value != "wirerift.dev" {
-		t.Errorf("CNAME value = %q, want wirerift.dev", records[0].Value)
+	if records[0].Value != "wirerift.com" {
+		t.Errorf("CNAME value = %q, want wirerift.com", records[0].Value)
 	}
 
 	// Check TXT record
@@ -149,16 +149,16 @@ func TestDomainManagerGetDNSRecords(t *testing.T) {
 func TestNewDomainManagerEmptyBaseDomain(t *testing.T) {
 	m := NewDomainManager("")
 
-	// Should default to "wirerift.dev"
+	// Should default to "wirerift.com"
 	records, _ := m.GetDNSRecords("test.example.com")
-	if records[0].Value != "wirerift.dev" {
-		t.Errorf("baseDomain should default to wirerift.dev, got CNAME value %q", records[0].Value)
+	if records[0].Value != "wirerift.com" {
+		t.Errorf("baseDomain should default to wirerift.com, got CNAME value %q", records[0].Value)
 	}
 }
 
 // TestVerifyDomainNotFound tests VerifyDomain on a nonexistent domain
 func TestVerifyDomainNotFound(t *testing.T) {
-	m := NewDomainManager("wirerift.dev")
+	m := NewDomainManager("wirerift.com")
 
 	err := m.VerifyDomain("nonexistent.com", []byte("cert"), []byte("key"))
 	if err != ErrDomainNotFound {
@@ -168,7 +168,7 @@ func TestVerifyDomainNotFound(t *testing.T) {
 
 // TestSetTunnelNotFound tests SetTunnel on a nonexistent domain
 func TestSetTunnelNotFound(t *testing.T) {
-	m := NewDomainManager("wirerift.dev")
+	m := NewDomainManager("wirerift.com")
 
 	err := m.SetTunnel("nonexistent.com", "tun_123")
 	if err != ErrDomainNotFound {
@@ -205,7 +205,7 @@ func TestIsValidDomainEdgeCases(t *testing.T) {
 
 // TestAddDomainInvalid tests AddDomain with an invalid domain
 func TestAddDomainInvalid(t *testing.T) {
-	m := NewDomainManager("wirerift.dev")
+	m := NewDomainManager("wirerift.com")
 
 	// Domain starting with dot
 	_, err := m.AddDomain(".invalid.com", "acc_123")

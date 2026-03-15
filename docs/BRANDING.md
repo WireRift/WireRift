@@ -19,7 +19,7 @@
 | Docker image | `wirerift/wirerift-server` |
 | Config file | `.wirerift.toml` |
 | Env prefix | `WIRERIFT_` |
-| Subdomain | `*.wirerift.dev` |
+| Subdomain | `*.wirerift.com` |
 | Hashtag | #wirerift |
 
 **Never:** Wire-Rift, Wire Rift, wire_rift, WIRERIFT (in prose)
@@ -39,11 +39,11 @@ wirerift http 3000
 
 # With custom subdomain
 wirerift http 3000 --subdomain myapp
-# → https://myapp.wirerift.dev
+# → https://myapp.wirerift.com
 
 # Expose a TCP service (e.g., PostgreSQL)
 wirerift tcp 5432
-# → tcp://wirerift.dev:20001
+# → tcp://wirerift.com:20001
 
 # Start from config file
 wirerift start
@@ -72,8 +72,8 @@ wirerift-server token create --name ersin
 │                                                      │
 │  Tunnel      Public URL                     Local    │
 │  ─────────── ───────────────────────────── ────────  │
-│  http        https://myapp.wirerift.dev     :3000    │
-│  tcp         tcp://wirerift.dev:20001       :5432    │
+│  http        https://myapp.wirerift.com     :3000    │
+│  tcp         tcp://wirerift.com:20001       :5432    │
 │                                                      │
 │  Connections: 0     Bytes In: 0 B    Bytes Out: 0 B  │
 └──────────────────────────────────────────────────────┘

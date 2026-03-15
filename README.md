@@ -57,15 +57,15 @@ make build
 ```bash
 # HTTP tunnel - exposes local port 3000
 ./bin/wirerift http 3000
-# → http://random-subdomain.wirerift.dev
+# → http://random-subdomain.wirerift.com
 
 # HTTP tunnel with custom subdomain
 ./bin/wirerift http 3000 myapp
-# → http://myapp.wirerift.dev
+# → http://myapp.wirerift.com
 
 # TCP tunnel - expose any TCP service
 ./bin/wirerift tcp 5432
-# → tcp://wirerift.dev:20001
+# → tcp://wirerift.com:20001
 
 # PIN-protected tunnel
 ./bin/wirerift http 3000 -pin mysecret
@@ -151,7 +151,7 @@ Client                              Server
   |<------ AUTH_RES ------------------|
   |                                   |
   |------- TUNNEL_REQ --------------->|  Create tunnel
-  |<------ TUNNEL_RES ----------------|  myapp.wirerift.dev
+  |<------ TUNNEL_RES ----------------|  myapp.wirerift.com
   |                                   |
   |------- STREAM_OPEN(1) ----------->|  Request #1
   |------- STREAM_DATA(1) ----------->|  Headers
@@ -248,7 +248,7 @@ Options:
   -dashboard-port int
         Dashboard port (default 4040)
   -domain string
-        Base domain for tunnels (default "wirerift.dev")
+        Base domain for tunnels (default "wirerift.com")
   -tcp-ports string
         TCP tunnel port range (default "20000-29999")
   -auto-cert

@@ -34,7 +34,7 @@ var (
 
 // Config holds server configuration.
 type Config struct {
-	// Domain is the base domain for tunnels (e.g., "wirerift.dev")
+	// Domain is the base domain for tunnels (e.g., "wirerift.com")
 	Domain string
 
 	// ControlAddr is the address for the control plane listener.
@@ -68,7 +68,7 @@ type Config struct {
 // DefaultConfig returns the default server configuration.
 func DefaultConfig() Config {
 	return Config{
-		Domain:               "wirerift.dev",
+		Domain:               "wirerift.com",
 		ControlAddr:          ":4443",
 		HTTPAddr:             ":80",
 		HTTPSAddr:            ":443",

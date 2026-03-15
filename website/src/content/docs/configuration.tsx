@@ -43,7 +43,7 @@ export const configuration = {
           </tr>
           <tr>
             <td><code>-domain</code></td>
-            <td><code>wirerift.dev</code></td>
+            <td><code>wirerift.com</code></td>
             <td>Base domain for tunnel subdomains</td>
           </tr>
           <tr>

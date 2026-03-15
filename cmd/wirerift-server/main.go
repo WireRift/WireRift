@@ -40,7 +40,7 @@ func run(parentCtx context.Context, args []string) error {
 	httpAddr := fs.String("http", ":80", "HTTP edge address")
 	httpsAddr := fs.String("https", ":443", "HTTPS edge address")
 	dashboardAddr := fs.Int("dashboard-port", 4040, "Dashboard port")
-	domain := fs.String("domain", "wirerift.dev", "Base domain for tunnels")
+	domain := fs.String("domain", "wirerift.com", "Base domain for tunnels")
 	tcpPortRange := fs.String("tcp-ports", "20000-29999", "TCP tunnel port range")
 
 	// TLS options
@@ -71,7 +71,7 @@ Examples:
   wirerift-server -control :8443 -http :8080         # Custom ports
 
 Environment Variables:
-  WIRERIFT_DOMAIN       Base domain (default: wirerift.dev)
+  WIRERIFT_DOMAIN       Base domain (default: wirerift.com)
   WIRERIFT_CONTROL_ADDR Control plane address
   WIRERIFT_HTTP_ADDR    HTTP edge address
 
@@ -101,7 +101,7 @@ Environment Variables:
 	}
 
 	// Get config from environment
-	if envDomain := os.Getenv("WIRERIFT_DOMAIN"); envDomain != "" && *domain == "wirerift.dev" {
+	if envDomain := os.Getenv("WIRERIFT_DOMAIN"); envDomain != "" && *domain == "wirerift.com" {
 		*domain = envDomain
 	}
 	if envControl := os.Getenv("WIRERIFT_CONTROL_ADDR"); envControl != "" && *controlAddr == ":4443" {

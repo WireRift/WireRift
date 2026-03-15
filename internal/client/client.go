@@ -52,7 +52,7 @@ type Config struct {
 // DefaultConfig returns the default client configuration.
 func DefaultConfig() Config {
 	return Config{
-		ServerAddr:           "wirerift.dev:4443",
+		ServerAddr:           "wirerift.com:4443",
 		Reconnect:            true,
 		ReconnectInterval:    1 * time.Second,
 		MaxReconnectInterval: 30 * time.Second,
@@ -264,8 +264,8 @@ func (c *Client) TCP(localAddr string, port int) (*Tunnel, error) {
 	}
 
 	req := &proto.TunnelRequest{
-		Type:      proto.TunnelTypeTCP,
-		LocalAddr: localAddr,
+		Type:       proto.TunnelTypeTCP,
+		LocalAddr:  localAddr,
 		RemotePort: port,
 	}
 

@@ -169,11 +169,11 @@ func TestCloseTunnelNotConnected(t *testing.T) {
 func TestTunnelGetters(t *testing.T) {
 	tunnel := &Tunnel{
 		ID:        "test-id",
-		PublicURL: "https://test.wirerift.dev",
+		PublicURL: "https://test.wirerift.com",
 		LocalAddr: "localhost:3000",
 	}
-	if tunnel.PublicURL != "https://test.wirerift.dev" {
-		t.Errorf("PublicURL = %q, want %q", tunnel.PublicURL, "https://test.wirerift.dev")
+	if tunnel.PublicURL != "https://test.wirerift.com" {
+		t.Errorf("PublicURL = %q, want %q", tunnel.PublicURL, "https://test.wirerift.com")
 	}
 	if tunnel.LocalAddr != "localhost:3000" {
 		t.Errorf("LocalAddr = %q, want %q", tunnel.LocalAddr, "localhost:3000")
@@ -321,7 +321,7 @@ func (ms *mockServer) handleTunnelRequest(frame *proto.Frame, writer *proto.Fram
 		OK:        true,
 		TunnelID:  "tunnel-" + time.Now().Format("20060102150405"),
 		Type:      req.Type,
-		PublicURL: "https://test.wirerift.dev",
+		PublicURL: "https://test.wirerift.com",
 	}
 
 	respFrame, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, proto.ControlStreamID, res)
@@ -669,7 +669,7 @@ func TestOpenTunnelSuccess(t *testing.T) {
 				OK:        true,
 				TunnelID:  "tun-123",
 				Type:      proto.TunnelTypeHTTP,
-				PublicURL: "https://myapp.wirerift.dev",
+				PublicURL: "https://myapp.wirerift.com",
 			}
 			respFrame, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, proto.ControlStreamID, resp)
 			serverMux.GetFrameWriter().Write(respFrame)
@@ -690,8 +690,8 @@ func TestOpenTunnelSuccess(t *testing.T) {
 	if tunnel.ID != "tun-123" {
 		t.Errorf("tunnel ID = %q, want tun-123", tunnel.ID)
 	}
-	if tunnel.PublicURL != "https://myapp.wirerift.dev" {
-		t.Errorf("PublicURL = %q, want https://myapp.wirerift.dev", tunnel.PublicURL)
+	if tunnel.PublicURL != "https://myapp.wirerift.com" {
+		t.Errorf("PublicURL = %q, want https://myapp.wirerift.com", tunnel.PublicURL)
 	}
 	if tunnel.LocalAddr != "localhost:3000" {
 		t.Errorf("LocalAddr = %q, want localhost:3000", tunnel.LocalAddr)
@@ -823,7 +823,7 @@ func TestHTTPSuccess(t *testing.T) {
 				OK:        true,
 				TunnelID:  "http-tun-1",
 				Type:      proto.TunnelTypeHTTP,
-				PublicURL: "https://myapp.wirerift.dev",
+				PublicURL: "https://myapp.wirerift.com",
 			}
 			respFrame, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, proto.ControlStreamID, resp)
 			serverMux.GetFrameWriter().Write(respFrame)
@@ -1971,7 +1971,7 @@ func TestRecreateTunnelsSuccess(t *testing.T) {
 					OK:        true,
 					TunnelID:  fmt.Sprintf("new-tun-%d", count),
 					Type:      req.Type,
-					PublicURL: fmt.Sprintf("https://new-%d.wirerift.dev", count),
+					PublicURL: fmt.Sprintf("https://new-%d.wirerift.com", count),
 				}
 				respFrame, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, proto.ControlStreamID, resp)
 				serverMux.GetFrameWriter().Write(respFrame)
@@ -2095,7 +2095,7 @@ func TestRecreateTunnelsPartialFailure(t *testing.T) {
 						OK:        true,
 						TunnelID:  "new-tun-ok",
 						Type:      proto.TunnelTypeHTTP,
-						PublicURL: "https://ok.wirerift.dev",
+						PublicURL: "https://ok.wirerift.com",
 					}
 				} else {
 					resp = &proto.TunnelResponse{
@@ -2247,7 +2247,7 @@ func TestOpenTunnelStoresRequest(t *testing.T) {
 				OK:        true,
 				TunnelID:  "tun-req-check",
 				Type:      proto.TunnelTypeHTTP,
-				PublicURL: "https://check.wirerift.dev",
+				PublicURL: "https://check.wirerift.com",
 			}
 			respFrame, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, proto.ControlStreamID, resp)
 			serverMux.GetFrameWriter().Write(respFrame)

@@ -8,7 +8,7 @@
 > **Dependencies:** Zero (stdlib only)  
 > **License:** MIT  
 > **Repository:** github.com/wirerift/wirerift  
-> **Domain:** wirerift.dev
+> **Domain:** wirerift.com
 
 ---
 
@@ -136,7 +136,7 @@ This project aims to be the **"SQLite of tunneling"** — a single binary, zero-
 2. Client sends AuthRequest with token
 3. Server validates → Sends AuthResponse (success + session_id)
 4. Client sends TunnelRequest (type=HTTP, subdomain="myapp")
-5. Server allocates subdomain → Sends TunnelResponse (url="https://myapp.wirerift.dev")
+5. Server allocates subdomain → Sends TunnelResponse (url="https://myapp.wirerift.com")
 6. Server starts listening for public traffic on that subdomain
 7. Public request arrives → Server creates new mux stream → Forwards to client
 8. Client receives stream → Proxies to localhost:3000 → Returns response via stream
@@ -254,7 +254,7 @@ For TCP tunnels:
   "ok": true,
   "tunnel_id": "tun_xxxx",
   "type": "http",
-  "public_url": "https://myapp.wirerift.dev",
+  "public_url": "https://myapp.wirerift.com",
   "metadata": {
     "remote_port": null,
     "subdomain": "myapp"
@@ -443,7 +443,7 @@ The HTTP edge listener handles all incoming public HTTP/HTTPS requests.
 
 **Routing logic:**
 1. Extract `Host` header from incoming request.
-2. Strip port and base domain → extract subdomain (e.g., `myapp.wirerift.dev` → `myapp`).
+2. Strip port and base domain → extract subdomain (e.g., `myapp.wirerift.com` → `myapp`).
 3. Look up subdomain in router registry.
 4. If found → Open new mux stream to client → Forward request.
 5. If not found → Return `502 Tunnel not found` page.
@@ -612,8 +612,8 @@ On successful tunnel establishment, print:
 │                                                      │
 │  Tunnel      Public URL                     Local    │
 │  ─────────── ───────────────────────────── ────────  │
-│  http        https://myapp.wirerift.dev       :3000    │
-│  tcp         tcp://wirerift.dev:20001         :5432    │
+│  http        https://myapp.wirerift.com       :3000    │
+│  tcp         tcp://wirerift.com:20001         :5432    │
 │                                                      │
 │  Connections: 0     Bytes In: 0 B    Bytes Out: 0 B  │
 └──────────────────────────────────────────────────────┘
@@ -629,7 +629,7 @@ Live-updating stats using ANSI escape codes (no external TUI library).
 
 ```
 1. Public client sends:  GET /api/users HTTP/1.1
-                         Host: myapp.wirerift.dev
+                         Host: myapp.wirerift.com
 
 2. Server HTTP edge receives request.
 
@@ -666,7 +666,7 @@ Live-updating stats using ANSI escape codes (no external TUI library).
 ```
 X-Forwarded-For: <original client IP>
 X-Forwarded-Proto: https
-X-Forwarded-Host: myapp.wirerift.dev
+X-Forwarded-Host: myapp.wirerift.com
 X-Real-IP: <original client IP>
 ```
 
@@ -722,7 +722,7 @@ func (pa *PortAllocator) Allocate(requested int) (int, error) {
 ```
 1. Client requests TCP tunnel: { "type": "tcp", "remote_port": 0 }
 2. Server allocates port 20001 → starts TCP listener on :20001
-3. Public client connects to wirerift.dev:20001
+3. Public client connects to wirerift.com:20001
 4. Server sends STREAM_OPEN to client via mux
 5. Client dials localhost:5432
 6. Bidirectional io.Copy between:
@@ -797,7 +797,7 @@ func (c *ACMEClient) ObtainCertificate(domain string) (*tls.Certificate, error) 
 ├── accounts/
 │   └── acme-v02/
 │       └── account.json
-├── wirerift.dev/
+├── wirerift.com/
 │   ├── cert.pem
 │   ├── key.pem
 │   └── meta.json
@@ -909,7 +909,7 @@ Configured per-tunnel in TUNNEL_REQ payload.
 ### 12.1 How It Works
 
 1. User owns `api.mycompany.com`.
-2. User creates CNAME: `api.mycompany.com → wirerift.dev`.
+2. User creates CNAME: `api.mycompany.com → wirerift.com`.
 3. Client requests tunnel with custom domain:
    ```json
    { "type": "http", "hostname": "api.mycompany.com" }
@@ -1063,12 +1063,12 @@ control_addr = "0.0.0.0:4443"
 http_addr = "0.0.0.0:443"
 http_insecure_addr = "0.0.0.0:80"
 dashboard_addr = "127.0.0.1:8080"
-domain = "wirerift.dev"
+domain = "wirerift.com"
 
 [tls]
 mode = "auto"                    # auto | manual | self-signed
 cert_dir = "/var/lib/wirerift/certs"
-acme_email = "admin@wirerift.dev"
+acme_email = "admin@wirerift.com"
 
 # Only for mode = "manual":
 # cert_file = "/path/to/cert.pem"
@@ -1108,7 +1108,7 @@ File: `~/.config/wirerift/config.toml` or `.wirerift.toml` in project root.
 # Client Configuration
 
 [client]
-server_addr = "wirerift.dev:4443"
+server_addr = "wirerift.com:4443"
 auth_token = "tk_a1B2c3D4e5F6..."
 inspect = true
 inspect_addr = "127.0.0.1:4040"
@@ -1148,7 +1148,7 @@ hostname = "api.mycompany.com"   # custom domain
 All config values can be overridden via env vars:
 
 ```
-WIRERIFT_SERVER_ADDR=wirerift.dev:4443
+WIRERIFT_SERVER_ADDR=wirerift.com:4443
 WIRERIFT_AUTH_TOKEN=tk_xxxx
 WIRERIFT_LOG_LEVEL=debug
 ```
@@ -1188,7 +1188,7 @@ wirerift version                     # show version info
 # Options
 wirerift http 3000 \
   --subdomain myapp \
-  --server wirerift.dev:4443 \
+  --server wirerift.com:4443 \
   --auth-token tk_xxxx \
   --inspect \
   --inspect-addr 127.0.0.1:4040 \
@@ -1580,7 +1580,7 @@ wirerift/
 - **Project name: WireRift**
 - Binary names: `wirerift` (client), `wirerift-server` (server)
 - Config file: `.wirerift.toml` or `~/.config/wirerift/config.toml`
-- Subdomain pattern: `*.wirerift.dev`
+- Subdomain pattern: `*.wirerift.com`
 - Environment variable prefix: `WIRERIFT_`
 - Protocol magic: `0x57 0x52 0x46 0x01` → `W`, `R`, `F`, version
 
