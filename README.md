@@ -22,7 +22,8 @@ Open-source, zero-dependency tunnel server and client. Written in Go.
 - **Single binary** — no runtime dependencies
 - **Self-hosted** — run your own tunnel server
 - **HTTP & TCP tunnels** — expose web services or raw TCP
-- **Auto TLS** — automatic HTTPS with self-signed certificates
+- **Let's Encrypt** — automatic HTTPS via ACME HTTP-01, zero-dependency implementation
+- **Auto TLS** — self-signed certificates as fallback for development
 - **WebSocket support** — real-time applications work out of the box
 - **Custom domains** — use your own domain names
 - **Built-in Dashboard** — web UI for monitoring tunnels and traffic
@@ -53,9 +54,14 @@ make build
 ### Start the Server
 
 ```bash
-./bin/wirerift-server
-./bin/wirerift-server -domain mytunnel.com
-./bin/wirerift-server -auto-cert -cert-dir ./certs
+# Basic (self-signed TLS)
+./bin/wirerift-server -domain mytunnel.com -auto-cert
+
+# Production (Let's Encrypt automatic HTTPS)
+./bin/wirerift-server -domain mytunnel.com -acme-email admin@mytunnel.com
+
+# Staging (Let's Encrypt test server)
+./bin/wirerift-server -domain mytunnel.com -acme-email admin@mytunnel.com -acme-staging
 ```
 
 ### Create Tunnels
@@ -304,7 +310,8 @@ HTTP/Serve Options:
 ## Security
 
 - Token-based authentication for all connections
-- TLS support with auto-generated certificates
+- Let's Encrypt ACME with automatic certificate renewal
+- Self-signed TLS fallback for development
 - Basic Auth with constant-time comparison
 - IP whitelist (IPv4/IPv6/CIDR)
 - PIN protection with HMAC cookies

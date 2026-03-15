@@ -13,6 +13,19 @@ interface ChangelogEntry {
 
 const changelog: ChangelogEntry[] = [
   {
+    version: '1.3.0',
+    date: '2026-03-16',
+    title: "Let's Encrypt ACME (Zero Dependencies)",
+    changes: [
+      { type: 'added', description: "Automatic HTTPS via Let's Encrypt ACME HTTP-01 challenge" },
+      { type: 'added', description: 'Zero-dependency ACME client - RFC 8555 compliant, stdlib only' },
+      { type: 'added', description: 'Certificate auto-renewal (12h check interval, 30-day pre-expiry)' },
+      { type: 'added', description: 'ACME account key persistence (ECDSA P-256)' },
+      { type: 'added', description: 'Fallback chain: disk cache → ACME → self-signed' },
+      { type: 'added', description: 'CLI flags: -acme-email and -acme-staging' },
+    ],
+  },
+  {
     version: '1.2.0',
     date: '2026-03-16',
     title: 'Traffic Inspector, Auth & Developer Tools',

@@ -2,7 +2,7 @@ export const SITE = {
   name: 'WireRift',
   tagline: 'Tear a rift through the wire. Expose localhost to the world.',
   description: 'Self-hosted tunnel server written in Go with zero dependencies. Expose your local services to the internet securely.',
-  version: '1.2.0',
+  version: '1.3.0',
   domain: 'wirerift.com',
   url: 'https://wirerift.com',
   repo: 'https://github.com/wirerift/wirerift',

@@ -332,7 +332,10 @@ func TestACMEManagerInitializeWithFakeServer(t *testing.T) {
 	mgr, _ := NewACMEManager("test@example.com", dir, true, nil)
 
 	// Override directory URL for test
-	resp, _ := mgr.httpClient.Get(mockDir.URL)
+	resp, err := mgr.httpClient.Get(mockDir.URL)
+	if err != nil {
+		t.Fatalf("Failed to fetch mock directory: %v", err)
+	}
 	defer resp.Body.Close()
 	json.NewDecoder(resp.Body).Decode(&mgr.directory)
 

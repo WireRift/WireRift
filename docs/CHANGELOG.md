@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-03-16
+
+### Added
+- **Let's Encrypt ACME** - automatic HTTPS via HTTP-01 challenge, zero external dependencies
+- ACME account key management (ECDSA P-256, persisted to disk)
+- JWS signed requests per RFC 8555
+- HTTP-01 challenge solver with automatic token serving on port 80
+- Certificate auto-renewal (checks every 12h, renews 30 days before expiry)
+- Certificate bundle storage with metadata (issued_at, expires_at, domains)
+- Fallback chain: disk → ACME → self-signed
+- CLI flags: `-acme-email` (enables ACME), `-acme-staging` (test server)
+- 15 new ACME unit tests
+
 ## [1.2.0] - 2026-03-16
 
 ### Added

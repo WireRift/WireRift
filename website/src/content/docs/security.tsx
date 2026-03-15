@@ -10,13 +10,35 @@ export const security = {
       <h2>TLS Encryption</h2>
       <p>
         All control plane connections between the client and server are encrypted with TLS.
-        WireRift can automatically generate self-signed certificates, or you can provide
-        your own.
+        WireRift supports automatic Let's Encrypt certificates, self-signed certificates,
+        or your own custom certificates.
       </p>
 
-      <h3>Auto-Generated Certificates</h3>
+      <h3>Let's Encrypt (Recommended for Production)</h3>
       <p>
-        The simplest option is to let WireRift generate self-signed certificates:
+        WireRift includes a built-in ACME client that automatically obtains and renews
+        TLS certificates from Let's Encrypt. No external dependencies required.
+      </p>
+
+      <CodeBlock
+        code={`# Production: automatic HTTPS
+wirerift-server -domain mytunnel.com -acme-email admin@mytunnel.com
+
+# Testing: use Let's Encrypt staging server
+wirerift-server -domain mytunnel.com -acme-email admin@mytunnel.com -acme-staging`}
+        language="bash"
+        filename="lets-encrypt"
+      />
+
+      <Callout variant="info" title="How it works">
+        When a new subdomain is accessed, WireRift automatically requests a certificate
+        via HTTP-01 challenge. The certificate is cached to disk and renewed 30 days before
+        expiry. Port 80 must be accessible for the challenge to succeed.
+      </Callout>
+
+      <h3>Self-Signed Certificates (Development)</h3>
+      <p>
+        For development, WireRift can generate self-signed certificates:
       </p>
 
       <CodeBlock

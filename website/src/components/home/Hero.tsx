@@ -138,7 +138,7 @@ export function Hero() {
               }}>
               <span className="px-2.5 py-1 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase tracking-wider leading-none">New</span>
               <span className="text-[13px] transition-colors" style={{ color: isDark ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.4)' }}>
-                v{SITE.version} — Traffic Inspector, Auth & File Serve
+                v{SITE.version} — Let's Encrypt, Inspector & Access Control
               </span>
               <ArrowRight className="w-3 h-3" style={{ color: isDark ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.2)' }} />
             </Link>
