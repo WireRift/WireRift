@@ -201,9 +201,10 @@ func isValidDomainChar(c rune, pos int) bool {
 }
 
 func generateVerificationCode(domain string) string {
+	// Mix domain into the code so it's domain-bound but still unpredictable
 	b := make([]byte, 16)
 	rand.Read(b)
-	return "wrv_" + hex.EncodeToString(b)
+	return "wrv_" + domain[:min(8, len(domain))] + "_" + hex.EncodeToString(b[:8])
 }
 
 func min(a, b int) int {

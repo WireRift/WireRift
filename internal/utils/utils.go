@@ -62,15 +62,14 @@ func ExtractSubdomain(host, baseDomain string) string {
 	return host[:len(host)-len(suffix)]
 }
 
-// IsValidSubdomain checks if a subdomain is valid
+// IsValidSubdomain checks if a subdomain is valid per RFC 1123.
 func IsValidSubdomain(subdomain string) bool {
 	if len(subdomain) == 0 || len(subdomain) > 63 {
 		return false
 	}
 
-	// Must start with letter or number
-	first := subdomain[0]
-	if !isAlphaNum(first) {
+	// Must start and end with letter or number (RFC 1123)
+	if !isAlphaNum(subdomain[0]) || !isAlphaNum(subdomain[len(subdomain)-1]) {
 		return false
 	}
 

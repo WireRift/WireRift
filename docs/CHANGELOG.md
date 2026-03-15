@@ -30,6 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix: Write config files with 0600 permissions to protect tokens
 - Fix: Check `pem.Encode` return values to prevent corrupt cert/key files on disk
 - Fix: Remove deprecated `PreferServerCipherSuites` from TLS config
+- Fix: PIN comparison now uses constant-time (`crypto/subtle`) to prevent timing attacks
+- Fix: PIN cookie stores HMAC instead of raw PIN value (XSS mitigation)
+- Fix: Stream ID 0 no longer collides with ControlStreamID (data streams start at ID 2)
+- Fix: Server and dashboard now share the same auth manager (was creating separate instances)
+- Fix: `IsValidSubdomain` rejects trailing hyphens per RFC 1123
 
 ### Fixed
 - Fix: Add 10-second timeout to dashboard graceful shutdown (was unbounded)
@@ -54,6 +59,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix: Internal doc links converted from `<a>` to React Router `<Link>` (prevents full page reloads)
 - Fix: ThemeToggle exit animation now works with AnimatePresence wrapper
 - Fix: Loading spinner now has accessible `role="status"` and screen reader text
+- Fix: `ringBuffer.growLocked` no longer computes length with stale pointers after resize
+- Fix: `-tcp-ports` flag now properly parsed (was hardcoded to 20000-29999)
+- Fix: Port allocation no longer skips first port in range (off-by-one)
+- Fix: Domain verification code now includes domain prefix + crypto random (was ignoring domain)
+- Fix: Dockerfile no longer references non-existent `go.sum`, exposes port 4443
+- Fix: README corrected HTTPS URLs to HTTP (HTTPS requires explicit TLS config)
+- Fix: README "100% Test Coverage" claim replaced with accurate description
 
 ## [1.0.1] - 2026-03-01
 

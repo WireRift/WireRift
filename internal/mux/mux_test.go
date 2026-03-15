@@ -29,8 +29,8 @@ func TestMuxOpenStream(t *testing.T) {
 		t.Fatalf("OpenStream failed: %v", err)
 	}
 
-	if stream.ID() != 0 {
-		t.Errorf("First stream ID = %d, want 0", stream.ID())
+	if stream.ID() != 2 {
+		t.Errorf("First stream ID = %d, want 2 (starts at 2 to avoid ControlStreamID collision)", stream.ID())
 	}
 
 	stream2, err := client.OpenStream()
@@ -38,8 +38,8 @@ func TestMuxOpenStream(t *testing.T) {
 		t.Fatalf("Second OpenStream failed: %v", err)
 	}
 
-	if stream2.ID() != 2 {
-		t.Errorf("Second stream ID = %d, want 2", stream2.ID())
+	if stream2.ID() != 4 {
+		t.Errorf("Second stream ID = %d, want 4", stream2.ID())
 	}
 }
 
@@ -114,9 +114,9 @@ func TestMuxMultipleStreams(t *testing.T) {
 		streams[i] = s
 	}
 
-	// Verify IDs are sequential even numbers
+	// Verify IDs are sequential even numbers starting at 2
 	for i, s := range streams {
-		expected := uint32(i * 2)
+		expected := uint32((i + 1) * 2) // 2, 4, 6, 8...
 		if s.ID() != expected {
 			t.Errorf("Stream %d ID = %d, want %d", i, s.ID(), expected)
 		}

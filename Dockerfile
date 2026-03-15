@@ -3,7 +3,7 @@ FROM golang:1.23-alpine AS builder
 
 WORKDIR /app
 
-COPY go.mod go.sum ./
+COPY go.mod ./
 RUN go mod download
 
 COPY . .
@@ -17,6 +17,6 @@ FROM scratch
 COPY --from=builder /wirerift-server /wirerift-server
 COPY --from=builder /wirerift /wirerift
 
-EXPOSE 80 443 4040
+EXPOSE 80 443 4040 4443
 
 ENTRYPOINT ["/wirerift-server"]

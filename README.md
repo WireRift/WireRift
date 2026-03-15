@@ -24,7 +24,7 @@ Open-source, zero-dependency tunnel server and client. Written in Go.
 - **Rate Limiting** — per-IP HTTP and per-session tunnel creation limits
 - **Auto Reconnect** — automatic reconnection with tunnel re-creation
 - **Session Timeout** — inactive sessions cleaned up automatically
-- **100% Test Coverage** — every line of code is tested
+- **Comprehensive Tests** — all packages tested with CI coverage enforcement
 
 ## Quick Start
 
@@ -57,11 +57,11 @@ make build
 ```bash
 # HTTP tunnel - exposes local port 3000
 ./bin/wirerift http 3000
-# → https://random-subdomain.wirerift.dev
+# → http://random-subdomain.wirerift.dev
 
 # HTTP tunnel with custom subdomain
 ./bin/wirerift http 3000 myapp
-# → https://myapp.wirerift.dev
+# → http://myapp.wirerift.dev
 
 # TCP tunnel - expose any TCP service
 ./bin/wirerift tcp 5432

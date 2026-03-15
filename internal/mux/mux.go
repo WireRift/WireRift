@@ -96,6 +96,7 @@ func New(conn net.Conn, config Config) *Mux {
 		maxFrameSize: config.MaxFrameSize,
 	}
 	m.serverStreamID.Store(1) // Server uses odd IDs
+	m.nextID.Store(2) // Start at 2 to avoid collision with ControlStreamID (0)
 
 	return m
 }

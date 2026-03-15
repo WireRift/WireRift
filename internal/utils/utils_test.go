@@ -163,8 +163,7 @@ func TestIsValidSubdomain(t *testing.T) {
 		"a",
 		"abc-def-ghi",
 		"myapp123",
-		"APP",        // uppercase is technically allowed by this implementation
-		"app-",       // trailing dash is allowed by this implementation
+		"APP", // uppercase is technically allowed by this implementation
 	}
 
 	for _, tt := range validTests {
@@ -177,6 +176,7 @@ func TestIsValidSubdomain(t *testing.T) {
 		"",
 		"-app",
 		"-app-",
+		"app-",
 		"app_underscore",
 		"app.space",
 		strings.Repeat("a", 64), // too long

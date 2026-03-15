@@ -126,11 +126,14 @@ func (rb *ringBuffer) growLocked(newSize int) {
 		return
 	}
 
+	// Capture current data length before modifying state
+	dataLen := rb.lenLocked()
+
 	// Allocate new buffer
 	newBuf := make([]byte, newSize)
 
 	// Copy existing data
-	if rb.lenLocked() > 0 {
+	if dataLen > 0 {
 		if rb.w > rb.r {
 			copy(newBuf, rb.buf[rb.r:rb.w])
 		} else {
@@ -142,7 +145,7 @@ func (rb *ringBuffer) growLocked(newSize int) {
 	rb.buf = newBuf
 	rb.size = newSize
 	rb.r = 0
-	rb.w = rb.lenLocked()
+	rb.w = dataLen
 	rb.full = rb.w == rb.size
 }
 

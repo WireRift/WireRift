@@ -3828,29 +3828,32 @@ func TestCheckPINWithQueryParam(t *testing.T) {
 	if rec.Code != http.StatusFound {
 		t.Errorf("Expected 302 redirect, got %d", rec.Code)
 	}
-	// Check cookie was set
+	// Check cookie was set with HMAC value (not raw PIN)
+	expectedMAC := pinMAC("5678", "myapp")
 	cookies := rec.Result().Cookies()
 	found := false
 	for _, c := range cookies {
-		if c.Name == "wirerift_pin_myapp" && c.Value == "5678" {
+		if c.Name == "wirerift_pin_myapp" && c.Value == expectedMAC {
 			found = true
 		}
 	}
 	if !found {
-		t.Error("Expected PIN cookie to be set")
+		t.Error("Expected PIN HMAC cookie to be set")
 	}
 }
 
 func TestCheckPINWithCookie(t *testing.T) {
 	s := New(DefaultConfig(), nil)
 
+	// Cookie stores HMAC, not raw PIN
+	mac := pinMAC("secret", "myapp")
 	req := httptest.NewRequest("GET", "/test", nil)
-	req.AddCookie(&http.Cookie{Name: "wirerift_pin_myapp", Value: "secret"})
+	req.AddCookie(&http.Cookie{Name: "wirerift_pin_myapp", Value: mac})
 	rec := httptest.NewRecorder()
 
 	result := s.checkPIN(rec, req, "secret", "myapp")
 	if !result {
-		t.Error("checkPIN should return true for correct cookie")
+		t.Error("checkPIN should return true for correct HMAC cookie")
 	}
 }
 

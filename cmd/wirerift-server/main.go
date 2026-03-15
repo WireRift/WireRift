@@ -141,6 +141,7 @@ Environment Variables:
 	srvConfig.HTTPAddr = *httpAddr
 	srvConfig.HTTPSAddr = *httpsAddr
 	srvConfig.TCPAddrRange = *tcpPortRange
+	srvConfig.AuthManager = authMgr
 
 	if tlsMgr != nil {
 		srvConfig.TLSConfig = tlsMgr.TLSConfig()

@@ -2,14 +2,19 @@ package server
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/tls"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -154,17 +159,30 @@ func New(config Config, logger *slog.Logger) *Server {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	portStart, portEnd := 20000, 29999
+	if config.TCPAddrRange != "" {
+		if parts := strings.SplitN(config.TCPAddrRange, "-", 2); len(parts) == 2 {
+			if ps, err := strconv.Atoi(strings.TrimSpace(parts[0])); err == nil {
+				portStart = ps
+			}
+			if pe, err := strconv.Atoi(strings.TrimSpace(parts[1])); err == nil {
+				portEnd = pe
+			}
+		}
+	}
+
 	s := &Server{
 		config:       config,
 		logger:       logger,
 		ctx:          ctx,
 		cancel:       cancel,
-		tcpPortStart: 20000,
-		tcpPortEnd:   29999,
+		tcpPortStart: portStart,
+		tcpPortEnd:   portEnd,
 		rateLimiter:  ratelimit.NewManager(100, 50), // 100 req/s, burst 50
 	}
 
-	s.nextPort.Store(int32(s.tcpPortStart))
+	// Store portStart-1 so first Add(1) yields portStart
+	s.nextPort.Store(int32(s.tcpPortStart - 1))
 
 	if config.AuthManager != nil {
 		s.authManager = config.AuthManager
@@ -997,32 +1015,51 @@ func (s *Server) isIPAllowed(clientIP string, allowedIPs []string) bool {
 	return false
 }
 
+// pinMAC computes an HMAC of the PIN for safe cookie storage.
+func pinMAC(pin, subdomain string) string {
+	mac := hmac.New(sha256.New, []byte("wirerift-pin-key-"+subdomain))
+	mac.Write([]byte(pin))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// pinMatch performs constant-time comparison of a submitted PIN against the expected PIN.
+func pinMatch(submitted, expected string) bool {
+	return subtle.ConstantTimeCompare([]byte(submitted), []byte(expected)) == 1
+}
+
 // checkPIN validates PIN protection for a tunnel.
 // Returns true if access is allowed, false if response was written (PIN page or error).
 func (s *Server) checkPIN(w http.ResponseWriter, r *http.Request, pin, subdomain string) bool {
 	cookieName := "wirerift_pin_" + subdomain
+	expectedMAC := pinMAC(pin, subdomain)
 
-	// Check PIN cookie first
-	if cookie, err := r.Cookie(cookieName); err == nil && cookie.Value == pin {
-		return true
+	// Check PIN cookie (stores HMAC, not raw PIN)
+	if cookie, err := r.Cookie(cookieName); err == nil {
+		if subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(expectedMAC)) == 1 {
+			return true
+		}
 	}
 
 	// Check X-WireRift-PIN header (for API/CLI access)
-	if r.Header.Get("X-WireRift-PIN") == pin {
+	if headerPIN := r.Header.Get("X-WireRift-PIN"); headerPIN != "" && pinMatch(headerPIN, pin) {
 		return true
 	}
 
-	// Check ?pin= query parameter
-	if r.URL.Query().Get("pin") == pin {
-		// Set cookie so subsequent requests don't need the query param
+	// setPINcookie sets a secure HMAC-based PIN cookie
+	setPINcookie := func() {
 		http.SetCookie(w, &http.Cookie{
 			Name:     cookieName,
-			Value:    pin,
+			Value:    expectedMAC,
 			Path:     "/",
 			MaxAge:   86400, // 24 hours
 			HttpOnly: true,
 			SameSite: http.SameSiteStrictMode,
 		})
+	}
+
+	// Check ?pin= query parameter
+	if queryPIN := r.URL.Query().Get("pin"); queryPIN != "" && pinMatch(queryPIN, pin) {
+		setPINcookie()
 		// Redirect to clean URL (strip pin param)
 		q := r.URL.Query()
 		q.Del("pin")
@@ -1037,16 +1074,8 @@ func (s *Server) checkPIN(w http.ResponseWriter, r *http.Request, pin, subdomain
 	// Handle POST from PIN form
 	if r.Method == http.MethodPost && r.Header.Get("Content-Type") == "application/x-www-form-urlencoded" {
 		r.ParseForm()
-		submittedPIN := r.FormValue("pin")
-		if submittedPIN == pin {
-			http.SetCookie(w, &http.Cookie{
-				Name:     cookieName,
-				Value:    pin,
-				Path:     "/",
-				MaxAge:   86400,
-				HttpOnly: true,
-				SameSite: http.SameSiteStrictMode,
-			})
+		if pinMatch(r.FormValue("pin"), pin) {
+			setPINcookie()
 			http.Redirect(w, r, r.URL.Path, http.StatusFound)
 			return false
 		}
