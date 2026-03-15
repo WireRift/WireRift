@@ -140,12 +140,11 @@ export function Hero() {
               style={{ color: headingColor }}>
               through the wire.
             </span>
-            <span className="block mt-1 text-[2.75rem] sm:text-[3.5rem] md:text-[4.25rem] lg:text-[5rem] font-extrabold tracking-[-0.025em] leading-[1.05]"
+            <span className="block mt-1 text-[2.75rem] sm:text-[3.5rem] md:text-[4.25rem] lg:text-[5rem] font-extrabold tracking-[-0.025em] leading-[1.05] bg-clip-text [-webkit-text-fill-color:transparent]"
               style={{
-                background: isDark
+                backgroundImage: isDark
                   ? 'linear-gradient(135deg, #60a5fa 0%, #a78bfa 35%, #f472b6 65%, #fb923c 100%)'
                   : 'linear-gradient(135deg, #2563eb 0%, #7c3aed 35%, #db2777 65%, #ea580c 100%)',
-                WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text',
               }}>
               Expose localhost.
             </span>
