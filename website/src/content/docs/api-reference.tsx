@@ -244,6 +244,66 @@ Content-Type: application/json
         filename="delete-domain"
       />
 
+      <h2>Traffic Inspector</h2>
+
+      <h3>List Captured Requests</h3>
+      <p>Returns all HTTP requests captured by the traffic inspector. Requires <code>-inspect</code> to be enabled on the tunnel.</p>
+
+      <CodeBlock
+        code={`GET /api/requests`}
+        language="text"
+      />
+
+      <CodeBlock
+        code={`curl http://your-server:4040/api/requests | jq .
+
+# Response:
+{
+  "requests": [
+    {
+      "id": "req_z8k2m4",
+      "tunnel_id": "tun_a7x9k2",
+      "method": "POST",
+      "url": "https://myapp.mytunnel.com/api/webhook",
+      "status": 200,
+      "duration_ms": 45,
+      "request_headers": {"Content-Type": "application/json"},
+      "response_headers": {"Content-Type": "application/json"},
+      "request_body_size": 1024,
+      "response_body_size": 256,
+      "created_at": "2025-01-15T10:35:00Z"
+    }
+  ]
+}`}
+        language="bash"
+        filename="list-requests"
+      />
+
+      <h3>Replay a Captured Request</h3>
+      <p>Replays a previously captured request through the tunnel. Useful for debugging webhooks and API integrations.</p>
+
+      <CodeBlock
+        code={`POST /api/requests/{id}/replay`}
+        language="text"
+      />
+
+      <CodeBlock
+        code={`curl -X POST http://your-server:4040/api/requests/req_z8k2m4/replay | jq .
+
+# Response:
+{
+  "id": "req_p1n7x3",
+  "original_id": "req_z8k2m4",
+  "method": "POST",
+  "url": "https://myapp.mytunnel.com/api/webhook",
+  "status": 200,
+  "duration_ms": 38,
+  "created_at": "2025-01-15T10:40:00Z"
+}`}
+        language="bash"
+        filename="replay-request"
+      />
+
       <Callout variant="warning" title="Security Note">
         The dashboard API does not currently require authentication. In production, use
         firewall rules to restrict access to port 4040, or bind it to localhost only.

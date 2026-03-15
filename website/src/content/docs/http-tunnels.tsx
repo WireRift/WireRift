@@ -200,6 +200,81 @@ wirerift http 8080 -whitelist "10.0.0.0/8" -pin secret`}
         IPv6 addresses and CIDR notation are both supported.
       </p>
 
+      <h2>Basic Auth</h2>
+      <p>
+        Protect your tunnel with HTTP Basic Authentication. Visitors must provide valid credentials
+        before accessing the tunneled service.
+      </p>
+
+      <CodeBlock
+        code={`# Create a tunnel with Basic Auth
+wirerift http 8080 -auth "admin:pass"
+
+# In a config file:
+# tunnels:
+#   - type: http
+#     local_port: 8080
+#     subdomain: staging
+#     auth: "admin:pass"`}
+        language="bash"
+        filename="basic-auth"
+      />
+
+      <p>
+        When Basic Auth is enabled, the server returns a <code>401 Unauthorized</code> response
+        with a <code>WWW-Authenticate</code> header for unauthenticated requests. API clients can
+        pass credentials via the standard <code>Authorization: Basic ...</code> header.
+      </p>
+
+      <h2>Traffic Inspector</h2>
+      <p>
+        The <code>-inspect</code> flag enables a live traffic inspector that captures all HTTP
+        requests and responses flowing through the tunnel. This is useful for debugging webhooks,
+        API integrations, and frontend development.
+      </p>
+
+      <CodeBlock
+        code={`# Enable the traffic inspector
+wirerift http 8080 -inspect
+
+# Inspector dashboard available at:
+# http://127.0.0.1:4040/inspect
+#
+# Features:
+# - Live request/response stream
+# - Full headers and body inspection
+# - Request timing and status codes
+# - Replay captured requests`}
+        language="bash"
+        filename="traffic-inspector"
+      />
+
+      <Callout variant="info" title="Request Replay">
+        Captured requests can be replayed from the inspector dashboard or via the API using{' '}
+        <code>POST /api/requests/&#123;id&#125;/replay</code>. See the{' '}
+        <Link to="/docs/api-reference">API Reference</Link> for details.
+      </Callout>
+
+      <h2>Custom Response Headers</h2>
+      <p>
+        Inject custom headers into every response returned through the tunnel. This is useful for
+        adding CORS headers, security headers, or custom metadata without modifying your application.
+      </p>
+
+      <CodeBlock
+        code={`# Add custom response headers
+wirerift http 8080 -headers "Access-Control-Allow-Origin:*,X-Frame-Options:DENY"
+
+# In a config file:
+# tunnels:
+#   - type: http
+#     local_port: 8080
+#     subdomain: api
+#     headers: "Access-Control-Allow-Origin:*,X-Custom-Header:value"`}
+        language="bash"
+        filename="custom-headers"
+      />
+
       <h2>Next Steps</h2>
       <ul>
         <li><Link to="/docs/tcp-tunnels">TCP Tunnels</Link> - Forward raw TCP connections</li>

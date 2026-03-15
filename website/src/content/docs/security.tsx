@@ -200,6 +200,32 @@ mytunnel.com {
         <li>Cookie lifetime is 24 hours with automatic expiration</li>
       </ul>
 
+      <h3>Basic Auth</h3>
+      <p>
+        HTTP tunnels can be protected with Basic Authentication. When enabled, the server
+        challenges unauthenticated requests with a <code>401 Unauthorized</code> response
+        and <code>WWW-Authenticate</code> header. Credentials are validated on the server
+        side before traffic is forwarded.
+      </p>
+
+      <CodeBlock
+        code={`# Enable Basic Auth on a tunnel
+wirerift http 8080 -auth "admin:secretpass"
+
+# In a config file:
+# tunnels:
+#   - type: http
+#     local_port: 8080
+#     auth: "admin:secretpass"`}
+        language="bash"
+        filename="basic-auth-security"
+      />
+
+      <Callout variant="warning" title="Use with TLS">
+        Basic Auth transmits credentials encoded in Base64, not encrypted. Always use TLS
+        (the default for WireRift tunnels) to protect credentials in transit.
+      </Callout>
+
       <h3>IP Whitelist</h3>
       <p>
         IP whitelisting restricts tunnel access to specific addresses or CIDR ranges.

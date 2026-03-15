@@ -119,6 +119,9 @@ wirerift http <local_port> -whitelist <ip1,ip2,cidr>
 # TCP tunnel
 wirerift tcp <local_port>
 
+# Serve static files from a directory
+wirerift serve <directory>
+
 # Start from config file
 wirerift start <config_file>
 
@@ -158,6 +161,24 @@ tunnels:
   - type: http
     local_port: 8081
     whitelist: "10.0.0.0/8,192.168.1.100"
+
+  # Tunnel with Basic Auth
+  - type: http
+    local_port: 4000
+    subdomain: staging
+    auth: "admin:pass"
+
+  # Tunnel with traffic inspector
+  - type: http
+    local_port: 5000
+    subdomain: debug
+    inspect: true
+
+  # Tunnel with custom response headers
+  - type: http
+    local_port: 6000
+    subdomain: cors
+    headers: "Access-Control-Allow-Origin:*,X-Custom:value"
 
   # TCP tunnel
   - type: tcp
@@ -220,6 +241,21 @@ tunnels:
             <td><code>tunnels[].pin</code></td>
             <td>string</td>
             <td>PIN code required to access the tunnel (HTTP only, optional)</td>
+          </tr>
+          <tr>
+            <td><code>tunnels[].auth</code></td>
+            <td>string</td>
+            <td>Basic Auth credentials in <code>user:pass</code> format (HTTP only, optional)</td>
+          </tr>
+          <tr>
+            <td><code>tunnels[].inspect</code></td>
+            <td>boolean</td>
+            <td>Enable traffic inspector for this tunnel (optional)</td>
+          </tr>
+          <tr>
+            <td><code>tunnels[].headers</code></td>
+            <td>string</td>
+            <td>Custom response headers in <code>Key:Value,Key:Value</code> format (optional)</td>
           </tr>
         </tbody>
       </table>

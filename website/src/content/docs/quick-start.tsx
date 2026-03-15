@@ -88,7 +88,52 @@ wirerift tcp 5432
         filename="tcp-tunnel"
       />
 
-      <h2>Step 5: Use a Config File</h2>
+      <h2>Step 5: Serve Static Files</h2>
+      <p>
+        Serve a local directory over the internet without running a separate web server:
+      </p>
+
+      <CodeBlock
+        code={`# Serve the ./dist directory
+wirerift serve ./dist
+
+# Output:
+# File server started: ./dist
+# Tunnel created: https://f3k8m1.mytunnel.com → file server (./dist)`}
+        language="bash"
+        filename="file-server"
+      />
+
+      <h2>Step 6: Add Basic Auth and Inspector</h2>
+      <p>
+        Protect your tunnel with Basic Authentication or enable the traffic inspector:
+      </p>
+
+      <CodeBlock
+        code={`# Tunnel with Basic Authentication
+wirerift http 8080 -auth "admin:pass"
+
+# Output:
+# Tunnel created: https://b2x7k9.mytunnel.com → localhost:8080
+# Basic Auth enabled (user: admin)
+
+# Tunnel with traffic inspector
+wirerift http 8080 -inspect
+
+# Output:
+# Tunnel created: https://c4m2p8.mytunnel.com → localhost:8080
+# Inspector enabled: http://127.0.0.1:4040/inspect`}
+        language="bash"
+        filename="auth-inspect"
+      />
+
+      <Callout variant="info" title="Live Traffic Dashboard">
+        When <code>-inspect</code> is enabled, the dashboard at <code>http://127.0.0.1:4040/inspect</code> shows
+        live HTTP traffic including request/response headers, bodies, and timing. You can also replay
+        captured requests directly from the dashboard.
+      </Callout>
+
+      <h2>Step 7: Use a Config File</h2>
       <p>
         For multiple tunnels or persistent configuration, use a YAML config file:
       </p>
@@ -119,7 +164,7 @@ wirerift list`}
         language="bash"
       />
 
-      <h2>Step 6: Check the Dashboard</h2>
+      <h2>Step 8: Check the Dashboard</h2>
       <p>
         Open the built-in dashboard to monitor your tunnels:
       </p>

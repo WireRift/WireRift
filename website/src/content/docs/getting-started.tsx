@@ -31,6 +31,12 @@ export const gettingStarted = {
         <li><strong>Custom Domains</strong> - Bring your own domains with DNS verification and automatic routing.</li>
         <li><strong>Built-in Dashboard</strong> - Monitor tunnels, sessions, and statistics through a web UI.</li>
         <li><strong>Production Ready</strong> - Rate limiting, flow control, auto-reconnect, 100% test coverage.</li>
+        <li><strong>Traffic Inspector</strong> - Inspect live HTTP requests and responses through the dashboard.</li>
+        <li><strong>Request Replay</strong> - Capture and replay requests for debugging and testing.</li>
+        <li><strong>Basic Auth</strong> - Protect tunnels with HTTP Basic Authentication.</li>
+        <li><strong>Custom Headers</strong> - Inject custom response headers into tunneled traffic.</li>
+        <li><strong>File Server Mode</strong> - Serve static files from a local directory without a running server.</li>
+        <li><strong>Webhook Relay</strong> - Receive and forward webhooks through tunnels with inspection.</li>
       </ul>
 
       <h2>How It Works</h2>
