@@ -20,7 +20,7 @@ const itemVariants = {
 
 export function Features() {
   return (
-    <section className="py-20 md:py-28 bg-[var(--color-bg-secondary)]">
+    <section className="py-20 md:py-28" style={{ backgroundColor: 'var(--color-bg-secondary)' }}>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         {/* Section header */}
         <motion.div
