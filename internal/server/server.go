@@ -1287,7 +1287,12 @@ func (s *Server) startSessionCleanup() {
 
 // startRateLimiterEviction periodically evicts stale rate limiters to prevent memory leaks.
 func (s *Server) startRateLimiterEviction() {
-	ticker := time.NewTicker(5 * time.Minute)
+	s.runRateLimiterEviction(5 * time.Minute)
+}
+
+// runRateLimiterEviction runs the eviction loop with a configurable interval (testable).
+func (s *Server) runRateLimiterEviction(interval time.Duration) {
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
@@ -1295,7 +1300,7 @@ func (s *Server) startRateLimiterEviction() {
 		case <-s.ctx.Done():
 			return
 		case <-ticker.C:
-			evicted := s.rateLimiter.Evict(10 * time.Minute)
+			evicted := s.rateLimiter.Evict(interval * 2)
 			if evicted > 0 {
 				s.logger.Debug("evicted stale rate limiters", "count", evicted)
 			}

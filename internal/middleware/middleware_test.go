@@ -574,3 +574,45 @@ func TestLoggerCapturesStatus(t *testing.T) {
 		t.Errorf("Status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
 }
+
+func TestGzipResponseWriterWriteHeader(t *testing.T) {
+	// Test that gzipResponseWriter.WriteHeader is called when the handler
+	// calls WriteHeader explicitly before Write
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte("not found"))
+	})
+
+	compressHandler := Compress()(handler)
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+
+	compressHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("Status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestGzipResponseWriterWriteHeaderLargeBody(t *testing.T) {
+	// Test WriteHeader with a large body that triggers gzip compression
+	largeBody := strings.Repeat("this is test content ", 50) // > 256 bytes
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte(largeBody))
+	})
+
+	compressHandler := Compress()(handler)
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+
+	compressHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Errorf("Status = %d, want %d", rec.Code, http.StatusCreated)
+	}
+}

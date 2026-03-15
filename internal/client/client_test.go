@@ -2288,6 +2288,43 @@ func TestOpenTunnelStoresRequest(t *testing.T) {
 	client.conn.Close()
 }
 
+// --- Additional coverage tests ---
+
+func TestWithAllowedIPs(t *testing.T) {
+	req := &proto.TunnelRequest{
+		Type:      proto.TunnelTypeHTTP,
+		LocalAddr: "localhost:8080",
+	}
+
+	ips := []string{"1.2.3.4", "10.0.0.0/8"}
+	opt := WithAllowedIPs(ips)
+	opt(req)
+
+	if len(req.AllowedIPs) != 2 {
+		t.Fatalf("AllowedIPs length = %d, want 2", len(req.AllowedIPs))
+	}
+	if req.AllowedIPs[0] != "1.2.3.4" {
+		t.Errorf("AllowedIPs[0] = %q, want %q", req.AllowedIPs[0], "1.2.3.4")
+	}
+	if req.AllowedIPs[1] != "10.0.0.0/8" {
+		t.Errorf("AllowedIPs[1] = %q, want %q", req.AllowedIPs[1], "10.0.0.0/8")
+	}
+}
+
+func TestWithPIN(t *testing.T) {
+	req := &proto.TunnelRequest{
+		Type:      proto.TunnelTypeHTTP,
+		LocalAddr: "localhost:8080",
+	}
+
+	opt := WithPIN("secret123")
+	opt(req)
+
+	if req.PIN != "secret123" {
+		t.Errorf("PIN = %q, want %q", req.PIN, "secret123")
+	}
+}
+
 // Suppress unused import warnings - ensure all imports are used
 var _ = fmt.Sprintf
 var _ = bufio.NewReader

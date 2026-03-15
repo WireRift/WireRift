@@ -385,3 +385,47 @@ func TestSlidingWindowReset(t *testing.T) {
         t.Error("Allow() = false after Reset, want true")
     }
 }
+
+func TestLastUpdate(t *testing.T) {
+	before := time.Now()
+	limiter := New(10, 5)
+	limiter.Allow()
+	after := time.Now()
+
+	lu := limiter.LastUpdate()
+	if lu.Before(before) || lu.After(after) {
+		t.Errorf("LastUpdate() = %v, want between %v and %v", lu, before, after)
+	}
+}
+
+func TestEvict(t *testing.T) {
+	mgr := NewManager(10, 5)
+
+	// Add two entries and access them
+	mgr.Allow("old-key")
+	mgr.Allow("new-key")
+
+	// Manually set the lastUpdate of "old-key" to the past
+	oldLimiter := mgr.Get("old-key")
+	oldLimiter.mu.Lock()
+	oldLimiter.lastUpdate = time.Now().Add(-20 * time.Minute)
+	oldLimiter.mu.Unlock()
+
+	// Evict entries older than 10 minutes
+	evicted := mgr.Evict(10 * time.Minute)
+	if evicted != 1 {
+		t.Errorf("Evict() = %d, want 1", evicted)
+	}
+
+	// "old-key" should be gone (new limiter created on Get)
+	newLimiter := mgr.Get("old-key")
+	if newLimiter == oldLimiter {
+		t.Error("Expected new limiter for evicted key")
+	}
+
+	// "new-key" should still be there
+	newKeyLimiter := mgr.Get("new-key")
+	if newKeyLimiter == nil {
+		t.Error("new-key should still exist")
+	}
+}

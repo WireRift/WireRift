@@ -929,3 +929,111 @@ func withEnv(t *testing.T, key, val string) {
 		}
 	})
 }
+
+// --- Additional coverage tests ---
+
+func TestLoadConfigWithWhitelistAndPIN(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "wlpin.yaml")
+	os.WriteFile(f, []byte("server: test.server:4443\ntoken: tok\n\ntunnels:\n  - type: http\n    local_port: 8080\n    subdomain: myapp\n    whitelist: 1.2.3.4,10.0.0.0/8\n    pin: secret123\n"), 0644)
+	cfg, err := loadConfig(f)
+	if err != nil {
+		t.Fatalf("loadConfig failed: %v", err)
+	}
+	if len(cfg.Tunnels) != 1 {
+		t.Fatalf("Expected 1 tunnel, got %d", len(cfg.Tunnels))
+	}
+	if cfg.Tunnels[0].Whitelist != "1.2.3.4,10.0.0.0/8" {
+		t.Errorf("Whitelist = %q, want %q", cfg.Tunnels[0].Whitelist, "1.2.3.4,10.0.0.0/8")
+	}
+	if cfg.Tunnels[0].PIN != "secret123" {
+		t.Errorf("PIN = %q, want %q", cfg.Tunnels[0].PIN, "secret123")
+	}
+}
+
+func TestDoHTTP_WithWhitelistAndPIN(t *testing.T) {
+	defer lockGOMAXPROCS()()
+
+	addr, cleanup := startMockTunnelServer(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		cancel()
+	}()
+
+	args := []string{"wirerift", "http", "-server", addr, "-whitelist", "1.2.3.4,10.0.0.0/8", "-pin", "secret", "8080"}
+	err := doHTTP(ctx, args)
+	if err != nil {
+		t.Fatalf("doHTTP with whitelist and pin failed: %v", err)
+	}
+}
+
+func TestDoHTTP_PortRange(t *testing.T) {
+	// Test port out of range
+	assertErrContains(t, doHTTP(context.Background(), []string{"wirerift", "http", "0"}), "port must be between")
+	assertErrContains(t, doHTTP(context.Background(), []string{"wirerift", "http", "99999"}), "port must be between")
+}
+
+func TestDoTCP_PortRange(t *testing.T) {
+	// Test port out of range
+	assertErrContains(t, doTCP(context.Background(), []string{"wirerift", "tcp", "0"}), "port must be between")
+	assertErrContains(t, doTCP(context.Background(), []string{"wirerift", "tcp", "99999"}), "port must be between")
+}
+
+func TestHandleSignals_ContextDone(t *testing.T) {
+	// Test the ctx.Done() path (normal exit without signal)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan struct{})
+	go func() {
+		handleSignals(ctx, cancel)
+		close(done)
+	}()
+
+	// Cancel context to trigger ctx.Done() path
+	cancel()
+
+	select {
+	case <-done:
+		// Success - handleSignals returned via ctx.Done()
+	case <-time.After(2 * time.Second):
+		t.Error("handleSignals did not return after context cancellation")
+	}
+}
+
+func TestLoadConfigInvalidPort(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "badport.yaml")
+	os.WriteFile(f, []byte("server: test.server\ntunnels:\n  - type: http\n    local_port: not_a_number\n"), 0644)
+	_, err := loadConfig(f)
+	if err == nil {
+		t.Error("Expected error for invalid local_port")
+	}
+	if !strings.Contains(err.Error(), "invalid local_port") {
+		t.Errorf("Expected 'invalid local_port' error, got: %v", err)
+	}
+}
+
+func TestDoStartWithWhitelistAndPIN(t *testing.T) {
+	defer lockGOMAXPROCS()()
+
+	addr, cleanup := startMockTunnelServer(t)
+	defer cleanup()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "test.yaml")
+	configContent := fmt.Sprintf("server: %s\ntoken: test\n\ntunnels:\n  - type: http\n    local_port: 8080\n    subdomain: test\n    whitelist: 1.2.3.4\n    pin: 1234\n", addr)
+	os.WriteFile(configFile, []byte(configContent), 0644)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		cancel()
+	}()
+
+	args := []string{"wirerift", "start", configFile}
+	err := doStart(ctx, args)
+	if err != nil {
+		t.Fatalf("doStart with whitelist/pin failed: %v", err)
+	}
+}

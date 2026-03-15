@@ -724,3 +724,45 @@ func TestGenerateSelfSignedCreateCertError(t *testing.T) {
 		t.Error("Expected error from generateSelfSigned with corrupted CA cert")
 	}
 }
+
+// TestSaveCertificateInvalidDirectory tests saveCertificate with a non-existent directory
+func TestSaveCertificateInvalidDirectory(t *testing.T) {
+	m := &Manager{
+		config: Config{
+			Domain:  "test.local",
+			CertDir: filepath.Join(t.TempDir(), "nonexistent", "subdir", "deep"),
+		},
+	}
+
+	// The directory does not exist, so OpenFile should fail for the cert file
+	err := m.saveCertificate("test-host", []byte("cert-data"), []byte("key-data"))
+	if err == nil {
+		t.Error("Expected error saving certificate to non-existent directory")
+	}
+}
+
+func TestSaveCertificateKeyWriteError(t *testing.T) {
+	dir := t.TempDir()
+
+	m := &Manager{
+		config: Config{
+			Domain:  "test.local",
+			CertDir: dir,
+		},
+	}
+
+	// Write cert file successfully, but make key path a directory so OpenFile fails
+	keyPath := filepath.Join(dir, "test-key-err.key")
+	os.MkdirAll(keyPath, 0700) // create directory where file should be
+
+	err := m.saveCertificate("test-key-err", []byte{0x30}, []byte{0x30})
+	if err == nil {
+		t.Error("Expected error when key path is a directory")
+	}
+
+	// Verify cert was written
+	certPath := filepath.Join(dir, "test-key-err.crt")
+	if _, err := os.Stat(certPath); os.IsNotExist(err) {
+		t.Error("Cert file should have been created before key error")
+	}
+}

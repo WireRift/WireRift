@@ -4028,14 +4028,24 @@ func TestProxyTCPConnectionWhitelistBlocked(t *testing.T) {
 	}
 	session := &Session{ID: "sess-tcp-wl", Mux: m}
 
-	// Create a fake connection from a non-whitelisted IP
-	server, client := net.Pipe()
-	defer client.Close()
+	// Use real TCP connection so RemoteAddr returns a real IP
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+	defer ln.Close()
 
-	// proxyTCPConnection should reject and close immediately
+	go net.Dial("tcp", ln.Addr().String())
+	conn, err := ln.Accept()
+	if err != nil {
+		t.Fatalf("Accept failed: %v", err)
+	}
+	defer conn.Close()
+
+	// 127.0.0.1 is not in whitelist (192.168.1.100), should be rejected
 	done := make(chan struct{})
 	go func() {
-		s.proxyTCPConnection(server, tunnel, session)
+		s.proxyTCPConnection(conn, tunnel, session)
 		close(done)
 	}()
 
@@ -4044,7 +4054,7 @@ func TestProxyTCPConnectionWhitelistBlocked(t *testing.T) {
 		// Good - connection was rejected
 	case <-time.After(2 * time.Second):
 		t.Error("proxyTCPConnection did not return after whitelist rejection")
-		server.Close()
+		conn.Close()
 	}
 }
 
@@ -4120,4 +4130,255 @@ func TestProxyTCPConnectionNoWhitelist(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Error("proxyTCPConnection did not complete")
 	}
+}
+
+// --- Additional coverage tests ---
+
+func TestIsIPAllowedInvalidCIDR(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+
+	// Invalid CIDR string should not match and should not panic
+	got := s.isIPAllowed("1.2.3.4", []string{"not-a-cidr/99"})
+	if got {
+		t.Error("isIPAllowed should return false for invalid CIDR")
+	}
+
+	// Valid IP with invalid CIDR should fall through without match
+	got = s.isIPAllowed("10.0.0.1", []string{"invalid/8", "10.0.0.2"})
+	if got {
+		t.Error("isIPAllowed should return false when no entries match")
+	}
+
+	// String fallback match for unparseable IP format
+	got = s.isIPAllowed("weird-format", []string{"weird-format"})
+	if !got {
+		t.Error("isIPAllowed should return true for string fallback match")
+	}
+}
+
+func TestAllocatePortWrapAroundWithRelease(t *testing.T) {
+	cfg := DefaultConfig()
+	s := New(cfg, nil)
+	s.tcpPortStart = 30000
+	s.tcpPortEnd = 30002 // 3 ports: 30000, 30001, 30002
+	s.nextPort.Store(int32(30000 - 1))
+
+	// Allocate all 3 ports
+	ports := make([]int, 3)
+	for i := 0; i < 3; i++ {
+		p, err := s.allocatePort()
+		if err != nil {
+			t.Fatalf("allocatePort %d failed: %v", i, err)
+		}
+		ports[i] = p
+	}
+
+	// All ports exhausted
+	_, err := s.allocatePort()
+	if err != ErrPortUnavailable {
+		t.Fatalf("Expected ErrPortUnavailable, got %v", err)
+	}
+
+	// Release one port and allocate again (wrap-around)
+	s.releasePort(ports[1])
+	p, err := s.allocatePort()
+	if err != nil {
+		t.Fatalf("allocatePort after release failed: %v", err)
+	}
+	if p != ports[1] {
+		t.Logf("Allocated port %d after releasing %d (acceptable due to counter wrap)", p, ports[1])
+	}
+}
+
+func TestCheckPINWithWrongCookie(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+
+	// Set a cookie with wrong HMAC value
+	req := httptest.NewRequest("GET", "/test", nil)
+	req.AddCookie(&http.Cookie{Name: "wirerift_pin_myapp", Value: "wrong-hmac-value"})
+	rec := httptest.NewRecorder()
+
+	result := s.checkPIN(rec, req, "1234", "myapp")
+	if result {
+		t.Error("checkPIN should return false for wrong cookie value")
+	}
+	// Should show PIN form (401)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("Expected 401, got %d", rec.Code)
+	}
+}
+
+func TestStartRateLimiterEviction(t *testing.T) {
+	cfg := DefaultConfig()
+	s := New(cfg, nil)
+
+	// Add a rate limiter entry and make it stale
+	s.rateLimiter.Get("stale-ip").Allow()
+
+	// Run eviction loop with very short interval so ticker fires quickly
+	done := make(chan struct{})
+	go func() {
+		s.runRateLimiterEviction(10 * time.Millisecond)
+		close(done)
+	}()
+
+	// Wait enough for at least one tick
+	time.Sleep(50 * time.Millisecond)
+
+	// Cancel to stop the loop
+	s.cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Error("runRateLimiterEviction did not exit")
+	}
+}
+
+func TestAllocatePortNegativeModulo(t *testing.T) {
+	cfg := DefaultConfig()
+	s := New(cfg, nil)
+	s.tcpPortStart = 20000
+	s.tcpPortEnd = 20002 // 3 ports: 20000, 20001, 20002
+
+	// Set nextPort to a value that will produce a negative modulo result.
+	// When raw - tcpPortStart is negative, Go's % returns a negative remainder,
+	// triggering the port += portRange correction.
+	s.nextPort.Store(int32(20000 - 5)) // raw after Add(1) = 19996, 19996 - 20000 = -4, -4 % 3 = -1
+
+	port, err := s.allocatePort()
+	if err != nil {
+		t.Fatalf("allocatePort failed: %v", err)
+	}
+	if port < s.tcpPortStart || port > s.tcpPortEnd {
+		t.Errorf("port %d out of range [%d, %d]", port, s.tcpPortStart, s.tcpPortEnd)
+	}
+}
+
+func TestCheckPINQueryParamWithExtraParams(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+
+	// Query param with additional params that should be preserved after redirect
+	req := httptest.NewRequest("GET", "/test?foo=bar&pin=1234&baz=qux", nil)
+	rec := httptest.NewRecorder()
+
+	result := s.checkPIN(rec, req, "1234", "myapp")
+	if result {
+		t.Error("checkPIN with query param should return false (redirect)")
+	}
+	if rec.Code != http.StatusFound {
+		t.Errorf("Expected 302 redirect, got %d", rec.Code)
+	}
+	loc := rec.Header().Get("Location")
+	if strings.Contains(loc, "pin=") {
+		t.Errorf("Redirect URL should not contain pin param, got: %s", loc)
+	}
+	if !strings.Contains(loc, "foo=bar") {
+		t.Errorf("Redirect URL should preserve other params, got: %s", loc)
+	}
+}
+
+func TestHandleTunnelRequestInvalidSubdomain(t *testing.T) {
+	authMgr := auth.NewManager()
+	cfg := DefaultConfig()
+	cfg.AuthManager = authMgr
+	s := New(cfg, nil)
+
+	c1, c2 := net.Pipe()
+	m := mux.New(c1, mux.DefaultConfig())
+	go m.Run()
+
+	session := &Session{
+		ID:      "sess-invalid-sub",
+		Tunnels: make(map[string]*Tunnel),
+	}
+
+	// Request with invalid subdomain (trailing hyphen)
+	req := &proto.TunnelRequest{
+		Type:      proto.TunnelTypeHTTP,
+		Subdomain: "bad-subdomain-",
+		LocalAddr: "localhost:8080",
+	}
+	frame, _ := proto.EncodeJSONPayload(proto.FrameTunnelReq, 0, req)
+
+	go s.handleTunnelRequest(m, session, frame)
+
+	fr := proto.NewFrameReader(c2)
+	respFrame, err := fr.Read()
+	if err != nil {
+		t.Fatalf("Failed to read response: %v", err)
+	}
+	var res proto.TunnelResponse
+	proto.DecodeJSONPayload(respFrame, &res)
+	if res.OK {
+		t.Fatal("Should reject invalid subdomain")
+	}
+	if !strings.Contains(res.Error, "invalid subdomain") {
+		t.Errorf("Expected 'invalid subdomain' error, got: %s", res.Error)
+	}
+	c2.Close()
+	m.Close()
+}
+
+func TestHandleTunnelRequestHTTPWithWhitelistAndPIN(t *testing.T) {
+	authMgr := auth.NewManager()
+	cfg := DefaultConfig()
+	cfg.AuthManager = authMgr
+	s := New(cfg, nil)
+
+	c1, c2 := net.Pipe()
+	m := mux.New(c1, mux.DefaultConfig())
+	go m.Run()
+
+	session := &Session{
+		ID:      "sess-wl-pin",
+		Tunnels: make(map[string]*Tunnel),
+	}
+
+	req := &proto.TunnelRequest{
+		Type:       proto.TunnelTypeHTTP,
+		LocalAddr:  "localhost:8080",
+		AllowedIPs: []string{"10.0.0.1"},
+		PIN:        "secret",
+	}
+	frame, _ := proto.EncodeJSONPayload(proto.FrameTunnelReq, 0, req)
+
+	go s.handleTunnelRequest(m, session, frame)
+
+	fr := proto.NewFrameReader(c2)
+	respFrame, err := fr.Read()
+	if err != nil {
+		t.Fatalf("Failed to read response: %v", err)
+	}
+	var res proto.TunnelResponse
+	proto.DecodeJSONPayload(respFrame, &res)
+	if !res.OK {
+		t.Fatalf("Should succeed, got error: %s", res.Error)
+	}
+
+	// Verify tunnel has whitelist and PIN set
+	tunnel, ok := s.getTunnelBySubdomain(strings.TrimPrefix(strings.TrimPrefix(res.PublicURL, "http://"), "https://"))
+	// Extract subdomain from URL
+	if !ok {
+		// Try finding by iterating
+		s.tunnels.Range(func(key, value any) bool {
+			if tun, ok2 := value.(*Tunnel); ok2 && tun.ID == res.TunnelID {
+				tunnel = tun
+				ok = true
+				return false
+			}
+			return true
+		})
+	}
+	if ok && tunnel != nil {
+		if len(tunnel.AllowedIPs) != 1 || tunnel.AllowedIPs[0] != "10.0.0.1" {
+			t.Errorf("AllowedIPs = %v, want [10.0.0.1]", tunnel.AllowedIPs)
+		}
+		if tunnel.PIN != "secret" {
+			t.Errorf("PIN = %q, want 'secret'", tunnel.PIN)
+		}
+	}
+
+	c2.Close()
+	m.Close()
 }

@@ -244,3 +244,49 @@ func TestRingBufferGrowWithWrapAround(t *testing.T) {
 	// the data copying may not preserve all bytes correctly
 	t.Skip("Skip wrap-around grow test - needs investigation of growLocked behavior")
 }
+
+// TestRingBufferWriteAtMaxSize tests Write when buffer is at maxSize and can't grow
+func TestRingBufferWriteAtMaxSize(t *testing.T) {
+	rb := newRingBuffer(8)
+	// Set maxSize to a small value so we can test the cap
+	rb.mu.Lock()
+	rb.maxSize = 16
+	rb.mu.Unlock()
+
+	// Fill the buffer up to maxSize
+	data := make([]byte, 16)
+	for i := range data {
+		data[i] = byte(i)
+	}
+	n, err := rb.Write(data)
+	if err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+	if n != 16 {
+		t.Errorf("Write returned %d, want 16", n)
+	}
+
+	// Buffer is now full at maxSize, try to write more
+	extra := []byte("overflow data that cannot fit")
+	n, err = rb.Write(extra)
+	if err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+	// Should write 0 bytes since buffer is full and can't grow
+	if n != 0 {
+		t.Errorf("Write on full maxSize buffer returned %d, want 0", n)
+	}
+
+	// Read some data to make room, then write again
+	p := make([]byte, 4)
+	rb.Read(p)
+
+	n, err = rb.Write([]byte("abcd"))
+	if err != nil {
+		t.Fatalf("Write after read failed: %v", err)
+	}
+	if n != 4 {
+		t.Errorf("Write after read returned %d, want 4", n)
+	}
+}
+
