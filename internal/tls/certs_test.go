@@ -620,10 +620,33 @@ func TestManagerFields(t *testing.T) {
 	}
 }
 
-// Note: TestGenerateSelfSignedKeyGenError, TestGenerateSelfSignedRandIntError,
-// and TestGetCertificateGenerateError were removed because ecdsa.GenerateKey
-// and rand.Int errors are no longer handled (these paths cannot fail with
-// P256 curve and crypto/rand on any supported platform).
+// TestGetCertificateGenerateError tests GetCertificate when generateSelfSigned fails.
+func TestGetCertificateGenerateError(t *testing.T) {
+	dir, err := os.MkdirTemp("", "wirerift-tls-geterr-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	m, _ := NewManager(Config{
+		Domain:   "test.local",
+		CertDir:  dir,
+		AutoCert: true,
+	})
+
+	// Initialize CA first
+	m.generateSelfSigned("warmup.test.local")
+
+	// Corrupt the CA to make x509.CreateCertificate fail
+	m.caCert.PublicKeyAlgorithm = x509.Ed25519
+	m.caCert.PublicKey = "not-a-real-key"
+
+	hello := &tls.ClientHelloInfo{ServerName: "fail.test.local"}
+	_, err = m.GetCertificate(hello)
+	if err == nil {
+		t.Error("Expected error from GetCertificate with corrupted CA")
+	}
+}
 
 // TestSaveCertificatePemEncodeError tests saveCertificate when pem.Encode fails for cert
 func TestSaveCertificatePemEncodeError(t *testing.T) {

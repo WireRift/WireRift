@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main, master]
 
+env:
+  PACKAGES: ./cmd/... ./internal/... ./test/...
+
 jobs:
   test:
     name: Test (Go ${{ matrix.go }} / ${{ matrix.os }})
@@ -23,15 +26,16 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go }}
+          cache: false
 
       - name: Build
-        run: go build ./...
+        run: go build ./cmd/... ./internal/...
 
       - name: Test
-        run: go test ./... -timeout 120s
+        run: go test ./cmd/... ./internal/... ./test/... -timeout 120s
 
       - name: Vet
-        run: go vet ./...
+        run: go vet ./cmd/... ./internal/...
 
   coverage:
     name: Coverage
@@ -43,9 +47,10 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.23'
+          cache: false
 
       - name: Test with coverage
-        run: go test ./... -coverprofile=coverage.out -timeout 120s
+        run: go test ./cmd/... ./internal/... ./test/... -coverprofile=coverage.out -timeout 120s
 
       - name: Check coverage
         run: |

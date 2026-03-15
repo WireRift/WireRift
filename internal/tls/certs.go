@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"net"
 	"os"
@@ -167,7 +168,7 @@ func (m *Manager) generateSelfSigned(host string) (*tls.Certificate, error) {
 	// Save to disk
 	if err := m.saveCertificate(host, certDER, keyDER); err != nil {
 		// Log but don't fail
-		fmt.Fprintf(os.Stderr, "warning: failed to save certificate: %v\n", err)
+		slog.Warn("failed to save certificate", "host", host, "error", err)
 	}
 
 	return cert, nil
