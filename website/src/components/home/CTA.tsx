@@ -1,62 +1,63 @@
 import { Link } from 'react-router'
 import { motion } from 'framer-motion'
-import { ArrowRight, Terminal } from 'lucide-react'
-import { Button } from '@/components/ui/Button'
-import { CopyButton } from '@/components/ui/CopyButton'
+import { ArrowRight, Copy, Check } from 'lucide-react'
 import { SITE } from '@/lib/constants'
+import { useState, useCallback } from 'react'
 
 export function CTA() {
   const installCmd = SITE.installCommand
+  const [copied, setCopied] = useState(false)
+  const copy = useCallback(() => {
+    navigator.clipboard.writeText(installCmd)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }, [installCmd])
 
   return (
     <section className="py-20 md:py-28">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true, margin: '-100px' }}
           transition={{ duration: 0.5 }}
-          className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-primary-600 via-accent-600 to-primary-700 p-10 md:p-16 text-center"
+          className="relative overflow-hidden rounded-3xl p-10 md:p-16 text-center"
+          style={{
+            background: 'linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%)',
+          }}
         >
-          {/* Background decoration */}
-          <div className="absolute inset-0 opacity-10">
-            <div className="absolute top-0 left-0 w-72 h-72 rounded-full bg-white blur-3xl -translate-x-1/2 -translate-y-1/2" />
-            <div className="absolute bottom-0 right-0 w-96 h-96 rounded-full bg-white blur-3xl translate-x-1/3 translate-y-1/3" />
-          </div>
+          {/* Subtle glow */}
+          <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[300px] rounded-full opacity-20"
+            style={{ background: 'radial-gradient(ellipse, rgba(99,102,241,0.4) 0%, transparent 70%)' }} />
 
           <div className="relative">
             <h2 className="text-3xl md:text-4xl font-bold text-white mb-4">
               Ready to tear a rift?
             </h2>
-            <p className="text-lg text-white/80 max-w-xl mx-auto mb-8">
+            <p className="text-base md:text-lg text-white/50 max-w-lg mx-auto mb-10">
               Get WireRift running in under a minute. Self-hosted, zero dependencies, production ready.
             </p>
 
             {/* Install command */}
-            <div className="inline-flex items-center gap-2 px-4 py-3 rounded-xl bg-black/20 backdrop-blur-sm border border-white/10 font-mono text-sm text-white/90 mb-8">
-              <Terminal className="w-4 h-4 shrink-0 text-white/60" />
-              <span className="truncate max-w-[300px] sm:max-w-none">{installCmd}</span>
-              <CopyButton text={installCmd} className="text-white/60 hover:text-white hover:bg-white/10" />
+            <div className="inline-flex items-center gap-3 px-5 py-3 rounded-xl bg-white/[0.06] border border-white/[0.08] font-mono text-sm mb-10">
+              <span className="text-white/30 select-none">$</span>
+              <span className="text-white/70 truncate max-w-[280px] sm:max-w-none">{installCmd}</span>
+              <button onClick={copy} className="shrink-0 p-1 rounded text-white/30 hover:text-white transition-colors cursor-pointer" aria-label="Copy">
+                {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+              </button>
             </div>
 
             <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
               <Link to="/docs/getting-started">
-                <Button
-                  size="lg"
-                  className="bg-white text-primary-700 hover:bg-white/90 hover:text-primary-800 from-white to-white"
-                >
+                <button className="px-7 py-3 text-[13px] font-bold uppercase tracking-[0.08em] rounded-xl bg-white text-[#0f172a] hover:bg-white/90 shadow-lg shadow-white/5 transition-all cursor-pointer inline-flex items-center gap-2">
                   Get Started
                   <ArrowRight className="w-4 h-4" />
-                </Button>
+                </button>
               </Link>
-              <Link to="/docs/quick-start">
-                <Button
-                  variant="ghost"
-                  size="lg"
-                  className="text-white/90 hover:text-white hover:bg-white/10"
-                >
-                  View Examples
-                </Button>
+              <Link to="/download">
+                <button className="px-7 py-3 text-[13px] font-bold uppercase tracking-[0.08em] rounded-xl text-white/60 border border-white/[0.1] hover:bg-white/[0.05] hover:text-white/80 transition-all cursor-pointer">
+                  Download Binaries
+                </button>
               </Link>
             </div>
           </div>
