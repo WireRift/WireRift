@@ -1,0 +1,448 @@
+@import "tailwindcss";
+
+/* ============================================
+   WireRift Design System
+   ============================================ */
+
+@theme {
+  --font-sans: 'Geist', system-ui, -apple-system, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+
+  --color-primary-50: #eff6ff;
+  --color-primary-100: #dbeafe;
+  --color-primary-200: #bfdbfe;
+  --color-primary-300: #93c5fd;
+  --color-primary-400: #60a5fa;
+  --color-primary-500: #3b82f6;
+  --color-primary-600: #2563eb;
+  --color-primary-700: #1d4ed8;
+  --color-primary-800: #1e40af;
+  --color-primary-900: #1e3a8a;
+
+  --color-accent-50: #f5f3ff;
+  --color-accent-100: #ede9fe;
+  --color-accent-200: #ddd6fe;
+  --color-accent-300: #c4b5fd;
+  --color-accent-400: #a78bfa;
+  --color-accent-500: #8b5cf6;
+  --color-accent-600: #7c3aed;
+  --color-accent-700: #6d28d9;
+  --color-accent-800: #5b21b6;
+  --color-accent-900: #4c1d95;
+}
+
+/* ============================================
+   Light Theme (default)
+   ============================================ */
+:root,
+[data-theme="light"] {
+  --color-bg: #ffffff;
+  --color-bg-secondary: #f8fafc;
+  --color-bg-tertiary: #f1f5f9;
+  --color-bg-elevated: #ffffff;
+  --color-bg-code: #f1f5f9;
+  --color-bg-hero: linear-gradient(135deg, #f0f4ff 0%, #faf5ff 50%, #f0f9ff 100%);
+
+  --color-text: #334155;
+  --color-text-heading: #0f172a;
+  --color-text-muted: #64748b;
+  --color-text-inverse: #ffffff;
+
+  --color-border: #e2e8f0;
+  --color-border-light: #f1f5f9;
+
+  --color-accent-gradient: linear-gradient(135deg, #3b82f6, #8b5cf6);
+  --color-accent-gradient-text: linear-gradient(135deg, #2563eb, #7c3aed);
+
+  --color-callout-info-bg: #eff6ff;
+  --color-callout-info-border: #93c5fd;
+  --color-callout-info-text: #1e40af;
+  --color-callout-warning-bg: #fffbeb;
+  --color-callout-warning-border: #fcd34d;
+  --color-callout-warning-text: #92400e;
+  --color-callout-error-bg: #fef2f2;
+  --color-callout-error-border: #fca5a5;
+  --color-callout-error-text: #991b1b;
+  --color-callout-success-bg: #f0fdf4;
+  --color-callout-success-border: #86efac;
+  --color-callout-success-text: #166534;
+
+  --color-header-bg: rgba(255, 255, 255, 0.8);
+  --color-sidebar-bg: #f8fafc;
+  --color-sidebar-active: #eff6ff;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.07), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -4px rgba(0, 0, 0, 0.04);
+  --shadow-glow: 0 0 40px rgba(59, 130, 246, 0.15);
+
+  --codeshine-theme: github-light;
+}
+
+/* ============================================
+   Dark Theme
+   ============================================ */
+[data-theme="dark"] {
+  --color-bg: #0b1120;
+  --color-bg-secondary: #0f1729;
+  --color-bg-tertiary: #131b2e;
+  --color-bg-elevated: #141d30;
+  --color-bg-code: #131b2e;
+  --color-bg-hero: linear-gradient(135deg, #0b1120 0%, #1a0f2e 50%, #0b1120 100%);
+
+  --color-text: #94a3b8;
+  --color-text-heading: #f1f5f9;
+  --color-text-muted: #64748b;
+  --color-text-inverse: #0f172a;
+
+  --color-border: #1e293b;
+  --color-border-light: #1e293b;
+
+  --color-accent-gradient: linear-gradient(135deg, #3b82f6, #8b5cf6);
+  --color-accent-gradient-text: linear-gradient(135deg, #60a5fa, #a78bfa);
+
+  --color-callout-info-bg: rgba(59, 130, 246, 0.1);
+  --color-callout-info-border: rgba(59, 130, 246, 0.3);
+  --color-callout-info-text: #93c5fd;
+  --color-callout-warning-bg: rgba(245, 158, 11, 0.1);
+  --color-callout-warning-border: rgba(245, 158, 11, 0.3);
+  --color-callout-warning-text: #fcd34d;
+  --color-callout-error-bg: rgba(239, 68, 68, 0.1);
+  --color-callout-error-border: rgba(239, 68, 68, 0.3);
+  --color-callout-error-text: #fca5a5;
+  --color-callout-success-bg: rgba(34, 197, 94, 0.1);
+  --color-callout-success-border: rgba(34, 197, 94, 0.3);
+  --color-callout-success-text: #86efac;
+
+  --color-header-bg: rgba(11, 17, 32, 0.85);
+  --color-sidebar-bg: #0f1729;
+  --color-sidebar-active: rgba(59, 130, 246, 0.1);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -2px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -4px rgba(0, 0, 0, 0.3);
+  --shadow-glow: 0 0 60px rgba(59, 130, 246, 0.2);
+
+  --codeshine-theme: tokyo-night;
+}
+
+/* ============================================
+   Base Styles
+   ============================================ */
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+#root {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ============================================
+   Typography
+   ============================================ */
+h1, h2, h3, h4, h5, h6 {
+  color: var(--color-text-heading);
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* ============================================
+   Scrollbar
+   ============================================ */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-muted);
+}
+
+/* ============================================
+   Codeshine Overrides
+   ============================================ */
+.codeshine {
+  border-radius: 0.75rem !important;
+  font-family: var(--font-mono) !important;
+  font-size: 0.875rem !important;
+  line-height: 1.7 !important;
+  border: 1px solid var(--color-border) !important;
+}
+
+.codeshine pre {
+  margin: 0 !important;
+}
+
+/* ============================================
+   Hero Particles (CSS-only)
+   ============================================ */
+@keyframes float {
+  0%, 100% { transform: translateY(0) translateX(0); }
+  25% { transform: translateY(-20px) translateX(10px); }
+  50% { transform: translateY(-10px) translateX(-5px); }
+  75% { transform: translateY(-30px) translateX(15px); }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 0.8; }
+}
+
+@keyframes gradient-shift {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@keyframes hero-grid-fade {
+  0% { opacity: 0.03; }
+  50% { opacity: 0.08; }
+  100% { opacity: 0.03; }
+}
+
+.hero-gradient-bg {
+  background: var(--color-bg-hero);
+  position: relative;
+  overflow: hidden;
+}
+
+.hero-gradient-bg::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 600px 400px at 30% 20%, rgba(59, 130, 246, 0.12) 0%, transparent 70%),
+    radial-gradient(ellipse 500px 350px at 70% 60%, rgba(139, 92, 246, 0.10) 0%, transparent 70%),
+    radial-gradient(ellipse 400px 300px at 50% 80%, rgba(59, 130, 246, 0.08) 0%, transparent 70%);
+  animation: gradient-shift 8s ease-in-out infinite;
+  background-size: 200% 200%;
+  pointer-events: none;
+}
+
+.hero-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(var(--color-text-muted) 1px, transparent 1px),
+    linear-gradient(90deg, var(--color-text-muted) 1px, transparent 1px);
+  background-size: 60px 60px;
+  animation: hero-grid-fade 6s ease-in-out infinite;
+  mask-image: radial-gradient(ellipse 80% 60% at 50% 40%, black 0%, transparent 70%);
+  -webkit-mask-image: radial-gradient(ellipse 80% 60% at 50% 40%, black 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.particle {
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--color-primary-400);
+  opacity: 0.4;
+  animation: float 6s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.particle:nth-child(2) {
+  animation-delay: -1s;
+  animation-duration: 8s;
+  background: var(--color-accent-400);
+}
+
+.particle:nth-child(3) {
+  animation-delay: -2s;
+  animation-duration: 7s;
+}
+
+.particle:nth-child(4) {
+  animation-delay: -3s;
+  animation-duration: 9s;
+  background: var(--color-accent-300);
+}
+
+.particle:nth-child(5) {
+  animation-delay: -4s;
+  animation-duration: 10s;
+  background: var(--color-primary-300);
+}
+
+.particle:nth-child(6) {
+  animation-delay: -0.5s;
+  animation-duration: 6.5s;
+}
+
+.particle:nth-child(7) {
+  animation-delay: -2.5s;
+  animation-duration: 8.5s;
+  background: var(--color-accent-500);
+}
+
+.particle:nth-child(8) {
+  animation-delay: -3.5s;
+  animation-duration: 7.5s;
+  background: var(--color-primary-500);
+}
+
+/* ============================================
+   Gradient Text Utility
+   ============================================ */
+.gradient-text {
+  background: var(--color-accent-gradient-text);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* ============================================
+   Glow Effect
+   ============================================ */
+.glow-border {
+  position: relative;
+}
+
+.glow-border::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: var(--color-accent-gradient);
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  -webkit-mask-composite: xor;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+}
+
+.glow-border:hover::after {
+  opacity: 1;
+}
+
+/* ============================================
+   Doc Content Styles
+   ============================================ */
+.doc-content h1 {
+  font-size: 2rem;
+  font-weight: 700;
+  margin-bottom: 1rem;
+  margin-top: 0;
+}
+
+.doc-content h2 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin-top: 2.5rem;
+  margin-bottom: 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.doc-content h3 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin-top: 2rem;
+  margin-bottom: 0.75rem;
+}
+
+.doc-content p {
+  margin-bottom: 1rem;
+  line-height: 1.75;
+}
+
+.doc-content ul,
+.doc-content ol {
+  margin-bottom: 1rem;
+  padding-left: 1.5rem;
+}
+
+.doc-content li {
+  margin-bottom: 0.5rem;
+  line-height: 1.75;
+}
+
+.doc-content code:not(.codeshine code) {
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  background: var(--color-bg-code);
+  color: var(--color-text-heading);
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+  border: 1px solid var(--color-border);
+}
+
+.doc-content .codeshine {
+  margin-bottom: 1.5rem;
+}
+
+.doc-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 1.5rem;
+  font-size: 0.875rem;
+}
+
+.doc-content th,
+.doc-content td {
+  padding: 0.75rem 1rem;
+  text-align: left;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.doc-content th {
+  font-weight: 600;
+  color: var(--color-text-heading);
+  background: var(--color-bg-tertiary);
+}
+
+.doc-content strong {
+  color: var(--color-text-heading);
+  font-weight: 600;
+}
+
+/* ============================================
+   Selection
+   ============================================ */
+::selection {
+  background: rgba(59, 130, 246, 0.3);
+  color: inherit;
+}
+
+/* ============================================
+   Focus
+   ============================================ */
+:focus-visible {
+  outline: 2px solid var(--color-primary-500);
+  outline-offset: 2px;
+}

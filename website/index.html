@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <title>WireRift - Self-Hosted Tunnel Server</title>
+    <meta name="description" content="Tear a rift through the wire. Expose localhost to the world. Self-hosted tunnel server written in Go with zero dependencies." />
+    <meta name="keywords" content="wirerift, tunnel, ngrok, self-hosted, go, golang, http tunnel, tcp tunnel, localhost" />
+
+    <!-- Open Graph -->
+    <meta property="og:title" content="WireRift - Self-Hosted Tunnel Server" />
+    <meta property="og:description" content="Tear a rift through the wire. Expose localhost to the world." />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://wirerift.com" />
+
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="WireRift - Self-Hosted Tunnel Server" />
+    <meta name="twitter:description" content="Tear a rift through the wire. Expose localhost to the world." />
+
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+    <!-- FOUC prevention -->
+    <script>
+      (function() {
+        var theme = localStorage.getItem('wirerift-theme');
+        if (theme === 'dark' || (!theme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+          document.documentElement.setAttribute('data-theme', 'dark');
+        } else {
+          document.documentElement.setAttribute('data-theme', 'light');
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
