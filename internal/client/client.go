@@ -568,7 +568,8 @@ func (c *Client) handleHTTPStream(stream *mux.Stream) {
 	req.URL.Host = tunnel.LocalAddr
 	req.RequestURI = ""
 
-	resp, err := http.DefaultClient.Do(req)
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		// Send 502 response
 		errResp := "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n"

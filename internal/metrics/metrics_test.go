@@ -132,9 +132,12 @@ func TestPrometheusFormat(t *testing.T) {
 
 	output := c.PrometheusFormat()
 
-	// Verify format contains expected headers
-	if !strings.Contains(output, "# HELP WireRift Metrics") {
+	// Verify format contains expected Prometheus-compliant headers
+	if !strings.Contains(output, "# HELP wirerift_connections_total") {
 		t.Errorf("PrometheusFormat() output should contain expected headers")
+	}
+	if !strings.Contains(output, "# TYPE wirerift_connections_total counter") {
+		t.Errorf("PrometheusFormat() output should contain TYPE with metric name")
 	}
 }
 

@@ -56,7 +56,7 @@ func (p *HTTPProxy) ProxyRequest(w http.ResponseWriter, r *http.Request, tunnel 
 		return fmt.Errorf("write request: %w", err)
 	}
 
-	respData, err := io.ReadAll(stream)
+	respData, err := io.ReadAll(io.LimitReader(stream, 64*1024*1024))
 	if err != nil {
 		return fmt.Errorf("read response: %w", err)
 	}
@@ -128,9 +128,9 @@ func SerializeRequest(r *http.Request) ([]byte, error) {
 	// End headers
 	buf.WriteString("\r\n")
 
-	// Write body
+	// Write body (limit to 32 MB to prevent memory exhaustion)
 	if r.Body != nil {
-		body, err := io.ReadAll(r.Body)
+		body, err := io.ReadAll(io.LimitReader(r.Body, 32*1024*1024))
 		if err != nil {
 			return nil, err
 		}

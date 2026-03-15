@@ -235,7 +235,10 @@ func BasicAuth(username, password string) func(http.Handler) http.Handler {
 				return
 			}
 
-			if creds[0] != username || creds[1] != password {
+			// Use constant-time comparison to prevent timing attacks
+			userMatch := subtle.ConstantTimeCompare([]byte(creds[0]), []byte(username))
+			passMatch := subtle.ConstantTimeCompare([]byte(creds[1]), []byte(password))
+			if userMatch&passMatch != 1 {
 				w.Header().Set("WWW-Authenticate", `Basic realm="WireRift"`)
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
@@ -246,13 +249,25 @@ func BasicAuth(username, password string) func(http.Handler) http.Handler {
 	}
 }
 
-// generateRandomString generates a random string of the given length.
+// generateRandomString generates a cryptographically random string of the given length.
+// Uses rejection sampling to avoid modulo bias.
 func generateRandomString(length int) string {
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	b := make([]byte, length)
-	rand.Read(b)
-	for i := range b {
-		b[i] = charset[int(b[i])%len(charset)]
+	const maxByte = byte(256 - (256 % len(charset))) // 256 - (256%62) = 252
+	result := make([]byte, length)
+	buf := make([]byte, length+(length/4)) // extra bytes for rejected samples
+	filled := 0
+	for filled < length {
+		rand.Read(buf)
+		for _, b := range buf {
+			if b < maxByte {
+				result[filled] = charset[b%byte(len(charset))]
+				filled++
+				if filled == length {
+					break
+				}
+			}
+		}
 	}
-	return string(b)
+	return string(result)
 }

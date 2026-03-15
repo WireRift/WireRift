@@ -130,26 +130,33 @@ func (c *Collector) PrometheusFormat() string {
 	m := c.Snapshot()
 	uptime := c.Uptime().Seconds()
 
-	return fmt.Sprintf(`# HELP WireRift Metrics
-# TYPE counter
+	return fmt.Sprintf(`# HELP wirerift_connections_total Total number of connections.
+# TYPE wirerift_connections_total counter
 wirerift_connections_total %d
-# TYPE gauge
+# HELP wirerift_connections_active Current active connections.
+# TYPE wirerift_connections_active gauge
 wirerift_connections_active %d
-# TYPE counter
+# HELP wirerift_tunnels_total Total number of tunnels created.
+# TYPE wirerift_tunnels_total counter
 wirerift_tunnels_total %d
-# TYPE gauge
+# HELP wirerift_tunnels_active Current active tunnels.
+# TYPE wirerift_tunnels_active gauge
 wirerift_tunnels_active %d
-# TYPE counter
+# HELP wirerift_requests_total Total number of requests.
+# TYPE wirerift_requests_total counter
 wirerift_requests_total %d
-# TYPE counter
+# HELP wirerift_bytes_in Total bytes received.
+# TYPE wirerift_bytes_in counter
 wirerift_bytes_in %d
-# TYPE counter
+# HELP wirerift_bytes_out Total bytes sent.
+# TYPE wirerift_bytes_out counter
 wirerift_bytes_out %d
-# TYPE counter
+# HELP wirerift_errors_total Total number of errors.
+# TYPE wirerift_errors_total counter
 wirerift_errors_total %d
-# TYPE gauge
+# HELP wirerift_uptime_seconds Server uptime in seconds.
+# TYPE wirerift_uptime_seconds gauge
 wirerift_uptime_seconds %d
-
 `,
 		m.connectionsTotal,
 		m.connectionsActive,

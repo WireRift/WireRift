@@ -11,15 +11,19 @@ var (
 	ErrBufferEmpty = errors.New("buffer is empty")
 )
 
+// maxRingBufferSize is the maximum size a ring buffer can grow to (16 MB).
+const maxRingBufferSize = 16 * 1024 * 1024
+
 // ringBuffer is a circular buffer for stream data.
 // It is safe for concurrent use with proper locking.
 type ringBuffer struct {
-	buf  []byte
-	size int
-	r    int // read cursor
-	w    int // write cursor
-	full bool
-	mu   sync.Mutex
+	buf     []byte
+	size    int
+	maxSize int
+	r       int // read cursor
+	w       int // write cursor
+	full    bool
+	mu      sync.Mutex
 }
 
 // newRingBuffer creates a new ring buffer with the given initial size.
@@ -28,8 +32,9 @@ func newRingBuffer(size int) *ringBuffer {
 		size = 4096
 	}
 	return &ringBuffer{
-		buf:  make([]byte, size),
-		size: size,
+		buf:     make([]byte, size),
+		size:    size,
+		maxSize: maxRingBufferSize,
 	}
 }
 
@@ -48,7 +53,12 @@ func (rb *ringBuffer) Write(data []byte) (int, error) {
 	if available < len(data) {
 		// Grow buffer to fit data (up to maxSize)
 		newSize := rb.size + len(data) - available
-		rb.growLocked(newSize)
+		if newSize > rb.maxSize {
+			newSize = rb.maxSize
+		}
+		if newSize > rb.size {
+			rb.growLocked(newSize)
+		}
 	}
 
 	n := 0

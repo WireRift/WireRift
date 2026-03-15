@@ -489,9 +489,9 @@ func TestCORSPreflightNotAllowed(t *testing.T) {
 
 	corsHandler.ServeHTTP(rec, req)
 
-	// Still returns 204 for OPTIONS, but no CORS headers
-	if rec.Code != http.StatusNoContent {
-		t.Errorf("Status = %d, want %d", rec.Code, http.StatusNoContent)
+	// Returns 403 for OPTIONS from non-allowed origins
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("Status = %d, want %d", rec.Code, http.StatusForbidden)
 	}
 }
 

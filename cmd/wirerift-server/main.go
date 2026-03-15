@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/wirerift/wirerift/internal/auth"
 	"github.com/wirerift/wirerift/internal/config"
@@ -112,7 +113,9 @@ Environment Variables:
 
 	// Create auth manager
 	authMgr := auth.NewManager()
-	logger.Info("development token generated", "token", authMgr.DevToken())
+	devToken := authMgr.DevToken()
+	maskedToken := devToken[:8] + "..." + devToken[len(devToken)-4:]
+	logger.Info("development token generated", "token_prefix", maskedToken)
 
 	// Create domain manager
 	domainMgr := config.NewDomainManager(*domain)
@@ -198,8 +201,9 @@ Environment Variables:
 	// Wait for shutdown
 	<-ctx.Done()
 
-	// Shutdown dashboard (Shutdown with background context does not error)
-	shutdownCtx := context.Background()
+	// Shutdown dashboard with timeout
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
 	dashServer.Shutdown(shutdownCtx)
 
 	// Stop server (Stop always returns nil)

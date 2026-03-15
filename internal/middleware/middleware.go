@@ -2,6 +2,8 @@ package middleware
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -104,8 +106,12 @@ func CORS(allowedOrigins []string) func(http.Handler) http.Handler {
 				w.Header().Set("Access-Control-Max-Age", "86400")
 			}
 
-			// Handle preflight
+			// Handle preflight - only respond to allowed origins
 			if r.Method == http.MethodOptions {
+				if !allowed {
+					w.WriteHeader(http.StatusForbidden)
+					return
+				}
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}
@@ -153,14 +159,11 @@ func RequestID() func(http.Handler) http.Handler {
 	}
 }
 
-// generateRequestID generates a simple request ID
+// generateRequestID generates a cryptographically random request ID.
 func generateRequestID() string {
-	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	b := make([]byte, 16)
-	for i := range b {
-		b[i] = charset[(i*7+int(b[0]))%len(charset)]
-	}
-	return string(b)
+	b := make([]byte, 8)
+	rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 // Chain chains multiple middlewares together.

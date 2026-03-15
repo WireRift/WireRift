@@ -19,6 +19,7 @@ import (
 	"github.com/wirerift/wirerift/internal/mux"
 	"github.com/wirerift/wirerift/internal/proto"
 	"github.com/wirerift/wirerift/internal/ratelimit"
+	"github.com/wirerift/wirerift/internal/utils"
 )
 
 // Errors returned by server operations.
@@ -108,9 +109,10 @@ type Server struct {
 	nextPort     atomic.Int32
 
 	// Lifecycle
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	ctx       context.Context
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	startTime time.Time
 }
 
 // Session represents a client session.
@@ -169,6 +171,8 @@ func New(config Config, logger *slog.Logger) *Server {
 
 // Start starts the server.
 func (s *Server) Start() error {
+	s.startTime = time.Now()
+
 	// Start control plane listener
 	if err := s.startControlListener(); err != nil {
 		return fmt.Errorf("start control listener: %w", err)
@@ -191,6 +195,13 @@ func (s *Server) Start() error {
 	go func() {
 		defer s.wg.Done()
 		s.startSessionCleanup()
+	}()
+
+	// Start rate limiter eviction goroutine
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.startRateLimiterEviction()
 	}()
 
 	s.logger.Info("server started",
@@ -269,13 +280,24 @@ func (s *Server) acceptControlConnections() {
 	}
 }
 
-// generateSubdomain generates a random subdomain string.
+// generateSubdomain generates a random subdomain string using unbiased random.
 func generateSubdomain() string {
 	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
+	const maxByte = byte(256 - (256 % len(charset))) // reject biased bytes
 	b := make([]byte, 8)
-	rand.Read(b)
-	for i := range b {
-		b[i] = charset[int(b[i])%len(charset)]
+	buf := make([]byte, 12) // extra for rejections
+	filled := 0
+	for filled < 8 {
+		rand.Read(buf)
+		for _, v := range buf {
+			if v < maxByte {
+				b[filled] = charset[v%byte(len(charset))]
+				filled++
+				if filled == 8 {
+					break
+				}
+			}
+		}
 	}
 	return string(b)
 }
@@ -432,6 +454,14 @@ func (s *Server) handleTunnelRequest(m *mux.Mux, session *Session, frame *proto.
 		subdomain := req.Subdomain
 		if subdomain == "" {
 			subdomain = generateSubdomain()
+		}
+
+		// Validate subdomain
+		if !utils.IsValidSubdomain(subdomain) {
+			resp := &proto.TunnelResponse{OK: false, Error: "invalid subdomain"}
+			respFrame, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, 0, resp)
+			m.GetFrameWriter().Write(respFrame)
+			return
 		}
 
 		// Check if subdomain is taken
@@ -616,6 +646,7 @@ func (s *Server) proxyTCPConnection(conn net.Conn, tunnel *Tunnel, session *Sess
 	// Open a stream through the mux
 	stream, err := session.Mux.OpenStream()
 	if err != nil {
+		s.logger.Warn("failed to open stream for TCP proxy", "tunnel", tunnel.ID, "error", err)
 		return
 	}
 	defer stream.Close()
@@ -758,8 +789,8 @@ func (s *Server) forwardHTTPRequest(w http.ResponseWriter, r *http.Request, sess
 		return
 	}
 
-	// 4. Read response data from the stream
-	respData, err := io.ReadAll(stream)
+	// 4. Read response data from the stream (limit to 64 MB to prevent memory exhaustion)
+	respData, err := io.ReadAll(io.LimitReader(stream, 64*1024*1024))
 	if err != nil {
 		http.Error(w, "Failed to read response from stream", http.StatusBadGateway)
 		return
@@ -860,11 +891,13 @@ func (s *Server) getSession(id string) (*Session, bool) {
 
 // allocatePort allocates a TCP port for a tunnel.
 func (s *Server) allocatePort() (int, error) {
-	for i := 0; i < s.tcpPortEnd-s.tcpPortStart; i++ {
-		port := int(s.nextPort.Add(1))
-		if port > s.tcpPortEnd {
-			port = s.tcpPortStart
-			s.nextPort.Store(int32(port))
+	portRange := s.tcpPortEnd - s.tcpPortStart + 1
+	for i := 0; i < portRange; i++ {
+		raw := int(s.nextPort.Add(1))
+		// Wrap around using modulo to avoid race in store-back
+		port := s.tcpPortStart + ((raw - s.tcpPortStart) % portRange)
+		if port < s.tcpPortStart {
+			port += portRange
 		}
 
 		if _, loaded := s.tcpPorts.LoadOrStore(port, true); !loaded {
@@ -901,12 +934,9 @@ func extractSubdomain(host, domain string) string {
 	return host[:len(host)-len(suffix)]
 }
 
-// startTime tracks when the server was started
-var startTime = time.Now()
-
 // StartTime returns when the server was started.
 func (s *Server) StartTime() time.Time {
-	return startTime
+	return s.startTime
 }
 
 // ControlAddr returns the control listener address (useful when using port 0).
@@ -1024,6 +1054,24 @@ func (s *Server) startSessionCleanup() {
 			return
 		case <-ticker.C:
 			s.cleanupInactiveSessions()
+		}
+	}
+}
+
+// startRateLimiterEviction periodically evicts stale rate limiters to prevent memory leaks.
+func (s *Server) startRateLimiterEviction() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-ticker.C:
+			evicted := s.rateLimiter.Evict(10 * time.Minute)
+			if evicted > 0 {
+				s.logger.Debug("evicted stale rate limiters", "count", evicted)
+			}
 		}
 	}
 }

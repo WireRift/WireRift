@@ -144,11 +144,24 @@ func TestStatsEmpty(t *testing.T) {
 }
 
 func TestStartTime(t *testing.T) {
-	s := New(DefaultConfig(), nil)
+	cfg := DefaultConfig()
+	cfg.ControlAddr = "127.0.0.1:0"
+	cfg.HTTPAddr = "127.0.0.1:0"
+	s := New(cfg, nil)
+
+	// Before Start, startTime should be zero
+	if !s.StartTime().IsZero() {
+		t.Error("StartTime should be zero before Start()")
+	}
+
+	if err := s.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer s.Stop()
 
 	startTime := s.StartTime()
 	if startTime.IsZero() {
-		t.Error("StartTime should not be zero")
+		t.Error("StartTime should not be zero after Start()")
 	}
 }
 
@@ -1967,8 +1980,8 @@ func TestHandleTunnelRequestTCPPortExhaustion(t *testing.T) {
 	s.tcpPortStart = 20000
 	s.tcpPortEnd = 20000
 	s.nextPort.Store(int32(20000))
-	// Allocate the one possible port
-	s.tcpPorts.Store(20001, true)
+	// Allocate the only possible port so allocation fails
+	s.tcpPorts.Store(20000, true)
 
 	c1, c2 := net.Pipe()
 	m := mux.New(c1, mux.DefaultConfig())

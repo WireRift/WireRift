@@ -109,11 +109,15 @@ func getEnv(key, defaultVal string) string {
 }
 
 // handleSignals cancels the context on interrupt/SIGTERM.
-func handleSignals(cancel context.CancelFunc) {
+func handleSignals(ctx context.Context, cancel context.CancelFunc) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	<-sigCh
-	cancel()
+	defer signal.Stop(sigCh)
+	select {
+	case <-sigCh:
+		cancel()
+	case <-ctx.Done():
+	}
 }
 
 func createLogger(verbose bool) *slog.Logger {
@@ -165,6 +169,9 @@ func doHTTP(parentCtx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("invalid port: %s", fargs[0])
 	}
+	if localPort < 1 || localPort > 65535 {
+		return fmt.Errorf("port must be between 1 and 65535, got %d", localPort)
+	}
 
 	// Subdomain from positional arg or flag
 	reqSubdomain := *subdomain
@@ -185,7 +192,7 @@ func doHTTP(parentCtx context.Context, args []string) error {
 	defer cancel()
 
 	// Signal handling: cancel context on interrupt
-	go handleSignals(cancel)
+	go handleSignals(ctx, cancel)
 
 	// Connect to server
 	if err := c.Connect(); err != nil {
@@ -253,6 +260,9 @@ func doTCP(parentCtx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("invalid port: %s", fargs[0])
 	}
+	if localPort < 1 || localPort > 65535 {
+		return fmt.Errorf("port must be between 1 and 65535, got %d", localPort)
+	}
 
 	logger := createLogger(*verbose)
 
@@ -267,7 +277,7 @@ func doTCP(parentCtx context.Context, args []string) error {
 	defer cancel()
 
 	// Signal handling: cancel context on interrupt
-	go handleSignals(cancel)
+	go handleSignals(ctx, cancel)
 
 	// Connect to server
 	if err := c.Connect(); err != nil {
@@ -327,7 +337,7 @@ func doStart(parentCtx context.Context, args []string) error {
 	defer cancel()
 
 	// Signal handling: cancel context on interrupt
-	go handleSignals(cancel)
+	go handleSignals(ctx, cancel)
 
 	startCfg := client.DefaultConfig()
 	startCfg.ServerAddr = cfg.Server
@@ -432,7 +442,11 @@ func loadConfig(path string) (*ConfigFile, error) {
 			case "type":
 				cfg.Tunnels[tunnelIdx].Type = value
 			case "local_port":
-				cfg.Tunnels[tunnelIdx].LocalPort, _ = strconv.Atoi(value)
+				port, err := strconv.Atoi(value)
+				if err != nil {
+					return nil, fmt.Errorf("invalid local_port %q: %w", value, err)
+				}
+				cfg.Tunnels[tunnelIdx].LocalPort = port
 			case "subdomain":
 				cfg.Tunnels[tunnelIdx].Subdomain = value
 			}
@@ -489,7 +503,10 @@ func doList(args []string) error {
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
+	if err != nil {
+		return fmt.Errorf("failed to read response: %v", err)
+	}
 
 	if *jsonOutput {
 		fmt.Println(string(body))
@@ -590,7 +607,7 @@ tunnels:
   #   local_port: 25565
 `
 
-	if err := os.WriteFile(configFile, []byte(configContent), 0644); err != nil {
+	if err := os.WriteFile(configFile, []byte(configContent), 0600); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to write config: %v\n", err)
 		os.Exit(1)
 	}

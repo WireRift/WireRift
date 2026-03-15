@@ -203,21 +203,25 @@ func (m *Manager) saveCertificate(host string, certDER, keyDER []byte) error {
 	certPath := filepath.Join(m.config.CertDir, host+".crt")
 	keyPath := filepath.Join(m.config.CertDir, host+".key")
 
-	// Write certificate
-	certFile, err := os.Create(certPath)
+	// Write certificate (0600 to protect against unauthorized reads)
+	certFile, err := os.OpenFile(certPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
 	}
-	pem.Encode(certFile, &pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-	certFile.Close()
+	defer certFile.Close()
+	if err := pem.Encode(certFile, &pem.Block{Type: "CERTIFICATE", Bytes: certDER}); err != nil {
+		return fmt.Errorf("encode certificate: %w", err)
+	}
 
 	// Write key
 	keyFile, err := os.OpenFile(keyPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
 	}
-	pem.Encode(keyFile, &pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
-	keyFile.Close()
+	defer keyFile.Close()
+	if err := pem.Encode(keyFile, &pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}); err != nil {
+		return fmt.Errorf("encode private key: %w", err)
+	}
 	return nil
 }
 
@@ -230,7 +234,6 @@ func (m *Manager) TLSConfig() *tls.Config {
 			tls.X25519,
 			tls.CurveP256,
 		},
-		PreferServerCipherSuites: true,
 		CipherSuites: []uint16{
 			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
 			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,

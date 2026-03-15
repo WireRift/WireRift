@@ -36,7 +36,8 @@ type Stream struct {
 	state    atomic.Int32
 	closeOnce sync.Once
 
-	// Metadata
+	// Metadata (protected by metaMu)
+	metaMu     sync.RWMutex
 	remoteAddr string
 	protocol   string
 	tunnelID   string
@@ -65,11 +66,15 @@ func (s *Stream) ID() uint32 {
 
 // RemoteAddr returns the remote address of the connection.
 func (s *Stream) RemoteAddr() string {
+	s.metaMu.RLock()
+	defer s.metaMu.RUnlock()
 	return s.remoteAddr
 }
 
 // Protocol returns the protocol (http, tcp, etc.).
 func (s *Stream) Protocol() string {
+	s.metaMu.RLock()
+	defer s.metaMu.RUnlock()
 	return s.protocol
 }
 
@@ -83,11 +88,15 @@ func (s *Stream) LocalAddr() net.Addr {
 
 // TunnelID returns the tunnel ID associated with this stream.
 func (s *Stream) TunnelID() string {
+	s.metaMu.RLock()
+	defer s.metaMu.RUnlock()
 	return s.tunnelID
 }
 
 // SetMetadata sets stream metadata.
 func (s *Stream) SetMetadata(remoteAddr, protocol, tunnelID string) {
+	s.metaMu.Lock()
+	defer s.metaMu.Unlock()
 	s.remoteAddr = remoteAddr
 	s.protocol = protocol
 	s.tunnelID = tunnelID

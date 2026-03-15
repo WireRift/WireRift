@@ -125,6 +125,13 @@ func (l *Limiter) SetRate(rate float64) {
 	l.rate = rate
 }
 
+// LastUpdate returns the last time this limiter was accessed.
+func (l *Limiter) LastUpdate() time.Time {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.lastUpdate
+}
+
 // Tokens returns the current number of tokens.
 func (l *Limiter) Tokens() float64 {
 	l.mu.Lock()
@@ -189,6 +196,22 @@ func (m *Manager) Clear() {
 		m.limiters.Delete(key)
 		return true
 	})
+}
+
+// Evict removes limiters that have not been accessed for the given duration.
+// This prevents unbounded growth of the limiters map from unique client IPs.
+func (m *Manager) Evict(maxAge time.Duration) int {
+	cutoff := time.Now().Add(-maxAge)
+	evicted := 0
+	m.limiters.Range(func(key, value any) bool {
+		limiter := value.(*Limiter)
+		if limiter.LastUpdate().Before(cutoff) {
+			m.limiters.Delete(key)
+			evicted++
+		}
+		return true
+	})
+	return evicted
 }
 
 // SlidingWindow implements a sliding window rate limiter.
