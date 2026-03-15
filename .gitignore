@@ -31,3 +31,8 @@ Thumbs.db
 *.test
 *.out
 *.cov
+
+# Coverage reports
+*_cov.html
+cov*.html
+coverage.html
