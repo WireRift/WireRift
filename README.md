@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="logo.png" alt="WireRift Logo" width="200">
-</p>
-
 <h1 align="center">WireRift</h1>
 
 <p align="center">
