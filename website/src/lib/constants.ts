@@ -2,7 +2,7 @@ export const SITE = {
   name: 'WireRift',
   tagline: 'Tear a rift through the wire. Expose localhost to the world.',
   description: 'Self-hosted tunnel server written in Go with zero dependencies. Expose your local services to the internet securely.',
-  version: '1.0.0',
+  version: '1.2.0',
   domain: 'wirerift.com',
   url: 'https://wirerift.com',
   repo: 'https://github.com/wirerift/wirerift',
@@ -67,8 +67,33 @@ export const FEATURES = [
   },
   {
     icon: 'LayoutDashboard',
-    title: 'Built-in Dashboard',
-    description: 'Web UI on port 4040 for monitoring tunnels, sessions, and server statistics.',
+    title: 'Traffic Inspector',
+    description: 'Real-time request/response capture in the dashboard. Replay any request with one click.',
+  },
+  {
+    icon: 'Lock',
+    title: 'Basic Auth',
+    description: 'HTTP Basic Authentication per tunnel with constant-time credential comparison.',
+  },
+  {
+    icon: 'ShieldAlert',
+    title: 'IP Whitelist & PIN',
+    description: 'Restrict access by IP/CIDR range or require a PIN code. Combine for layered security.',
+  },
+  {
+    icon: 'FileText',
+    title: 'Custom Headers',
+    description: 'Inject response headers like X-Frame-Options, CORS, or cache controls through tunnels.',
+  },
+  {
+    icon: 'FolderOpen',
+    title: 'File Server',
+    description: 'Serve a static directory through a tunnel with wirerift serve. No local web server needed.',
+  },
+  {
+    icon: 'GitBranch',
+    title: 'Webhook Relay',
+    description: 'Fan-out incoming webhooks to multiple local endpoints simultaneously.',
   },
   {
     icon: 'Layers',
@@ -81,19 +106,14 @@ export const FEATURES = [
     description: 'Per-stream backpressure with window-based flow control prevents memory exhaustion.',
   },
   {
-    icon: 'Shield',
-    title: 'Rate Limiting',
-    description: 'Token bucket and sliding window rate limiting per-IP and per-session.',
-  },
-  {
     icon: 'RefreshCw',
     title: 'Auto Reconnect',
     description: 'Automatic reconnection with exponential backoff and tunnel re-creation.',
   },
   {
     icon: 'CheckCircle',
-    title: '100% Test Coverage',
-    description: 'Every package tested comprehensively. Production-ready from day one.',
+    title: '99.7% Test Coverage',
+    description: 'Comprehensive test suite with fuzz, security, stress, and soak tests.',
   },
 ] as const
 
