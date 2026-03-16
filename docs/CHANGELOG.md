@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1] - 2026-03-16
+
+### Fixed
+- **Token auth not working** — `auth.NewManager` now accepts user-defined token (`-token` flag > `WIRERIFT_TOKEN` env > auto-random)
+- **`--double-dash` flags** — both `-token` and `--token` now work (Go's `flag` package only supports single dash)
+- Server banner quick start command address formatting
+
+### Added
+- `-token` flag on server CLI to set a persistent auth token
+- Server banner shows full connection info (control, HTTP, dashboard, domain) + copy-paste quick start command
+
 ## [1.4.0] - 2026-03-16
 
 ### Added
