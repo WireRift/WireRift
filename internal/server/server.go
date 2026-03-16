@@ -194,7 +194,10 @@ func New(config Config, logger *slog.Logger) *Server {
 	}
 
 	pinSecret := make([]byte, 32)
-	rand.Read(pinSecret)
+	if _, err := rand.Read(pinSecret); err != nil {
+		// crypto/rand.Read never fails on supported platforms, but handle defensively
+		panic("crypto/rand.Read failed: " + err.Error())
+	}
 
 	s := &Server{
 		config:       config,

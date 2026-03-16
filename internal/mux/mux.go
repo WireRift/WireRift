@@ -167,7 +167,9 @@ func (m *Mux) Done() <-chan struct{} {
 // Err returns the error that caused the mux to shut down.
 func (m *Mux) Err() error {
 	if v := m.err.Load(); v != nil {
-		return v.(error)
+		if err, ok := v.(error); ok {
+			return err
+		}
 	}
 	return nil
 }
