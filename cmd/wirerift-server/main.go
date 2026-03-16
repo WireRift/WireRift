@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -29,6 +30,19 @@ func main() {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
+}
+
+// normalizeDashes converts --flag to -flag so both styles work.
+func normalizeDashes(args []string) []string {
+	out := make([]string, len(args))
+	for i, a := range args {
+		if strings.HasPrefix(a, "--") && !strings.HasPrefix(a, "---") && a != "--" {
+			out[i] = a[1:]
+		} else {
+			out[i] = a
+		}
+	}
+	return out
 }
 
 func run(parentCtx context.Context, args []string) error {
@@ -83,7 +97,7 @@ Environment Variables:
 `)
 	}
 
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(normalizeDashes(args)); err != nil {
 		return err
 	}
 
@@ -120,21 +134,32 @@ Environment Variables:
 	authMgr := auth.NewManager(*tokenFlag)
 	devToken := authMgr.DevToken()
 
-	// Print token prominently so it's easy to copy
-	tokenSource := "generated (random)"
+	// Print connection info prominently
+	tokenSource := "random"
 	if *tokenFlag != "" {
-		tokenSource = "from -token flag"
+		tokenSource = "-token flag"
 	} else if os.Getenv("WIRERIFT_TOKEN") != "" {
-		tokenSource = "from WIRERIFT_TOKEN env"
+		tokenSource = "WIRERIFT_TOKEN env"
 	}
 	fmt.Fprintln(os.Stderr)
-	fmt.Fprintln(os.Stderr, "========================================")
-	fmt.Fprintf(os.Stderr, "  Development Token (%s):\n", tokenSource)
-	fmt.Fprintln(os.Stderr)
-	fmt.Fprintf(os.Stderr, "  %s\n", devToken)
-	fmt.Fprintln(os.Stderr)
-	fmt.Fprintf(os.Stderr, "  Export: export WIRERIFT_TOKEN=%s\n", devToken)
-	fmt.Fprintln(os.Stderr, "========================================")
+	fmt.Fprintln(os.Stderr, "╔══════════════════════════════════════════════╗")
+	fmt.Fprintln(os.Stderr, "║              WireRift Server                 ║")
+	fmt.Fprintln(os.Stderr, "╠══════════════════════════════════════════════╣")
+	fmt.Fprintf(os.Stderr,  "  Control:   %s\n", *controlAddr)
+	fmt.Fprintf(os.Stderr,  "  HTTP:      %s\n", *httpAddr)
+	fmt.Fprintf(os.Stderr,  "  Dashboard: http://localhost:%d\n", *dashboardAddr)
+	fmt.Fprintf(os.Stderr,  "  Domain:    %s\n", *domain)
+	fmt.Fprintln(os.Stderr, "╠══════════════════════════════════════════════╣")
+	fmt.Fprintf(os.Stderr,  "  Token (%s):\n", tokenSource)
+	fmt.Fprintf(os.Stderr,  "  %s\n", devToken)
+	fmt.Fprintln(os.Stderr, "╠══════════════════════════════════════════════╣")
+	fmt.Fprintln(os.Stderr, "  Quick start:")
+	serverAddr := *controlAddr
+	if strings.HasPrefix(serverAddr, ":") {
+		serverAddr = "localhost" + serverAddr
+	}
+	fmt.Fprintf(os.Stderr,  "  wirerift http 8080 -server %s -token %s\n", serverAddr, devToken)
+	fmt.Fprintln(os.Stderr, "╚══════════════════════════════════════════════╝")
 
 	// Create domain manager
 	domainMgr := config.NewDomainManager(*domain)

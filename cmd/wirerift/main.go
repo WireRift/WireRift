@@ -115,6 +115,20 @@ func getEnv(key, defaultVal string) string {
 	return defaultVal
 }
 
+// normalizeDashes converts --flag to -flag so both styles work.
+// Go's flag package only supports single-dash; this makes CLI more intuitive.
+func normalizeDashes(args []string) []string {
+	out := make([]string, len(args))
+	for i, a := range args {
+		if strings.HasPrefix(a, "--") && !strings.HasPrefix(a, "---") && a != "--" {
+			out[i] = a[1:] // "--token" → "-token"
+		} else {
+			out[i] = a
+		}
+	}
+	return out
+}
+
 // handleSignals cancels the context on interrupt/SIGTERM.
 func handleSignals(ctx context.Context, cancel context.CancelFunc) {
 	sigCh := make(chan os.Signal, 1)
@@ -159,7 +173,7 @@ func doHTTP(parentCtx context.Context, args []string) error {
 		fmt.Fprintf(os.Stderr, "  wirerift http -subdomain myapp 8080\n")
 	}
 
-	if err := fs.Parse(args[2:]); err != nil {
+	if err := fs.Parse(normalizeDashes(args[2:])); err != nil {
 		return err
 	}
 
@@ -289,7 +303,7 @@ func doTCP(parentCtx context.Context, args []string) error {
 		fmt.Fprintf(os.Stderr, "  wirerift tcp 22\n")
 	}
 
-	if err := fs.Parse(args[2:]); err != nil {
+	if err := fs.Parse(normalizeDashes(args[2:])); err != nil {
 		return err
 	}
 
@@ -362,7 +376,7 @@ func doStart(parentCtx context.Context, args []string) error {
 		fmt.Fprintf(os.Stderr, "\nDefault config file: wirerift.yaml (also supports .json)\n")
 	}
 
-	if err := fs.Parse(args[2:]); err != nil {
+	if err := fs.Parse(normalizeDashes(args[2:])); err != nil {
 		return err
 	}
 
@@ -617,7 +631,7 @@ func doServe(parentCtx context.Context, args []string) error {
 		fmt.Fprintf(os.Stderr, "  wirerift serve -subdomain myapp ./public\n")
 	}
 
-	if err := fs.Parse(args[2:]); err != nil {
+	if err := fs.Parse(normalizeDashes(args[2:])); err != nil {
 		return err
 	}
 
@@ -735,7 +749,7 @@ func doList(args []string) error {
 		fs.PrintDefaults()
 	}
 
-	if err := fs.Parse(args[2:]); err != nil {
+	if err := fs.Parse(normalizeDashes(args[2:])); err != nil {
 		return err
 	}
 
