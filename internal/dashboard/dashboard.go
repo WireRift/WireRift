@@ -468,7 +468,7 @@ font-size:.8125rem;transition:border-color .15s;
 
 /* Tables */
 .tbl-wrap{overflow-x:auto;border:1px solid var(--bd);border-radius:.625rem;background:var(--bg-1)}
-table{width:100%%;border-collapse:collapse}
+table{width:100%;border-collapse:collapse}
 th,td{text-align:left;padding:.625rem .875rem;white-space:nowrap}
 th{
 font-size:.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em;
@@ -485,12 +485,12 @@ tbody tr:hover{background:var(--bg-2)}
 display:inline-flex;align-items:center;gap:.375rem;font-size:.8125rem;font-weight:500;
 }
 .status-dot::before{
-content:'';width:.5rem;height:.5rem;border-radius:50%%;
+content:'';width:.5rem;height:.5rem;border-radius:50%;
 background:var(--ok);animation:pulse 2s ease-in-out infinite;
 }
 @keyframes pulse{
-0%%,100%%{opacity:1;box-shadow:0 0 0 0 rgba(34,197,94,.4)}
-50%%{opacity:.7;box-shadow:0 0 0 4px rgba(34,197,94,0)}
+0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(34,197,94,.4)}
+50%{opacity:.7;box-shadow:0 0 0 4px rgba(34,197,94,0)}
 }
 
 /* Protection badges */
@@ -571,10 +571,10 @@ font-family:'SF Mono',SFMono-Regular,Consolas,monospace;
 pointer-events:auto;display:flex;align-items:center;gap:.625rem;
 padding:.625rem 1rem;border-radius:.5rem;font-size:.8125rem;font-weight:500;
 box-shadow:0 4px 12px rgba(0,0,0,.25);min-width:14rem;max-width:22rem;
-transform:translateX(110%%);opacity:0;transition:transform .3s ease,opacity .3s ease;
+transform:translateX(110%);opacity:0;transition:transform .3s ease,opacity .3s ease;
 }
 .toast.show{transform:translateX(0);opacity:1}
-.toast.hide{transform:translateX(110%%);opacity:0}
+.toast.hide{transform:translateX(110%);opacity:0}
 .toast--ok{background:#166534;color:#bbf7d0;border:1px solid #22c55e}
 .toast--er{background:#7f1d1d;color:#fecaca;border:1px solid #ef4444}
 .toast--info{background:#1e3a5f;color:#bfdbfe;border:1px solid #3b82f6}
@@ -591,14 +591,14 @@ justify-content:center;align-items:center;
 .overlay.show{display:flex}
 .login-box{
 background:var(--bg-1);border:1px solid var(--bd);border-radius:1rem;
-padding:2rem;width:100%%;max-width:24rem;box-shadow:0 8px 32px rgba(0,0,0,.3);
+padding:2rem;width:100%;max-width:24rem;box-shadow:0 8px 32px rgba(0,0,0,.3);
 }
 .login-box h2{text-align:center;margin-bottom:.375rem;font-size:1.25rem}
 .login-box .sub{text-align:center;color:var(--tx-2);font-size:.8125rem;margin-bottom:1.5rem}
 .field{margin-bottom:1rem}
 .field label{display:block;font-size:.8125rem;font-weight:500;color:var(--tx-2);margin-bottom:.375rem}
 .field input{
-width:100%%;padding:.5rem .75rem;background:var(--bg-0);color:var(--tx-0);
+width:100%;padding:.5rem .75rem;background:var(--bg-0);color:var(--tx-0);
 border:1px solid var(--bd);border-radius:.5rem;font-size:.875rem;
 transition:border-color .15s;
 }
@@ -719,7 +719,7 @@ th,td{padding:.5rem .625rem;font-size:.75rem}
 <label for="tokenInput">API Token</label>
 <input type="password" id="tokenInput" placeholder="Enter your API token" autocomplete="off">
 </div>
-<button class="btn" id="loginBtn" style="width:100%%">Authenticate</button>
+<button class="btn" id="loginBtn" style="width:100%">Authenticate</button>
 <div class="login-err" id="loginErr"></div>
 </div>
 </div>
@@ -864,9 +864,9 @@ function fmtBytes(b){
 function fmtUptime(sec){
     if(!sec || sec < 0) return '-';
     var d = Math.floor(sec / 86400);
-    var h = Math.floor((sec %% 86400) / 3600);
-    var m = Math.floor((sec %% 3600) / 60);
-    var s = Math.floor(sec %% 60);
+    var h = Math.floor((sec % 86400) / 3600);
+    var m = Math.floor((sec % 3600) / 60);
+    var s = Math.floor(sec % 60);
     if(d > 0) return d + 'd ' + h + 'h ' + m + 'm';
     if(h > 0) return h + 'h ' + m + 'm ' + s + 's';
     if(m > 0) return m + 'm ' + s + 's';
