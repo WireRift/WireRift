@@ -687,7 +687,7 @@ th,td{padding:.5rem .625rem;font-size:.75rem}
 <button class="btn-ghost" id="refreshSessions">Refresh <span class="kbd">R</span></button>
 </div>
 <div class="tbl-wrap">
-<table><thead><tr><th>ID</th><th>Account</th><th>Remote Address</th><th>Connected</th><th>Tunnels</th></tr></thead>
+<table><thead><tr><th>ID</th><th>Account</th><th>Remote Address</th><th>Connected</th><th>Last Heartbeat</th><th>Uptime</th><th>Tunnels</th></tr></thead>
 <tbody id="tbodySessions"></tbody></table>
 </div>
 <div class="empty" id="emptySessions" style="display:none">No connected sessions</div>
@@ -890,6 +890,26 @@ function fmtDuration(ns){
     if(ms < 1) return (ns / 1000).toFixed(0) + 'us';
     if(ms < 1000) return ms.toFixed(1) + 'ms';
     return (ms / 1000).toFixed(2) + 's';
+}
+function fmtUptime(sec){
+    if(!sec && sec !== 0) return '-';
+    sec = Math.floor(sec);
+    if(sec < 60) return sec + 's';
+    if(sec < 3600) return Math.floor(sec / 60) + 'm ' + (sec % 60) + 's';
+    var h = Math.floor(sec / 3600);
+    var m = Math.floor((sec % 3600) / 60);
+    if(h < 24) return h + 'h ' + m + 'm';
+    var d = Math.floor(h / 24);
+    return d + 'd ' + (h % 24) + 'h';
+}
+function fmtAgo(t){
+    if(!t) return '-';
+    var diff = Math.floor((Date.now() - new Date(t).getTime()) / 1000);
+    if(diff < 0) diff = 0;
+    if(diff < 5) return 'just now';
+    if(diff < 60) return diff + 's ago';
+    if(diff < 3600) return Math.floor(diff / 60) + 'm ago';
+    return Math.floor(diff / 3600) + 'h ago';
 }
 function escHtml(s){
     if(!s) return '';
@@ -1132,7 +1152,7 @@ function renderSessions(){
     }
     $('emptySessions').style.display = 'none';
 
-    var sig = items.map(function(s){ return s.id + s.tunnel_count; }).join('|');
+    var sig = items.map(function(s){ return s.id + s.tunnel_count + Math.floor(s.uptime_seconds || 0); }).join('|');
     if(tbody.getAttribute('data-sig') === sig) return;
     tbody.setAttribute('data-sig', sig);
 
@@ -1149,13 +1169,20 @@ function renderSessions(){
         var sp3 = document.createElement('span'); sp3.className = 'mono'; sp3.textContent = s.remote_addr || '-'; c3.appendChild(sp3);
         tr.appendChild(c3);
         var c4 = document.createElement('td'); c4.textContent = fmtTimeDate(s.connected_at); tr.appendChild(c4);
-        var c5 = document.createElement('td'); c5.textContent = s.tunnel_count || 0; tr.appendChild(c5);
+        var c5 = document.createElement('td');
+        if(s.last_heartbeat && s.last_heartbeat !== '0001-01-01T00:00:00Z'){
+            c5.textContent = fmtAgo(s.last_heartbeat);
+            c5.title = fmtTimeDate(s.last_heartbeat);
+        } else { c5.textContent = '-'; }
+        tr.appendChild(c5);
+        var c6 = document.createElement('td'); c6.textContent = fmtUptime(s.uptime_seconds || 0); tr.appendChild(c6);
+        var c7 = document.createElement('td'); c7.textContent = s.tunnel_count || 0; tr.appendChild(c7);
 
         /* detail row */
         var detailTr = document.createElement('tr');
         detailTr.className = 'sess-detail-row';
         var detailTd = document.createElement('td');
-        detailTd.colSpan = 5;
+        detailTd.colSpan = 7;
         detailTd.className = 'sess-detail-cell';
         var dl = document.createElement('dl');
         dl.className = 'sess-kv';
@@ -1163,6 +1190,9 @@ function renderSessions(){
         addKV(dl, 'Account', s.account_id || 'dev');
         addKV(dl, 'Remote Address', s.remote_addr || '-');
         addKV(dl, 'Connected At', fmtTimeDate(s.connected_at));
+        addKV(dl, 'Last Seen', fmtTimeDate(s.last_seen));
+        addKV(dl, 'Last Heartbeat', s.last_heartbeat && s.last_heartbeat !== '0001-01-01T00:00:00Z' ? fmtAgo(s.last_heartbeat) + ' ago' : 'N/A');
+        addKV(dl, 'Session Uptime', fmtUptime(s.uptime_seconds || 0));
         addKV(dl, 'Active Tunnels', String(s.tunnel_count || 0));
         detailTd.appendChild(dl);
         detailTr.appendChild(detailTd);

@@ -916,11 +916,14 @@ type TunnelInfo struct {
 
 // SessionInfo represents session information for API responses.
 type SessionInfo struct {
-	ID          string    `json:"id"`
-	AccountID   string    `json:"account_id"`
-	RemoteAddr  string    `json:"remote_addr"`
-	ConnectedAt time.Time `json:"connected_at"`
-	TunnelCount int       `json:"tunnel_count"`
+	ID            string    `json:"id"`
+	AccountID     string    `json:"account_id"`
+	RemoteAddr    string    `json:"remote_addr"`
+	ConnectedAt   time.Time `json:"connected_at"`
+	LastSeen      time.Time `json:"last_seen"`
+	LastHeartbeat time.Time `json:"last_heartbeat"`
+	TunnelCount   int       `json:"tunnel_count"`
+	Uptime        float64   `json:"uptime_seconds"`
 }
 
 // ListTunnels returns a list of all active tunnels.
@@ -956,12 +959,19 @@ func (s *Server) ListSessions() []SessionInfo {
 	s.sessions.Range(func(key, value any) bool {
 		if sess, ok := value.(*Session); ok {
 			sess.mu.RLock()
+			var lastHB time.Time
+			if sess.Mux != nil {
+				lastHB = sess.Mux.LastHeartbeat()
+			}
 			info := SessionInfo{
-				ID:          sess.ID,
-				AccountID:   sess.AccountID,
-				RemoteAddr:  sess.RemoteAddr.String(),
-				ConnectedAt: sess.CreatedAt,
-				TunnelCount: len(sess.Tunnels),
+				ID:            sess.ID,
+				AccountID:     sess.AccountID,
+				RemoteAddr:    sess.RemoteAddr.String(),
+				ConnectedAt:   sess.CreatedAt,
+				LastSeen:      sess.LastSeen,
+				LastHeartbeat: lastHB,
+				TunnelCount:   len(sess.Tunnels),
+				Uptime:        time.Since(sess.CreatedAt).Seconds(),
 			}
 			sess.mu.RUnlock()
 			sessions = append(sessions, info)
