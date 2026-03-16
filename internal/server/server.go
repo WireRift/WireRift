@@ -73,7 +73,7 @@ func DefaultConfig() Config {
 		HTTPSAddr:            ":443",
 		TCPAddrRange:         "20000-29999",
 		HeartbeatInterval:    30 * time.Second,
-		SessionTimeout:       60 * time.Second,
+		SessionTimeout:       5 * time.Minute,
 		MaxTunnelsPerSession: 10,
 	}
 }
@@ -453,7 +453,13 @@ func (s *Server) handleAuth(m *mux.Mux, remoteAddr net.Addr) (*Session, error) {
 }
 
 // handleTunnelRequests processes tunnel requests from a session.
+// Also runs a heartbeat monitor to keep LastSeen updated from heartbeat ACKs.
 func (s *Server) handleTunnelRequests(m *mux.Mux, session *Session) {
+	// Heartbeat keepalive: periodically check mux's last heartbeat timestamp
+	// and update session.LastSeen so the session cleanup doesn't kill active tunnels.
+	heartbeatTicker := time.NewTicker(s.config.HeartbeatInterval / 2)
+	defer heartbeatTicker.Stop()
+
 	for {
 		select {
 		case frame := <-m.ControlFrame():
@@ -467,6 +473,17 @@ func (s *Server) handleTunnelRequests(m *mux.Mux, session *Session) {
 				s.handleTunnelRequest(m, session, frame)
 			case proto.FrameTunnelClose:
 				s.handleTunnelClose(session, frame)
+			}
+
+		case <-heartbeatTicker.C:
+			// Check if mux received a heartbeat recently
+			lastHB := m.LastHeartbeat()
+			if !lastHB.IsZero() {
+				session.mu.Lock()
+				if lastHB.After(session.LastSeen) {
+					session.LastSeen = lastHB
+				}
+				session.mu.Unlock()
 			}
 
 		case <-m.Done():

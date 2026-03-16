@@ -465,15 +465,20 @@ func (c *Client) reconnectLoop() {
 			// Re-create tunnels from previous session
 			c.recreateTunnels()
 
-			// Restart stream handler for new connection (capture current mux)
+			// Restart stream handler and heartbeat for new connection
 			reconnectedMux := c.mux
-			c.wg.Add(1)
+			c.wg.Add(2)
 			go func() {
 				defer c.wg.Done()
 				c.handleStreams(reconnectedMux)
 			}()
+			go func() {
+				defer c.wg.Done()
+				c.heartbeatLoop(reconnectedMux)
+			}()
 
 			interval = c.config.ReconnectInterval
+			c.logger.Info("tunnel restored", "session", c.sessionID)
 		}
 	}
 }
