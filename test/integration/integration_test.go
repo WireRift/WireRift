@@ -277,3 +277,148 @@ func TestClientReconnect(t *testing.T) {
 
 	t.Logf("Reconnect: session1=%s, session2=%s", session1, session2)
 }
+
+// TestFixedTokenAuth tests that a user-specified token works for auth.
+func TestFixedTokenAuth(t *testing.T) {
+	myToken := "my-super-secret-token-12345"
+
+	// Server with fixed token
+	authMgr := auth.NewManager(myToken)
+	if authMgr.DevToken() != myToken {
+		t.Fatalf("DevToken = %q, want %q", authMgr.DevToken(), myToken)
+	}
+
+	srvCfg := server.DefaultConfig()
+	srvCfg.ControlAddr = "127.0.0.1:0"
+	srvCfg.HTTPAddr = "127.0.0.1:0"
+	srvCfg.AuthManager = authMgr
+
+	srv := server.New(srvCfg, nil)
+	if err := srv.Start(); err != nil {
+		t.Fatalf("Server start: %v", err)
+	}
+	defer srv.Stop()
+
+	// Client connects with same fixed token
+	clientCfg := client.DefaultConfig()
+	clientCfg.ServerAddr = srv.ControlAddr()
+	clientCfg.Token = myToken
+	clientCfg.Reconnect = false
+
+	c := client.New(clientCfg, nil)
+	if err := c.Connect(); err != nil {
+		t.Fatalf("Connect with fixed token failed: %v", err)
+	}
+	defer c.Close()
+
+	if !c.IsConnected() {
+		t.Error("Client should be connected")
+	}
+
+	// Create tunnel to verify full auth flow
+	tunnel, err := c.HTTP("localhost:9999", client.WithSubdomain("fixedtoken"))
+	if err != nil {
+		t.Fatalf("Create tunnel: %v", err)
+	}
+	if tunnel.PublicURL == "" {
+		t.Error("Tunnel should have a public URL")
+	}
+
+	t.Logf("Fixed token auth works: session=%s, tunnel=%s", c.SessionID(), tunnel.PublicURL)
+}
+
+// TestWrongTokenRejected tests that wrong token is rejected.
+func TestWrongTokenRejected(t *testing.T) {
+	authMgr := auth.NewManager("correct-token")
+
+	srvCfg := server.DefaultConfig()
+	srvCfg.ControlAddr = "127.0.0.1:0"
+	srvCfg.HTTPAddr = "127.0.0.1:0"
+	srvCfg.AuthManager = authMgr
+
+	srv := server.New(srvCfg, nil)
+	if err := srv.Start(); err != nil {
+		t.Fatalf("Server start: %v", err)
+	}
+	defer srv.Stop()
+
+	// Client with wrong token
+	clientCfg := client.DefaultConfig()
+	clientCfg.ServerAddr = srv.ControlAddr()
+	clientCfg.Token = "wrong-token"
+	clientCfg.Reconnect = false
+
+	c := client.New(clientCfg, nil)
+	err := c.Connect()
+	if err == nil {
+		c.Close()
+		t.Fatal("Expected auth failure with wrong token")
+	}
+	if !strings.Contains(err.Error(), "authentication failed") {
+		t.Errorf("Expected 'authentication failed' error, got: %v", err)
+	}
+
+	t.Logf("Wrong token correctly rejected: %v", err)
+}
+
+// TestEndToEndHTTPTunnelWithFixedToken tests the complete flow with a user-specified token.
+func TestEndToEndHTTPTunnelWithFixedToken(t *testing.T) {
+	fixedToken := "e2e-test-token-abc123"
+
+	// Local service
+	localService := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("hello from fixed-token tunnel"))
+	}))
+	defer localService.Close()
+
+	// Server
+	authMgr := auth.NewManager(fixedToken)
+	srvCfg := server.DefaultConfig()
+	srvCfg.ControlAddr = "127.0.0.1:0"
+	srvCfg.HTTPAddr = "127.0.0.1:0"
+	srvCfg.AuthManager = authMgr
+
+	srv := server.New(srvCfg, nil)
+	if err := srv.Start(); err != nil {
+		t.Fatalf("Server start: %v", err)
+	}
+	defer srv.Stop()
+
+	// Client
+	clientCfg := client.DefaultConfig()
+	clientCfg.ServerAddr = srv.ControlAddr()
+	clientCfg.Token = fixedToken
+	clientCfg.Reconnect = false
+
+	c := client.New(clientCfg, nil)
+	if err := c.Connect(); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer c.Close()
+
+	// Tunnel
+	localAddr := strings.TrimPrefix(localService.URL, "http://")
+	tunnel, err := c.HTTP(localAddr, client.WithSubdomain("tokentest"))
+	if err != nil {
+		t.Fatalf("Create tunnel: %v", err)
+	}
+
+	// Request through edge
+	req, _ := http.NewRequest("GET", fmt.Sprintf("http://%s/", srv.HTTPAddr()), nil)
+	req.Host = fmt.Sprintf("tokentest.%s", srvCfg.Domain)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Edge request: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != 200 {
+		t.Errorf("Status = %d, want 200", resp.StatusCode)
+	}
+	if string(body) != "hello from fixed-token tunnel" {
+		t.Errorf("Body = %q", body)
+	}
+
+	t.Logf("E2E with fixed token passed: %s -> %s -> %s", tunnel.PublicURL, localAddr, string(body))
+}

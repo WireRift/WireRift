@@ -49,6 +49,9 @@ func run(parentCtx context.Context, args []string) error {
 	acmeEmail := fs.String("acme-email", "", "Email for Let's Encrypt (enables ACME)")
 	acmeStaging := fs.Bool("acme-staging", false, "Use Let's Encrypt staging server")
 
+	// Auth
+	tokenFlag := fs.String("token", "", "Set a fixed auth token (default: auto-generated)")
+
 	// Logging
 	verbose := fs.Bool("v", false, "Verbose logging")
 	jsonLog := fs.Bool("json", false, "JSON log format")
@@ -113,14 +116,20 @@ Environment Variables:
 		*httpAddr = envHTTP
 	}
 
-	// Create auth manager
-	authMgr := auth.NewManager()
+	// Create auth manager (flag > env > random)
+	authMgr := auth.NewManager(*tokenFlag)
 	devToken := authMgr.DevToken()
 
 	// Print token prominently so it's easy to copy
+	tokenSource := "generated (random)"
+	if *tokenFlag != "" {
+		tokenSource = "from -token flag"
+	} else if os.Getenv("WIRERIFT_TOKEN") != "" {
+		tokenSource = "from WIRERIFT_TOKEN env"
+	}
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "========================================")
-	fmt.Fprintln(os.Stderr, "  Development Token (use with client):")
+	fmt.Fprintf(os.Stderr, "  Development Token (%s):\n", tokenSource)
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintf(os.Stderr, "  %s\n", devToken)
 	fmt.Fprintln(os.Stderr)

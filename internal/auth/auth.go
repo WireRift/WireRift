@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -52,11 +53,19 @@ type Manager struct {
 }
 
 // NewManager creates a new auth manager.
-func NewManager() *Manager {
+// Token resolution order: explicit token > WIRERIFT_TOKEN env > random.
+func NewManager(token ...string) *Manager {
 	m := &Manager{}
 
-	// Create development token
-	secret := "dev_" + generateRandomString(32)
+	// Resolve token: explicit arg > env var > random
+	var secret string
+	if len(token) > 0 && token[0] != "" {
+		secret = token[0]
+	} else if env := os.Getenv("WIRERIFT_TOKEN"); env != "" {
+		secret = env
+	} else {
+		secret = "dev_" + generateRandomString(32)
+	}
 	m.devToken = &Token{
 		ID:        "dev_token",
 		AccountID: "dev_account",
