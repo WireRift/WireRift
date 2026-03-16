@@ -2319,6 +2319,60 @@ func TestWithPIN(t *testing.T) {
 	}
 }
 
+// ─── NEW coverage-gap tests (appended) ──────────────────────────────────────
+
+// TestHandleStreamsPanicRecovery tests the recover() path in handleStreams.
+// When handleStream panics (e.g., nil httpClient), the recover block should
+// catch it and log without crashing.
+func TestHandleStreamsPanicRecovery(t *testing.T) {
+	c1, c2 := net.Pipe()
+	clientMux := mux.New(c1, mux.DefaultConfig())
+	serverMux := mux.New(c2, mux.DefaultConfig())
+	go clientMux.Run()
+	go serverMux.Run()
+
+	cfg := DefaultConfig()
+	c := New(cfg, nil)
+	c.mux = clientMux
+	c.connected.Store(true)
+	// Set httpClient to nil so handleHTTPStream panics on c.httpClient.Do(req)
+	c.httpClient = nil
+
+	// Store a tunnel for the stream
+	tun := &Tunnel{ID: "tun-panic", LocalAddr: "localhost:1", Type: proto.TunnelTypeHTTP, client: c}
+	c.tunnels.Store("tun-panic", tun)
+
+	// Start handling streams
+	go c.handleStreams(c.mux)
+
+	// Open a stream from server side and send STREAM_OPEN
+	stream, err := serverMux.OpenStream()
+	if err != nil {
+		t.Fatalf("OpenStream failed: %v", err)
+	}
+
+	openFrame, _ := proto.EncodeJSONPayload(proto.FrameStreamOpen, stream.ID(), &proto.StreamOpen{
+		TunnelID: "tun-panic", RemoteAddr: "1.2.3.4:5678", Protocol: "http",
+	})
+	serverMux.GetFrameWriter().Write(openFrame)
+
+	// Wait for stream to be accepted
+	time.Sleep(100 * time.Millisecond)
+
+	// Write an HTTP request through the stream to trigger handleHTTPStream
+	httpReq := "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+	stream.Write([]byte(httpReq))
+
+	// Wait for the panic to be recovered
+	time.Sleep(200 * time.Millisecond)
+
+	// If we get here without crashing, the recover() worked.
+	// Verify the mux is still operational by closing cleanly.
+	stream.Close()
+	c1.Close()
+	c2.Close()
+}
+
 // Suppress unused import warnings - ensure all imports are used
 var _ = fmt.Sprintf
 var _ = bufio.NewReader

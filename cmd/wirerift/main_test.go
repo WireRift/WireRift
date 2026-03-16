@@ -1422,3 +1422,207 @@ func TestLoadConfigJSONEnvDefaults(t *testing.T) {
 		t.Errorf("Server = %q, want env.server:9999 from env", loaded.Server)
 	}
 }
+
+// --- Additional coverage: JSON fallback in doStart ---
+
+func TestDoStart_JSONFallback(t *testing.T) {
+	// When wirerift.yaml doesn't exist but wirerift.json does, doStart should use wirerift.json
+	withTempDir(t, func() {
+		cfg := ConfigFile{
+			Server: "127.0.0.1:1",
+			Token:  "tok",
+			Tunnels: []TunnelConfig{
+				{Type: "http", LocalPort: 8080},
+			},
+		}
+		data, _ := json.MarshalIndent(cfg, "", "  ")
+		os.WriteFile("wirerift.json", data, 0644)
+
+		// wirerift.yaml does NOT exist, so it falls back to wirerift.json
+		// Connection will fail, but we exercise the fallback path
+		assertErrContains(t, doStart(context.Background(), []string{"wirerift", "start"}), "failed to connect")
+	})
+}
+
+// --- Additional coverage: JSON config with empty server/token env override ---
+
+func TestLoadConfigJSONEmptyServerEnvOverride(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "override.json")
+	// JSON with explicit empty server and token — should trigger env override at lines 499-504
+	os.WriteFile(f, []byte(`{"server":"","token":"","tunnels":[]}`), 0644)
+
+	os.Setenv("WIRERIFT_SERVER", "env-override.server:4443")
+	os.Setenv("WIRERIFT_TOKEN", "env-override-token")
+	defer os.Unsetenv("WIRERIFT_SERVER")
+	defer os.Unsetenv("WIRERIFT_TOKEN")
+
+	loaded, err := loadConfig(f)
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if loaded.Server != "env-override.server:4443" {
+		t.Errorf("Server = %q, want env-override.server:4443", loaded.Server)
+	}
+	if loaded.Token != "env-override-token" {
+		t.Errorf("Token = %q, want env-override-token", loaded.Token)
+	}
+}
+
+// --- Additional coverage: doServe success with all option flags ---
+
+func TestDoServeSuccessWithAllFlags(t *testing.T) {
+	defer lockGOMAXPROCS()()
+
+	addr, cleanup := startMockTunnelServer(t)
+	defer cleanup()
+
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "index.html"), []byte("<html>test</html>"), 0644)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		cancel()
+	}()
+
+	args := []string{
+		"wirerift", "serve",
+		"-server", addr,
+		"-whitelist", "1.2.3.4,10.0.0.0/8",
+		"-pin", "1234",
+		"-auth", "user:pass",
+		"-inspect",
+		"-header", "X-Robots:noindex",
+		dir,
+	}
+	err := doServe(ctx, args)
+	if err != nil {
+		t.Fatalf("doServe with all flags failed: %v", err)
+	}
+}
+
+// --- Additional coverage: doList with HTTP error response body ---
+
+func TestDoList_ErrorResponse_MockServer(t *testing.T) {
+	// Server that returns a non-JSON error response body
+	ln, err := net.Listen("tcp", "127.0.0.1:4040")
+	if err != nil {
+		t.Skipf("Port 4040 in use: %v", err)
+	}
+	ln.Close()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tunnels", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("this is not valid json at all"))
+	})
+	srv := &http.Server{Addr: "127.0.0.1:4040", Handler: mux}
+	go srv.ListenAndServe()
+	time.Sleep(50 * time.Millisecond)
+	defer srv.Close()
+
+	// doList should fail to parse the response
+	assertErrContains(t, doList([]string{"wirerift", "list", "-server", "127.0.0.1:4040"}), "failed to parse response")
+}
+
+// --- Additional coverage: doStart with auth containing invalid format ---
+
+func TestDoStartWithInvalidAuth(t *testing.T) {
+	defer lockGOMAXPROCS()()
+
+	addr, cleanup := startMockTunnelServer(t)
+	defer cleanup()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "test.yaml")
+	// auth without colon — the SplitN produces len(parts) != 2, so auth option is skipped
+	configContent := fmt.Sprintf("server: %s\ntoken: test\n\ntunnels:\n  - type: http\n    local_port: 8080\n    auth: invalidnocolon\n", addr)
+	os.WriteFile(configFile, []byte(configContent), 0644)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		cancel()
+	}()
+
+	args := []string{"wirerift", "start", configFile}
+	err := doStart(ctx, args)
+	if err != nil {
+		t.Fatalf("doStart should not error for invalid auth format (silently skipped): %v", err)
+	}
+}
+
+// --- Additional coverage: handleSignals signal path ---
+// The signal path in handleSignals (line 124-125) requires sending an actual OS signal.
+// On Windows this is not supported for the current process. On Unix, the
+// TestHandleSignals_SignalPath test below covers it.
+
+func TestHandleSignals_SignalPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Sending signals to self not supported on Windows")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		handleSignals(ctx, cancel)
+		close(done)
+	}()
+
+	// Give handleSignals time to register its signal handler
+	time.Sleep(50 * time.Millisecond)
+
+	// Send interrupt to current process (works on Unix)
+	proc, _ := os.FindProcess(os.Getpid())
+	proc.Signal(os.Interrupt)
+
+	select {
+	case <-done:
+		// handleSignals returned via signal path — success
+	case <-time.After(3 * time.Second):
+		cancel()
+		t.Error("handleSignals did not return after signal")
+	}
+}
+
+// --- Additional coverage: doList with truncated response body ---
+
+func TestDoList_ReadBodyError_MockServer(t *testing.T) {
+	// Create a server that hijacks the connection and sends a partial response,
+	// then closes it, causing io.ReadAll to fail.
+	ln, err := net.Listen("tcp", "127.0.0.1:4040")
+	if err != nil {
+		t.Skipf("Port 4040 in use: %v", err)
+	}
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			// Read the HTTP request (consume it)
+			buf := make([]byte, 4096)
+			conn.Read(buf)
+			// Write a partial HTTP response with Content-Length much larger than actual body
+			// then close the connection, causing io.ReadAll to fail
+			resp := "HTTP/1.1 200 OK\r\nContent-Length: 999999\r\n\r\npartial"
+			conn.Write([]byte(resp))
+			conn.Close()
+		}
+	}()
+	defer ln.Close()
+	time.Sleep(50 * time.Millisecond)
+
+	err = doList([]string{"wirerift", "list", "-server", "127.0.0.1:4040"})
+	if err == nil {
+		t.Error("Expected error for truncated response")
+	}
+	if err != nil && !strings.Contains(err.Error(), "failed to read response") && !strings.Contains(err.Error(), "failed to parse response") {
+		// Either read error or parse error is acceptable
+		t.Logf("doList returned: %v", err)
+	}
+}

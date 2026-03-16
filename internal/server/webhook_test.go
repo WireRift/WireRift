@@ -106,3 +106,21 @@ func TestWebhookRelayEmptyEndpoints(t *testing.T) {
 		t.Errorf("Expected 0 results for empty relay, got %d", len(results))
 	}
 }
+
+// ─── NEW coverage-gap tests (appended) ──────────────────────────────────────
+
+func TestWebhookRelayInvalidMethod(t *testing.T) {
+	// http.NewRequest fails for methods containing invalid characters
+	relay := NewWebhookRelay("tun-1", []string{"localhost:8080"})
+	results := relay.Relay("INVALID METHOD", "/", nil, nil)
+
+	if len(results) != 1 {
+		t.Fatalf("Expected 1 result, got %d", len(results))
+	}
+	if results[0].Error == "" {
+		t.Error("Expected error for invalid HTTP method")
+	}
+	if results[0].Endpoint != "localhost:8080" {
+		t.Errorf("Endpoint = %q, want localhost:8080", results[0].Endpoint)
+	}
+}

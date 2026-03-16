@@ -248,3 +248,72 @@ func TestIsValidDomain(t *testing.T) {
 		}
 	}
 }
+
+func TestGetDNSRecords_StoredDomain(t *testing.T) {
+	mgr := NewDomainManager("wirerift.com")
+
+	// Add a domain — this stores a VerifyCode
+	domain, err := mgr.AddDomain("app.example.com", "acc1")
+	if err != nil {
+		t.Fatalf("AddDomain: %v", err)
+	}
+	if domain.VerifyCode == "" {
+		t.Fatal("VerifyCode should be set on AddDomain")
+	}
+
+	// GetDNSRecords should use the stored verify code
+	records, err := mgr.GetDNSRecords("app.example.com")
+	if err != nil {
+		t.Fatalf("GetDNSRecords: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("Expected 2 records, got %d", len(records))
+	}
+
+	// TXT record should contain the stored verify code
+	txtRecord := records[1]
+	if txtRecord.Type != "TXT" {
+		t.Errorf("Record[1].Type = %q, want TXT", txtRecord.Type)
+	}
+	if !contains(txtRecord.Value, domain.VerifyCode) {
+		t.Errorf("TXT value %q should contain stored VerifyCode %q", txtRecord.Value, domain.VerifyCode)
+	}
+
+	// Calling GetDNSRecords twice should return the SAME verify code (deterministic)
+	records2, _ := mgr.GetDNSRecords("app.example.com")
+	if records[1].Value != records2[1].Value {
+		t.Error("GetDNSRecords should return same verify code for stored domain")
+	}
+}
+
+func TestGetDNSRecords_UnknownDomain(t *testing.T) {
+	mgr := NewDomainManager("wirerift.com")
+
+	// Domain not stored — should still return records (with random verify code)
+	records, err := mgr.GetDNSRecords("unknown.example.com")
+	if err != nil {
+		t.Fatalf("GetDNSRecords: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("Expected 2 records, got %d", len(records))
+	}
+	if records[0].Type != "CNAME" {
+		t.Errorf("Record[0].Type = %q, want CNAME", records[0].Type)
+	}
+	if records[0].Value != "wirerift.com" {
+		t.Errorf("CNAME value = %q, want wirerift.com", records[0].Value)
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && findSubstr(s, substr)
+}
+
+func findSubstr(s, sub string) bool {
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}

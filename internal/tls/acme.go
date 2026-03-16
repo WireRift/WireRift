@@ -692,7 +692,6 @@ func (m *ACMEManager) StartAutoRenewal(domains []string, getCert func(string) *C
 		ticker := time.NewTicker(12 * time.Hour)
 		defer ticker.Stop()
 
-		// Derive a cancellable context from the done channel
 		ctx, cancel := context.WithCancel(context.Background())
 		go func() {
 			<-done
@@ -704,29 +703,34 @@ func (m *ACMEManager) StartAutoRenewal(domains []string, getCert func(string) *C
 			case <-done:
 				return
 			case <-ticker.C:
-				for _, domain := range domains {
-					// Check if we should stop before starting expensive renewal
-					select {
-					case <-done:
-						return
-					default:
-					}
-
-					bundle := getCert(domain)
-					if bundle == nil || bundle.NeedsRenewal() {
-						m.logger.Info("renewing certificate", "domain", domain)
-						newBundle, err := m.ObtainCertificate(ctx, []string{domain})
-						if err != nil {
-							m.logger.Error("renewal failed", "domain", domain, "error", err)
-							continue
-						}
-						setCert(domain, newBundle)
-						m.logger.Info("certificate renewed", "domain", domain, "expires", newBundle.ExpiresAt)
-					}
-				}
+				m.checkAndRenew(ctx, domains, getCert, setCert, done)
 			}
 		}
 	}()
+}
+
+// checkAndRenew iterates through domains and renews certificates that are expiring soon.
+func (m *ACMEManager) checkAndRenew(ctx context.Context, domains []string, getCert func(string) *CertificateBundle, setCert func(string, *CertificateBundle), done <-chan struct{}) {
+	for _, domain := range domains {
+		// Check if we should stop before starting expensive renewal
+		select {
+		case <-done:
+			return
+		default:
+		}
+
+		bundle := getCert(domain)
+		if bundle == nil || bundle.NeedsRenewal() {
+			m.logger.Info("renewing certificate", "domain", domain)
+			newBundle, err := m.ObtainCertificate(ctx, []string{domain})
+			if err != nil {
+				m.logger.Error("renewal failed", "domain", domain, "error", err)
+				continue
+			}
+			setCert(domain, newBundle)
+			m.logger.Info("certificate renewed", "domain", domain, "expires", newBundle.ExpiresAt)
+		}
+	}
 }
 
 // EstimateExpiry parses the first certificate in PEM and returns NotAfter.

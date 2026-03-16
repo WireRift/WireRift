@@ -33,6 +33,7 @@ func main() {
 	fmt.Println()
 
 	// Benchmarks
+	benchHealthz(env)
 	benchHTTPLatency(env)
 	benchHTTPThroughput(env)
 	benchHTTPConcurrency(env)
@@ -120,6 +121,28 @@ func setup() *benchEnv {
 			ln.Close()
 		},
 	}
+}
+
+func benchHealthz(env *benchEnv) {
+	fmt.Println("── Healthz Endpoint Latency ──────────────────")
+
+	hc := &http.Client{Timeout: 5 * time.Second}
+	latencies := make([]time.Duration, 1000)
+	for i := 0; i < 1000; i++ {
+		start := time.Now()
+		resp, err := hc.Get(env.httpBase + "/healthz")
+		if err != nil {
+			continue
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		latencies[i] = time.Since(start)
+	}
+	avg := avgDuration(latencies)
+	p50 := percentile(latencies, 50)
+	p99 := percentile(latencies, 99)
+	fmt.Printf("  1000 requests:  avg=%-10s p50=%-10s p99=%-10s\n", avg, p50, p99)
+	fmt.Println()
 }
 
 func benchHTTPLatency(env *benchEnv) {

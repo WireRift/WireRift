@@ -1206,3 +1206,95 @@ func TestHandleRequestActionsReplayUnauthorized(t *testing.T) {
 		t.Errorf("Status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 }
+
+// TestHandleRequestsGetWithLargeLimit tests the limit > 500 capping branch.
+func TestHandleRequestsGetWithLargeLimit(t *testing.T) {
+	authMgr := auth.NewManager()
+	srv := server.New(server.DefaultConfig(), nil)
+
+	d := New(Config{
+		Server:      srv,
+		AuthManager: authMgr,
+	})
+
+	handler := d.Handler()
+
+	// GET /api/requests?limit=999 — should be capped to 500 internally
+	req := httptest.NewRequest("GET", "/api/requests?limit=999", nil)
+	req.Header.Set("Authorization", "Bearer "+authMgr.DevToken())
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+// TestHandleRequestsGetWithZeroLimit tests the limit=0 edge case (non-positive parsed value).
+func TestHandleRequestsGetWithZeroLimit(t *testing.T) {
+	authMgr := auth.NewManager()
+	srv := server.New(server.DefaultConfig(), nil)
+
+	d := New(Config{
+		Server:      srv,
+		AuthManager: authMgr,
+	})
+
+	handler := d.Handler()
+
+	// GET /api/requests?limit=0 — parsed > 0 is false, so default 50 is used
+	req := httptest.NewRequest("GET", "/api/requests?limit=0", nil)
+	req.Header.Set("Authorization", "Bearer "+authMgr.DevToken())
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+// TestHandleRequestsGetWithNegativeLimit tests the limit=-5 edge case.
+func TestHandleRequestsGetWithNegativeLimit(t *testing.T) {
+	authMgr := auth.NewManager()
+	srv := server.New(server.DefaultConfig(), nil)
+
+	d := New(Config{
+		Server:      srv,
+		AuthManager: authMgr,
+	})
+
+	handler := d.Handler()
+
+	// GET /api/requests?limit=-5 — parsed > 0 is false, so default 50 is used
+	req := httptest.NewRequest("GET", "/api/requests?limit=-5", nil)
+	req.Header.Set("Authorization", "Bearer "+authMgr.DevToken())
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+// TestHandleRequestActionsNoAction tests the missing action path (parts[1] absent).
+func TestHandleRequestActionsNoAction(t *testing.T) {
+	authMgr := auth.NewManager()
+	srv := server.New(server.DefaultConfig(), nil)
+
+	d := New(Config{
+		Server:      srv,
+		AuthManager: authMgr,
+	})
+
+	handler := d.Handler()
+
+	// POST /api/requests/some-id — no /replay suffix, len(parts) < 2
+	req := httptest.NewRequest("POST", "/api/requests/some-id", nil)
+	req.Header.Set("Authorization", "Bearer "+authMgr.DevToken())
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("Status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}

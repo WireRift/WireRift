@@ -212,6 +212,41 @@ func testSecurity() {
 		rawConn.Close()
 		check("Garbage auth payload handled", true, "")
 	}
+
+	// 10. Health check endpoint
+	healthResp, healthErr := hc.Get(httpBase + "/healthz")
+	if healthErr == nil {
+		body, _ := io.ReadAll(healthResp.Body)
+		healthResp.Body.Close()
+		check("Healthz endpoint returns 200", healthResp.StatusCode == 200, fmt.Sprintf("status=%d", healthResp.StatusCode))
+		check("Healthz body contains status:ok", strings.Contains(string(body), `"status":"ok"`), string(body))
+	} else {
+		check("Healthz endpoint reachable", false, healthErr.Error())
+	}
+
+	// 11. X-Request-ID header
+	reqWithHost, _ := http.NewRequest("GET", httpBase+"/", nil)
+	reqWithHost.Host = "normal." + cfg.Domain
+	respWithID, err := hc.Do(reqWithHost)
+	if err == nil {
+		io.Copy(io.Discard, respWithID.Body)
+		respWithID.Body.Close()
+		reqID := respWithID.Header.Get("X-Request-ID")
+		check("X-Request-ID header present", reqID != "", "missing")
+	}
+
+	// 12. X-Request-ID preservation
+	reqPreserve, _ := http.NewRequest("GET", httpBase+"/", nil)
+	reqPreserve.Host = "normal." + cfg.Domain
+	reqPreserve.Header.Set("X-Request-ID", "custom-trace-id")
+	respPreserve, err := hc.Do(reqPreserve)
+	if err == nil {
+		io.Copy(io.Discard, respPreserve.Body)
+		respPreserve.Body.Close()
+		check("X-Request-ID preserved from client",
+			respPreserve.Header.Get("X-Request-ID") == "custom-trace-id",
+			respPreserve.Header.Get("X-Request-ID"))
+	}
 }
 
 // ─── STRESS TEST ────────────────────────────────────────────
