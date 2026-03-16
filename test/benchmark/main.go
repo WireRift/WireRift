@@ -259,7 +259,17 @@ func benchHTTPThroughput(env *benchEnv) {
 func benchHTTPConcurrency(env *benchEnv) {
 	fmt.Println("── HTTP Concurrency (parallel requests) ──────")
 
-	concurrencies := []int{1, 10, 50, 100}
+	concurrencies := []int{1, 10, 50}
+
+	// Shared HTTP client with connection pool to avoid thread exhaustion on Windows
+	sharedClient := &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			MaxIdleConns:        200,
+			MaxIdleConnsPerHost: 200,
+			IdleConnTimeout:     30 * time.Second,
+		},
+	}
 
 	for _, conc := range concurrencies {
 		var totalRequests int64
@@ -274,7 +284,7 @@ func benchHTTPConcurrency(env *benchEnv) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				hc := &http.Client{Timeout: 5 * time.Second}
+				hc := sharedClient
 				for time.Since(start) < duration {
 					req, _ := http.NewRequest("GET", env.httpBase+"/small", nil)
 					req.Host = "bench." + env.domain
