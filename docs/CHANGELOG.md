@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.2] - 2026-03-16
+
+### Added
+- **Advanced Dashboard UI** — complete rewrite of the monitoring dashboard
+  - Dark/Light theme toggle with localStorage persistence
+  - Tabbed navigation: Tunnels / Sessions / Inspector with live count badges
+  - Animated byte counters with smooth interpolation between polls
+  - Live uptime counter ticking every second
+  - Keyboard shortcuts: R=refresh, T=tunnels, S=sessions, I=inspector
+  - Tunnel URL copy-to-clipboard with visual feedback
+  - Session expandable detail rows
+  - Traffic Inspector with request/response headers side-by-side
+  - JSON syntax highlighting (keys=cyan, strings=green, numbers=amber, bools=purple)
+  - Search/filter across all tables
+  - Export requests as cURL commands
+  - Request replay with toast notifications
+  - Green pulse animation for active tunnel status
+  - Toast notification system (success/error/info)
+  - Responsive layout (480px to 1440px+)
+  - CSP nonce-based script security
+  - No external dependencies (single inline HTML file)
+
 ## [1.4.1] - 2026-03-16
 
 ### Fixed
