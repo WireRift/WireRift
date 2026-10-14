@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/wirerift/wirerift/internal/auth"
@@ -27,6 +29,7 @@ type Dashboard struct {
 	domainMgr    *config.DomainManager
 	port         int
 	httpsEnabled bool
+	guard        authGuard
 }
 
 // Config holds dashboard configuration.
@@ -84,9 +87,80 @@ func (d *Dashboard) securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
+const (
+	authMaxFailures = 10
+	authWindow      = 5 * time.Minute
+)
+
+// authGuard throttles token guessing per client IP: authMaxFailures bad
+// credentials within authWindow lock the IP out for authWindow.
+type authGuard struct {
+	mu    sync.Mutex
+	fails map[string]*authFailure
+}
+
+type authFailure struct {
+	count int
+	first time.Time
+	until time.Time
+}
+
+func (g *authGuard) locked(ip string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	f := g.fails[ip]
+	return f != nil && time.Now().Before(f.until)
+}
+
+func (g *authGuard) fail(ip string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.fails == nil {
+		g.fails = make(map[string]*authFailure)
+	}
+	now := time.Now()
+	if len(g.fails) > 10000 { // bound memory
+		for k, f := range g.fails {
+			if now.Sub(f.first) > authWindow && now.After(f.until) {
+				delete(g.fails, k)
+			}
+		}
+	}
+	f := g.fails[ip]
+	if f == nil || (now.Sub(f.first) > authWindow && now.After(f.until)) {
+		f = &authFailure{first: now}
+		g.fails[ip] = f
+	}
+	f.count++
+	if f.count >= authMaxFailures {
+		f.until = now.Add(authWindow)
+		f.count = 0
+		f.first = now
+	}
+}
+
+func (g *authGuard) reset(ip string) {
+	g.mu.Lock()
+	delete(g.fails, ip)
+	g.mu.Unlock()
+}
+
+func remoteIP(r *http.Request) string {
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
+
 // authMiddleware checks for valid authentication.
 func (d *Dashboard) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		ip := remoteIP(r)
+		if d.guard.locked(ip) {
+			w.Header().Set("Retry-After", "300")
+			d.jsonError(w, "Too many failed attempts", http.StatusTooManyRequests)
+			return
+		}
 		// Check for Bearer token
 		auth := r.Header.Get("Authorization")
 		if auth == "" {
@@ -96,9 +170,11 @@ func (d *Dashboard) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 				if err == nil && cookie.Value != "" {
 					_, _, err := d.authManager.ValidateToken(cookie.Value)
 					if err == nil {
+						d.guard.reset(ip)
 						next(w, r)
 						return
 					}
+					d.guard.fail(ip)
 				}
 			}
 			d.jsonError(w, "Unauthorized", http.StatusUnauthorized)
@@ -107,16 +183,19 @@ func (d *Dashboard) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 		parts := strings.SplitN(auth, " ", 2)
 		if len(parts) != 2 || parts[0] != "Bearer" {
+			d.guard.fail(ip)
 			d.jsonError(w, "Invalid authorization", http.StatusUnauthorized)
 			return
 		}
 
 		_, _, err := d.authManager.ValidateToken(parts[1])
 		if err != nil {
+			d.guard.fail(ip)
 			d.jsonError(w, "Invalid token", http.StatusUnauthorized)
 			return
 		}
 
+		d.guard.reset(ip)
 		next(w, r)
 	}
 }

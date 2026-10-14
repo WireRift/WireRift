@@ -83,6 +83,8 @@ func run(parentCtx context.Context, args []string) error {
 	autoCert := fs.Bool("auto-cert", false, "Auto-generate self-signed certificates")
 	certDir := fs.String("cert-dir", "certs", "Directory for certificates")
 	acmeEmail := fs.String("acme-email", "", "Email for Let's Encrypt (enables ACME)")
+	dashCert := fs.String("dashboard-tls-cert", "", "TLS certificate (PEM) for the dashboard; with -dashboard-tls-key serves it over HTTPS")
+	dashKey := fs.String("dashboard-tls-key", "", "TLS private key (PEM) for the dashboard")
 	controlCert := fs.String("control-tls-cert", "", "TLS certificate (PEM) for the control plane; with -control-tls-key enables TLS on :4443")
 	controlKey := fs.String("control-tls-key", "", "TLS private key (PEM) for the control plane")
 	acmeStaging := fs.Bool("acme-staging", false, "Use Let's Encrypt staging server")
@@ -171,18 +173,35 @@ Environment Variables:
 	fmt.Fprintln(os.Stderr, "╠══════════════════════════════════════════════╣")
 	fmt.Fprintf(os.Stderr, "  Control:   %s\n", *controlAddr)
 	fmt.Fprintf(os.Stderr, "  HTTP:      %s\n", *httpAddr)
-	fmt.Fprintf(os.Stderr, "  Dashboard: http://localhost:%d\n", *dashboardAddr)
+	dashScheme := "http"
+	if *dashCert != "" {
+		dashScheme = "https"
+	}
+	fmt.Fprintf(os.Stderr, "  Dashboard: %s://localhost:%d\n", dashScheme, *dashboardAddr)
 	fmt.Fprintf(os.Stderr, "  Domain:    %s\n", *domain)
 	fmt.Fprintln(os.Stderr, "╠══════════════════════════════════════════════╣")
+	// Only an auto-generated token needs to be shown (it can't be known
+	// otherwise); a token the operator supplied must not land in logs.
+	shownToken := devToken
+	if tokenSource != "random" {
+		shownToken = "<your token>"
+	}
 	fmt.Fprintf(os.Stderr, "  Token (%s):\n", tokenSource)
-	fmt.Fprintf(os.Stderr, "  %s\n", devToken)
+	if tokenSource == "random" {
+		fmt.Fprintf(os.Stderr, "  %s\n", devToken)
+	} else {
+		fmt.Fprintln(os.Stderr, "  (hidden: supplied by you)")
+	}
 	fmt.Fprintln(os.Stderr, "╠══════════════════════════════════════════════╣")
 	fmt.Fprintln(os.Stderr, "  Quick start:")
 	serverAddr := *controlAddr
 	if strings.HasPrefix(serverAddr, ":") {
 		serverAddr = "localhost" + serverAddr
 	}
-	fmt.Fprintf(os.Stderr, "  wirerift http 8080 -server %s -token %s\n", serverAddr, devToken)
+	if *controlCert != "" {
+		serverAddr = "tls://" + serverAddr
+	}
+	fmt.Fprintf(os.Stderr, "  wirerift http 8080 -server %s -token %s\n", serverAddr, shownToken)
 	fmt.Fprintln(os.Stderr, "╚══════════════════════════════════════════════╝")
 
 	// Create domain manager
@@ -216,6 +235,9 @@ Environment Variables:
 	srvConfig.TCPAddrRange = *tcpPortRange
 	srvConfig.AuthManager = authMgr
 
+	if (*dashCert == "") != (*dashKey == "") {
+		return fmt.Errorf("-dashboard-tls-cert and -dashboard-tls-key must be set together")
+	}
 	if (*controlCert == "") != (*controlKey == "") {
 		return fmt.Errorf("-control-tls-cert and -control-tls-key must be set together")
 	}
@@ -287,7 +309,13 @@ Environment Variables:
 			}
 		}()
 		logger.Info("dashboard started", "addr", dashServer.Addr)
-		if err := dashServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		var err error
+		if *dashCert != "" {
+			err = dashServer.ListenAndServeTLS(*dashCert, *dashKey)
+		} else {
+			err = dashServer.ListenAndServe()
+		}
+		if err != nil && err != http.ErrServerClosed {
 			logger.Error("dashboard error", "error", err)
 		}
 	}()

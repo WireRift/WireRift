@@ -215,6 +215,8 @@ Options:
   --https string        HTTPS edge address (default: :443)
   --dashboard-port int  Dashboard port (default: 4040)
   --dashboard-bind str  Dashboard bind address (default: 127.0.0.1)
+  --dashboard-tls-cert  PEM certificate for the dashboard (with --dashboard-tls-key serves HTTPS)
+  --dashboard-tls-key   PEM private key for the dashboard
   --control-tls-cert    PEM certificate for the control plane (enables TLS on :4443)
   --control-tls-key     PEM private key for the control plane
   --tcp-ports string    TCP tunnel port range (default: 20000-29999)

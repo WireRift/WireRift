@@ -15,9 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Inspector redacts `Authorization`, `Cookie`, `Set-Cookie`, `X-WireRift-PIN`; replay log is bounded
 - Mux: receive window enforced, window credit saturates (no int32 wrap), duplicate/control stream IDs and `MaxStreams` enforced; frames no longer pre-allocate the claimed payload size
 - Disabled accounts can no longer authenticate
-- Dashboard binds to `127.0.0.1` by default (`-dashboard-bind`)
+- Dashboard binds to `127.0.0.1` by default (`-dashboard-bind`); failed-auth lockout (10 bad tokens per IP, 5 min); optional HTTPS via `-dashboard-tls-cert/-key`
+- Startup banner no longer prints a token the operator supplied (only auto-generated ones)
 
 ### Fixed
+- HEAD responses no longer fail with "unexpected EOF"
 - Chunked request bodies were forwarded empty; oversized bodies now get 413
 - Closing a TCP tunnel left its public port listening; bind errors are now reported to the client
 - Nil-map panic when a session was removed during tunnel creation
