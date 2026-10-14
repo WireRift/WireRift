@@ -30,8 +30,10 @@ bench:
 fuzz:
 	$(GO) test -fuzz=FuzzReadFrame -fuzztime=30s ./internal/proto/
 	$(GO) test -fuzz=FuzzDecodeJSONPayload -fuzztime=30s ./internal/proto/
+	$(GO) test -fuzz=FuzzReadMagic -fuzztime=30s ./internal/proto/
 	$(GO) test -fuzz=FuzzDeserializeResponse -fuzztime=30s ./internal/server/
 	$(GO) test -fuzz=FuzzExtractSubdomain -fuzztime=15s ./internal/server/
+	$(GO) test -fuzz=FuzzIsIPAllowed -fuzztime=30s ./internal/server/
 
 clean:
 	rm -rf bin/

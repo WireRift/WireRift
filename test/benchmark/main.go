@@ -184,6 +184,8 @@ func benchHTTPLatency(env *benchEnv) {
 	fmt.Println("  Through tunnel:")
 	for _, s := range sizes {
 		latencies := make([]time.Duration, 100)
+		n := 0
+		limited := 0
 		for i := 0; i < 100; i++ {
 			req, _ := http.NewRequest("GET", env.httpBase+s.path, nil)
 			req.Host = "bench." + env.domain
@@ -194,12 +196,28 @@ func benchHTTPLatency(env *benchEnv) {
 			}
 			io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()
-			latencies[i] = time.Since(start)
+			// Only successful transfers measure latency: rate-limit
+			// rejections round-trip in microseconds and would poison the
+			// table with impossible numbers (e.g. 1MB faster than 2B).
+			if resp.StatusCode != http.StatusOK {
+				limited++
+				continue
+			}
+			latencies[n] = time.Since(start)
+			n++
 		}
-		avg := avgDuration(latencies)
-		p50 := percentile(latencies, 50)
-		p99 := percentile(latencies, 99)
-		fmt.Printf("    %-16s avg=%-10s p50=%-10s p99=%-10s\n", s.name, avg, p50, p99)
+		if n == 0 {
+			fmt.Printf("    %-16s (no successful requests; %d rate-limited)\n", s.name, limited)
+			continue
+		}
+		avg := avgDuration(latencies[:n])
+		p50 := percentile(latencies[:n], 50)
+		p99 := percentile(latencies[:n], 99)
+		skipped := ""
+		if limited > 0 {
+			skipped = fmt.Sprintf("  [%d rate-limited skipped]", limited)
+		}
+		fmt.Printf("    %-16s avg=%-10s p50=%-10s p99=%-10s%s\n", s.name, avg, p50, p99, skipped)
 	}
 	fmt.Println()
 }
@@ -215,6 +233,7 @@ func benchHTTPThroughput(env *benchEnv) {
 	rand.Read(payload)
 
 	var uploaded int64
+	uploadLimited := 0
 	start := time.Now()
 	for time.Since(start) < duration {
 		req, _ := http.NewRequest("POST", env.httpBase+"/echo", io.NopCloser(
@@ -228,6 +247,12 @@ func benchHTTPThroughput(env *benchEnv) {
 		}
 		n, _ := io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
+		// Rate-limit rejections are not upload throughput: counting their
+		// tiny bodies (or ignoring them silently) corrupts the number.
+		if resp.StatusCode != http.StatusOK {
+			uploadLimited++
+			continue
+		}
 		uploaded += n
 	}
 	elapsed := time.Since(start)
@@ -235,6 +260,7 @@ func benchHTTPThroughput(env *benchEnv) {
 
 	// Download throughput
 	var downloaded int64
+	downloadLimited := 0
 	start = time.Now()
 	for time.Since(start) < duration {
 		req, _ := http.NewRequest("GET", env.httpBase+"/1m", nil)
@@ -245,13 +271,17 @@ func benchHTTPThroughput(env *benchEnv) {
 		}
 		n, _ := io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			downloadLimited++
+			continue
+		}
 		downloaded += n
 	}
 	elapsed = time.Since(start)
 	downloadMBps := float64(downloaded) / elapsed.Seconds() / 1024 / 1024
 
-	fmt.Printf("  Upload:   %.1f MB/s (%.1f MB in %s)\n", uploadMBps, float64(uploaded)/1024/1024, elapsed.Round(time.Millisecond))
-	fmt.Printf("  Download: %.1f MB/s (%.1f MB in %s)\n", downloadMBps, float64(downloaded)/1024/1024, elapsed.Round(time.Millisecond))
+	fmt.Printf("  Upload:   %.1f MB/s (%.1f MB in %s, %d rate-limited)\n", uploadMBps, float64(uploaded)/1024/1024, elapsed.Round(time.Millisecond), uploadLimited)
+	fmt.Printf("  Download: %.1f MB/s (%.1f MB in %s, %d rate-limited)\n", downloadMBps, float64(downloaded)/1024/1024, elapsed.Round(time.Millisecond), downloadLimited)
 	fmt.Println()
 }
 
@@ -337,15 +367,19 @@ func benchTCPThroughput(env *benchEnv) {
 	// Send HTTP request through raw TCP tunnel
 	req := "GET /1m HTTP/1.1\r\nHost: localhost\r\n\r\n"
 	conn.Write([]byte(req))
+	// Bound the read: the tunneled HTTP server keeps the connection alive
+	// after the response (no EOF), so an unbounded copy here hangs forever.
+	// Read exactly the requested 1MB payload.
+	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 	start := time.Now()
-	n, _ := io.Copy(io.Discard, conn)
+	n, err := io.CopyN(io.Discard, conn, 1<<20)
 	elapsed := time.Since(start)
 
 	if n > 0 {
 		mbps := float64(n) / elapsed.Seconds() / 1024 / 1024
 		fmt.Printf("  Download: %.1f MB/s (%d bytes in %s)\n", mbps, n, elapsed.Round(time.Millisecond))
 	} else {
-		fmt.Println("  (no data received)")
+		fmt.Printf("  (no data received: %v)\n", err)
 	}
 	fmt.Println()
 }
