@@ -7,7 +7,7 @@ services:
       - "4443:4443"       # Control plane
       - "80:80"           # HTTP edge
       - "443:443"         # HTTPS edge
-      - "4040:4040"       # Dashboard
+      - "127.0.0.1:4040:4040"  # Dashboard (localhost only; plain HTTP)
       - "20000-20099:20000-20099"  # TCP tunnel port range (subset)
     environment:
       - WIRERIFT_DOMAIN=localtunnel.dev

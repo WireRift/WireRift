@@ -24,7 +24,9 @@ jobs:
           go-version: '1.23'
 
       - name: Run tests
-        run: go test ./... -timeout 120s
+        run: |
+          go vet ./cmd/... ./internal/...
+          go test ./cmd/... ./internal/... ./test/integration/ -timeout 180s
 
       - name: Get version
         id: version
@@ -88,7 +90,7 @@ jobs:
       - name: Generate checksums
         run: |
           cd dist
-          sha256sum *.tar.gz *.zip 2>/dev/null > checksums.txt || true
+          sha256sum wirerift-* > checksums.txt
           cat checksums.txt
 
       - name: Create GitHub Release
@@ -99,8 +101,7 @@ jobs:
           prerelease: false
           generate_release_notes: true
           files: |
-            dist/*.tar.gz
-            dist/*.zip
+            dist/wirerift-*
             dist/checksums.txt
           body: |
             ## WireRift v${{ steps.version.outputs.VERSION }}

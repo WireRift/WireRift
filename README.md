@@ -214,6 +214,9 @@ Options:
   --http string         HTTP edge address (default: :80)
   --https string        HTTPS edge address (default: :443)
   --dashboard-port int  Dashboard port (default: 4040)
+  --dashboard-bind str  Dashboard bind address (default: 127.0.0.1)
+  --control-tls-cert    PEM certificate for the control plane (enables TLS on :4443)
+  --control-tls-key     PEM private key for the control plane
   --tcp-ports string    TCP tunnel port range (default: 20000-29999)
   --auto-cert           Generate self-signed certificates
   --cert-dir string     Certificate directory (default: certs)
@@ -413,6 +416,19 @@ wirerift-server              # generates random token, prints to stderr
 ```
 
 ---
+
+## Encrypted control plane
+
+By default the control plane (:4443) is plain TCP and the auth token is sent in cleartext. To encrypt it:
+
+```bash
+# Server
+wirerift-server -control-tls-cert cert.pem -control-tls-key key.pem ...
+
+# Client: use the tls:// scheme
+wirerift http 8080 -server tls://tunnel.example.com:4443 -token TOKEN
+# Private/self-signed CA: export WIRERIFT_TLS_CA=/path/to/ca.pem
+```
 
 ## Access Control
 

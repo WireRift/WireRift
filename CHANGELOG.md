@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+- Optional TLS for the control plane: server `-control-tls-cert/-control-tls-key`, client `tls://host:port` addresses (`WIRERIFT_TLS_CA` for private CAs)
+- Forwarded headers (`X-Forwarded-*`) are no longer duplicated or spoofable; `X-WireRift-PIN` is not forwarded to the local app
+- TLS: SNI is validated (no path traversal / arbitrary file writes), limited to the base domain; expiring certs are re-issued; ACME fallback certs are no longer persisted
+- PIN brute-force lockout (5 failures per tunnel+IP, 5 min); PIN form accepts `; charset=` content types
+- Inspector redacts `Authorization`, `Cookie`, `Set-Cookie`, `X-WireRift-PIN`; replay log is bounded
+- Mux: receive window enforced, window credit saturates (no int32 wrap), duplicate/control stream IDs and `MaxStreams` enforced; frames no longer pre-allocate the claimed payload size
+- Disabled accounts can no longer authenticate
+- Dashboard binds to `127.0.0.1` by default (`-dashboard-bind`)
+
+### Fixed
+- Chunked request bodies were forwarded empty; oversized bodies now get 413
+- Closing a TCP tunnel left its public port listening; bind errors are now reported to the client
+- Nil-map panic when a session was removed during tunnel creation
+- Mixed-case subdomains were unreachable; `/healthz` no longer shadows tunnels
+- Stream half-close dropped the peer's remaining data
+- Client: redirects no longer followed locally, no 30 s cap on response bodies, TCP half-close leak, tunnels retried after reconnect, dead-peer detection via heartbeat acks
+- CLI: `--flag=value` no longer swallows the next argument; YAML inline comments; malformed `auth` in `start` is an error
+- ACME JWK coordinates are zero-padded
+- Release workflow publishes raw binaries and runs the correct test packages
+
 ## [1.6.0] - 2026-04-02
 
 ### Added

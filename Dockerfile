@@ -33,4 +33,4 @@ EXPOSE 80 443 4040 4443
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD wget -q --spider http://localhost:80/healthz || exit 1
 
-ENTRYPOINT ["wirerift-server", "-cert-dir", "/data/certs"]
+ENTRYPOINT ["wirerift-server", "-cert-dir", "/data/certs", "-dashboard-bind", "0.0.0.0"]

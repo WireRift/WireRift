@@ -1,0 +1,7 @@
+.git
+website
+bin
+docs
+*.md
+!README.md
+.temp_files
