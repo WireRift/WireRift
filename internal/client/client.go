@@ -4,12 +4,17 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
+	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -112,11 +117,18 @@ func New(config Config, logger *slog.Logger) *Client {
 		ctx:    ctx,
 		cancel: cancel,
 		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
+			// No overall Timeout: it would also cap body streaming and cut off
+			// large downloads/SSE. Bound connect and time-to-first-byte instead.
+			// Redirects are the visitor's to follow, not this relay's.
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
 			Transport: &http.Transport{
-				MaxIdleConns:        100,
-				MaxIdleConnsPerHost: 10,
-				IdleConnTimeout:     90 * time.Second,
+				DialContext:           (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
+				ResponseHeaderTimeout: 30 * time.Second,
+				MaxIdleConns:          100,
+				MaxIdleConnsPerHost:   10,
+				IdleConnTimeout:       90 * time.Second,
 			},
 		},
 	}
@@ -155,18 +167,52 @@ func (c *Client) Connect() error {
 	return nil
 }
 
+// TLSScheme prefixes a server address to request TLS on the control plane
+// (e.g. "tls://tunnel.example.com:4443").
+const TLSScheme = "tls://"
+
+// dialServer connects to the control plane, using TLS when the address has the
+// tls:// prefix or Config.TLSConfig is set. WIRERIFT_TLS_CA may name a PEM file
+// with an extra CA to trust (for servers using a private certificate).
+func (c *Client) dialServer() (net.Conn, error) {
+	addr := c.config.ServerAddr
+	useTLS := c.config.TLSConfig != nil
+	if strings.HasPrefix(addr, TLSScheme) {
+		addr = strings.TrimPrefix(addr, TLSScheme)
+		useTLS = true
+	}
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	if !useTLS {
+		return dialer.Dial("tcp", addr)
+	}
+
+	var cfg *tls.Config
+	if c.config.TLSConfig != nil {
+		cfg = c.config.TLSConfig.Clone()
+	} else {
+		cfg = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
+	if caFile := os.Getenv("WIRERIFT_TLS_CA"); caFile != "" && cfg.RootCAs == nil {
+		pem, err := os.ReadFile(caFile)
+		if err != nil {
+			return nil, fmt.Errorf("read WIRERIFT_TLS_CA: %w", err)
+		}
+		pool, err := x509.SystemCertPool()
+		if err != nil || pool == nil {
+			pool = x509.NewCertPool()
+		}
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("WIRERIFT_TLS_CA %s contains no certificates", caFile)
+		}
+		cfg.RootCAs = pool
+	}
+	return (&tls.Dialer{NetDialer: dialer, Config: cfg}).Dial("tcp", addr)
+}
+
 // connect establishes the connection and authenticates.
 func (c *Client) connect() error {
 	// Dial server
-	var conn net.Conn
-	var err error
-
-	if c.config.TLSConfig != nil {
-		conn, err = tls.Dial("tcp", c.config.ServerAddr, c.config.TLSConfig)
-	} else {
-		conn, err = net.Dial("tcp", c.config.ServerAddr)
-	}
-
+	conn, err := c.dialServer()
 	if err != nil {
 		return fmt.Errorf("dial server: %w", err)
 	}
@@ -322,13 +368,16 @@ func (c *Client) openTunnel(req *proto.TunnelRequest) (*Tunnel, error) {
 		return nil, fmt.Errorf("%w: %s", ErrTunnelFailed, res.Error)
 	}
 
+	// The server does not echo the assigned port in TunnelResponse; for TCP
+	// tunnels it is only carried in PublicURL ("tcp://domain:port"). Consumers
+	// (the CLI prints Tunnel.Port) need the assigned port.
 	tunnel := &Tunnel{
 		ID:        res.TunnelID,
 		Type:      res.Type,
 		PublicURL: res.PublicURL,
 		LocalAddr: req.LocalAddr,
 		Subdomain: req.Subdomain,
-		Port:      req.RemotePort,
+		Port:      assignedTCPPort(res.Type, res.PublicURL, req.RemotePort),
 		client:    c,
 		request:   req,
 	}
@@ -338,6 +387,26 @@ func (c *Client) openTunnel(req *proto.TunnelRequest) (*Tunnel, error) {
 	c.logger.Info("tunnel opened", "id", res.TunnelID, "url", res.PublicURL)
 
 	return tunnel, nil
+}
+
+// assignedTCPPort returns the server-assigned public port for a TCP tunnel.
+// The assigned port is only carried in publicURL ("tcp://domain:port"), so it
+// is parsed from there; on any parse failure (or a zero port) the requested
+// remotePort is returned. For non-TCP tunnels the requested value is returned
+// unchanged (HTTP tunnels have no public port).
+func assignedTCPPort(tunnelType proto.TunnelType, publicURL string, remotePort int) int {
+	if tunnelType != proto.TunnelTypeTCP {
+		return remotePort
+	}
+	u, err := url.Parse(publicURL)
+	if err != nil {
+		return remotePort
+	}
+	p, err := strconv.Atoi(u.Port())
+	if err != nil || p == 0 {
+		return remotePort
+	}
+	return p
 }
 
 // CloseTunnel closes a tunnel.
@@ -391,6 +460,7 @@ func (c *Client) FrameReader() *proto.FrameReader {
 func (c *Client) heartbeatLoop(m *mux.Mux) {
 	ticker := time.NewTicker(c.config.HeartbeatInterval)
 	defer ticker.Stop()
+	started := time.Now()
 
 	for {
 		select {
@@ -398,6 +468,19 @@ func (c *Client) heartbeatLoop(m *mux.Mux) {
 			return
 		case <-ticker.C:
 			if !c.connected.Load() {
+				continue
+			}
+
+			// Dead-peer detection: a half-open TCP connection never errors,
+			// so give up after three intervals without any heartbeat ack and
+			// let the reconnect loop take over.
+			lastAlive := started
+			if hb := m.LastHeartbeat(); hb.After(lastAlive) {
+				lastAlive = hb
+			}
+			if time.Since(lastAlive) > 3*c.config.HeartbeatInterval {
+				c.logger.Warn("no heartbeat ack from server, closing connection")
+				m.Close()
 				continue
 			}
 
@@ -483,6 +566,9 @@ func (c *Client) reconnectLoop() {
 	}
 }
 
+// tunnelRetryBase is the initial backoff between tunnel re-creation attempts.
+var tunnelRetryBase = time.Second
+
 // recreateTunnels re-creates all tunnels after a reconnect.
 func (c *Client) recreateTunnels() {
 	var oldTunnels []*Tunnel
@@ -496,9 +582,23 @@ func (c *Client) recreateTunnels() {
 		if t.request == nil {
 			continue
 		}
-		newTunnel, err := c.openTunnel(t.request)
+		// The server may still hold the previous session (and its subdomain or
+		// port) for a moment, so retry with backoff before giving up.
+		var newTunnel *Tunnel
+		var err error
+		for attempt, delay := 0, tunnelRetryBase; attempt < 5; attempt, delay = attempt+1, delay*2 {
+			if newTunnel, err = c.openTunnel(t.request); err == nil {
+				break
+			}
+			c.logger.Warn("failed to re-create tunnel, will retry", "id", t.ID, "attempt", attempt+1, "error", err)
+			select {
+			case <-time.After(delay):
+			case <-c.ctx.Done():
+				return
+			}
+		}
 		if err != nil {
-			c.logger.Warn("failed to re-create tunnel", "id", t.ID, "error", err)
+			c.logger.Error("giving up re-creating tunnel", "id", t.ID, "error", err)
 			continue
 		}
 		c.logger.Info("tunnel re-created", "old_id", t.ID, "new_id", newTunnel.ID, "url", newTunnel.PublicURL)
@@ -612,6 +712,15 @@ func (c *Client) handleHTTPStream(stream *mux.Stream) {
 		return
 	}
 
+	// WebSocket upgrades cannot pass through http.Client/resp.Write: a 101
+	// Switching Protocols response carries a live bidirectional body that
+	// blocks the response writer forever, so the visitor's handshake never
+	// completes. Relay them as a raw pipe instead.
+	if strings.EqualFold(req.Header.Get("Upgrade"), "websocket") {
+		c.handleUpgradeStream(stream, req, tunnel)
+		return
+	}
+
 	// Forward to local service
 	req.URL.Scheme = "http"
 	req.URL.Host = tunnel.LocalAddr
@@ -630,6 +739,39 @@ func (c *Client) handleHTTPStream(stream *mux.Stream) {
 	resp.Write(stream)
 }
 
+// handleUpgradeStream relays a WebSocket upgrade as a raw bidirectional pipe:
+// the upgrade request is written verbatim to the local service and both
+// directions are copied with per-direction closes, so the 101 handshake,
+// frames, and EOF all propagate (mirrors the server-side proxyTCPConnection
+// relay and handleTCPStream).
+func (c *Client) handleUpgradeStream(stream *mux.Stream, req *http.Request, tunnel *Tunnel) {
+	localConn, err := net.DialTimeout("tcp", tunnel.LocalAddr, 10*time.Second)
+	if err != nil {
+		stream.Close()
+		return
+	}
+	defer localConn.Close()
+
+	if err := req.Write(localConn); err != nil {
+		stream.Close()
+		return
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		io.Copy(localConn, stream)
+		localConn.Close()
+	}()
+	go func() {
+		defer wg.Done()
+		io.Copy(stream, localConn)
+		stream.Close()
+	}()
+	wg.Wait()
+}
+
 // handleTCPStream handles an incoming TCP stream by proxying to the local service.
 func (c *Client) handleTCPStream(stream *mux.Stream) {
 	tunnel := c.findTunnelForStream(stream)
@@ -639,8 +781,9 @@ func (c *Client) handleTCPStream(stream *mux.Stream) {
 	}
 
 	// Dial local service
-	localConn, err := net.Dial("tcp", tunnel.LocalAddr)
+	localConn, err := net.DialTimeout("tcp", tunnel.LocalAddr, 10*time.Second)
 	if err != nil {
+		stream.Close()
 		return
 	}
 	defer localConn.Close()
@@ -651,10 +794,16 @@ func (c *Client) handleTCPStream(stream *mux.Stream) {
 	go func() {
 		defer wg.Done()
 		io.Copy(localConn, stream)
+		// Remote finished sending: propagate EOF to the local service.
+		if tc, ok := localConn.(*net.TCPConn); ok {
+			tc.CloseWrite()
+		}
 	}()
 	go func() {
 		defer wg.Done()
 		io.Copy(stream, localConn)
+		// Local service finished: half-close so the visitor sees EOF.
+		stream.Close()
 	}()
 	wg.Wait()
 }

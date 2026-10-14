@@ -186,6 +186,16 @@ func (m *DomainManager) ListDomains(accountID string) []*CustomDomain {
 	return domains
 }
 
+// ListAll lists every registered domain regardless of account.
+func (m *DomainManager) ListAll() []*CustomDomain {
+	var domains []*CustomDomain
+	m.domains.Range(func(_, value any) bool {
+		domains = append(domains, value.(*CustomDomain))
+		return true
+	})
+	return domains
+}
+
 // isValidDomain validates a domain name.
 func isValidDomain(domain string) bool {
 	if len(domain) == 0 || len(domain) > 253 {

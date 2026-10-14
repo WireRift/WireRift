@@ -2074,6 +2074,9 @@ func TestRecreateTunnelsSkipsNilRequest(t *testing.T) {
 }
 
 func TestRecreateTunnelsPartialFailure(t *testing.T) {
+	old := tunnelRetryBase
+	tunnelRetryBase = time.Millisecond
+	defer func() { tunnelRetryBase = old }()
 	client, serverMux := makeConnectedClient(t)
 
 	// Respond to only the first tunnel request, fail the second
@@ -2378,3 +2381,20 @@ var _ = fmt.Sprintf
 var _ = bufio.NewReader
 var _ = httptest.NewServer
 var _ = strings.Contains
+
+// TestHeartbeatLoopClosesMuxWhenPeerSilent verifies dead-peer detection: a
+// server that never acks heartbeats gets its connection closed.
+func TestHeartbeatLoopClosesMuxWhenPeerSilent(t *testing.T) {
+	c, raw := makeConnectedClientRaw(t)
+	go io.Copy(io.Discard, raw) // swallow heartbeats, never ack
+	defer raw.Close()
+
+	m := c.mux
+	go c.heartbeatLoop(m)
+
+	select {
+	case <-m.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("mux not closed despite missing heartbeat acks")
+	}
+}

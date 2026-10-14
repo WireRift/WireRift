@@ -136,7 +136,8 @@ func normalizeArgs(args []string) []string {
 		if strings.HasPrefix(a, "-") && a != "-" && a != "--" {
 			flags = append(flags, a)
 			// Check if this flag has a value (next arg that doesn't start with -)
-			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+			// "-flag=value" carries its own value and must not swallow the next arg.
+			if !strings.Contains(a, "=") && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
 				// Could be a flag value — check if current flag is a bool flag
 				// For simplicity, always treat next arg as value if it doesn't start with -
 				// Exception: if it looks like a port number and current flag is a known bool flag
@@ -386,7 +387,7 @@ func doTCP(parentCtx context.Context, args []string) error {
 		return fmt.Errorf("failed to create tunnel: %v", err)
 	}
 
-	fmt.Printf("TCP tunnel created: %s:%d -> localhost:%d\n", opts.server, tunnel.Port, localPort)
+	fmt.Printf("TCP tunnel created: %s:%d -> localhost:%d\n", serverHost(opts.server), tunnel.Port, localPort)
 
 	// Wait for context
 	<-ctx.Done()
@@ -426,6 +427,12 @@ func doStart(parentCtx context.Context, args []string) error {
 		return fmt.Errorf("failed to load config: %v", err)
 	}
 
+	// Fail fast on invalid ports before connecting or creating anything, so a
+	// config typo cannot produce a half-started set of dead tunnels.
+	if err := validateTunnelConfigs(cfg); err != nil {
+		return err
+	}
+
 	if *verbose {
 		fmt.Printf("Loaded config from %s\n", configFile)
 		fmt.Printf("Server: %s\n", cfg.Server)
@@ -451,7 +458,7 @@ func doStart(parentCtx context.Context, args []string) error {
 		return fmt.Errorf("failed to connect: %v", err)
 	}
 
-	for _, t := range cfg.Tunnels {
+	for ti, t := range cfg.Tunnels {
 		switch t.Type {
 		case "http", "":
 			var opts []client.HTTPOption
@@ -470,9 +477,10 @@ func doStart(parentCtx context.Context, args []string) error {
 			}
 			if t.Auth != "" {
 				parts := strings.SplitN(t.Auth, ":", 2)
-				if len(parts) == 2 {
-					opts = append(opts, client.WithAuth(parts[0], parts[1]))
+				if len(parts) != 2 {
+					return fmt.Errorf("tunnel %d: auth must be in user:pass format", ti+1)
 				}
+				opts = append(opts, client.WithAuth(parts[0], parts[1]))
 			}
 			if t.Inspect {
 				opts = append(opts, client.WithInspect())
@@ -502,6 +510,17 @@ func doStart(parentCtx context.Context, args []string) error {
 
 	<-ctx.Done()
 	c.Close()
+	return nil
+}
+
+// validateTunnelConfigs checks every configured tunnel before anything is
+// created, matching the interactive CLI's 1-65535 port validation.
+func validateTunnelConfigs(cfg *ConfigFile) error {
+	for ti, t := range cfg.Tunnels {
+		if t.LocalPort < 1 || t.LocalPort > 65535 {
+			return fmt.Errorf("tunnel %d: local_port must be between 1 and 65535, got %d", ti+1, t.LocalPort)
+		}
+	}
 	return nil
 }
 
@@ -587,8 +606,7 @@ func loadYAMLConfig(data []byte, cfg *ConfigFile) (*ConfigFile, error) {
 			continue
 		}
 		key := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[1])
-		value = strings.Trim(value, `"'`)
+		value := stripYAMLValue(parts[1])
 
 		if currentSection == "tunnels" && tunnelIdx >= 0 {
 			switch key {
@@ -793,7 +811,7 @@ func doList(args []string) error {
 	}
 
 	// Query the dashboard API
-	url := fmt.Sprintf("http://%s/api/tunnels", strings.Split(opts.server, ":")[0]+":4040")
+	url := fmt.Sprintf("http://%s/api/tunnels", net.JoinHostPort(serverHost(opts.server), "4040"))
 
 	req, _ := http.NewRequest("GET", url, nil)
 	if opts.token != "" {
@@ -842,7 +860,7 @@ func doList(args []string) error {
 		if t.Type == "http" {
 			fmt.Printf("  %s  %s -> %s  (%s)\n", t.ID, t.URL, t.Target, t.Status)
 		} else {
-			fmt.Printf("  %s  tcp://%s:%d -> %s  (%s)\n", t.ID, opts.server, t.Port, t.Target, t.Status)
+			fmt.Printf("  %s  tcp://%s:%d -> %s  (%s)\n", t.ID, serverHost(opts.server), t.Port, t.Target, t.Status)
 		}
 	}
 	return nil
@@ -920,4 +938,30 @@ tunnels:
 
 	fmt.Printf("Created config file: %s\n", configFile)
 	fmt.Println("Edit the file to configure your tunnels.")
+}
+
+// stripYAMLValue trims a scalar value, removing a trailing " # comment" that
+// is not inside quotes, then surrounding quotes.
+func stripYAMLValue(raw string) string {
+	v := strings.TrimSpace(raw)
+	if v != "" && (v[0] == '"' || v[0] == '\'') {
+		if end := strings.IndexByte(v[1:], v[0]); end >= 0 {
+			return v[1 : end+1]
+		}
+	} else if idx := strings.Index(v, " #"); idx >= 0 {
+		v = strings.TrimSpace(v[:idx])
+	} else if strings.HasPrefix(v, "#") {
+		return ""
+	}
+	return strings.Trim(v, `"'`)
+}
+
+// serverHost returns the bare host of a server address, dropping an optional
+// tls:// scheme and the control-plane port (IPv6-safe).
+func serverHost(addr string) string {
+	addr = strings.TrimPrefix(addr, client.TLSScheme)
+	if host, _, err := net.SplitHostPort(addr); err == nil {
+		return host
+	}
+	return strings.Trim(addr, "[]")
 }

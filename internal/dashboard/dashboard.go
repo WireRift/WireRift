@@ -166,7 +166,7 @@ func (d *Dashboard) handleDomains(w http.ResponseWriter, r *http.Request) {
 			d.jsonResponse(w, []interface{}{})
 			return
 		}
-		domains := d.domainMgr.ListDomains("")
+		domains := d.domainMgr.ListAll()
 		d.jsonResponse(w, domains)
 
 	case http.MethodPost:
@@ -1379,21 +1379,27 @@ function updateTunnelFilter(logs){
 }
 
 /* -- cURL Export -------------------------------------------- */
+function shSingle(s){
+    // Quote for POSIX shell: embedded single quotes become '\'' (end the
+    // quoted string, an escaped quote, reopen). Keeps attacker-controlled
+    // header values and paths from breaking out into extra shell commands.
+    return "'" + String(s).replace(/'/g, "'\\''") + "'";
+}
 function exportCurl(index){
     var r = requestsCache[index];
     if(!r){ toast('Request not found', 'er'); return; }
-    var cmd = 'curl -X ' + (r.method || 'GET');
+    var cmd = 'curl -X ' + shSingle(r.method || 'GET');
     if(r.req_headers){
         var hKeys = Object.keys(r.req_headers);
         for(var i = 0; i < hKeys.length; i++){
-            cmd += " -H '" + hKeys[i] + ': ' + r.req_headers[hKeys[i]] + "'";
+            cmd += ' -H ' + shSingle(hKeys[i] + ': ' + r.req_headers[hKeys[i]]);
         }
     }
     if(r.req_body){
         var body = typeof r.req_body === 'string' ? r.req_body : JSON.stringify(r.req_body);
-        cmd += " -d '" + body.replace(/'/g, "'" + '\\' + "'" + "'") + "'";
+        cmd += ' -d ' + shSingle(body);
     }
-    cmd += ' ' + (r.path || '/');
+    cmd += ' ' + shSingle(r.path || '/');
     copyToClipboard(cmd);
     toast('cURL command copied', 'ok');
 }

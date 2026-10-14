@@ -120,6 +120,26 @@ func TestDomainManagerListDomains(t *testing.T) {
 	}
 }
 
+func TestDomainManagerListAll(t *testing.T) {
+	m := NewDomainManager("wirerift.com")
+
+	m.AddDomain("app1.example.com", "acc_123")
+	m.AddDomain("app2.example.com", "acc_456")
+	m.AddDomain("app3.example.com", "")
+
+	domains := m.ListAll()
+	if len(domains) != 3 {
+		t.Errorf("ListAll = %d domains, want 3", len(domains))
+	}
+
+	// ListAll must include domains from every account, unlike the exact-match
+	// ListDomains filter.
+	domains = m.ListDomains("")
+	if len(domains) != 1 {
+		t.Errorf("ListDomains(\"\") = %d domains, want 1", len(domains))
+	}
+}
+
 func TestDomainManagerGetDNSRecords(t *testing.T) {
 	m := NewDomainManager("wirerift.com")
 

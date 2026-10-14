@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -44,7 +47,8 @@ func normalizeArgs(args []string) []string {
 		}
 		if strings.HasPrefix(a, "-") && a != "-" && a != "--" {
 			flags = append(flags, a)
-			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+			// "-flag=value" carries its own value and must not swallow the next arg.
+			if !strings.Contains(a, "=") && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
 				if a == "-v" || a == "-json" || a == "-auto-cert" || a == "-acme-staging" || a == "-version" {
 				} else {
 					i++
@@ -71,6 +75,7 @@ func run(parentCtx context.Context, args []string) error {
 	httpAddr := fs.String("http", ":80", "HTTP edge address")
 	httpsAddr := fs.String("https", ":443", "HTTPS edge address")
 	dashboardAddr := fs.Int("dashboard-port", 4040, "Dashboard port")
+	dashboardBind := fs.String("dashboard-bind", "127.0.0.1", "Dashboard bind address (use 0.0.0.0 to expose; the dashboard is plain HTTP)")
 	domain := fs.String("domain", "wirerift.com", "Base domain for tunnels")
 	tcpPortRange := fs.String("tcp-ports", "20000-29999", "TCP tunnel port range")
 
@@ -78,6 +83,8 @@ func run(parentCtx context.Context, args []string) error {
 	autoCert := fs.Bool("auto-cert", false, "Auto-generate self-signed certificates")
 	certDir := fs.String("cert-dir", "certs", "Directory for certificates")
 	acmeEmail := fs.String("acme-email", "", "Email for Let's Encrypt (enables ACME)")
+	controlCert := fs.String("control-tls-cert", "", "TLS certificate (PEM) for the control plane; with -control-tls-key enables TLS on :4443")
+	controlKey := fs.String("control-tls-key", "", "TLS private key (PEM) for the control plane")
 	acmeStaging := fs.Bool("acme-staging", false, "Use Let's Encrypt staging server")
 
 	// Auth
@@ -209,6 +216,16 @@ Environment Variables:
 	srvConfig.TCPAddrRange = *tcpPortRange
 	srvConfig.AuthManager = authMgr
 
+	if (*controlCert == "") != (*controlKey == "") {
+		return fmt.Errorf("-control-tls-cert and -control-tls-key must be set together")
+	}
+	if *controlCert != "" {
+		pair, err := tls.LoadX509KeyPair(*controlCert, *controlKey)
+		if err != nil {
+			return fmt.Errorf("load control-plane TLS key pair: %v", err)
+		}
+		srvConfig.ControlTLSConfig = &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS12}
+	}
 	if tlsMgr != nil {
 		srvConfig.TLSConfig = tlsMgr.TLSConfig()
 		srvConfig.ACMEChallengeHandler = tlsMgr.ACMEChallengeHandler()
@@ -255,7 +272,7 @@ Environment Variables:
 
 	// Start dashboard
 	dashServer := &http.Server{
-		Addr:              fmt.Sprintf(":%d", *dashboardAddr),
+		Addr:              net.JoinHostPort(*dashboardBind, strconv.Itoa(*dashboardAddr)),
 		Handler:           dash.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,

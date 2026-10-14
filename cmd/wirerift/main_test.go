@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -1536,7 +1537,7 @@ func TestDoStartWithInvalidAuth(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	configFile := filepath.Join(tmpDir, "test.yaml")
-	// auth without colon — the SplitN produces len(parts) != 2, so auth option is skipped
+	// auth without colon must be rejected, never silently create an unprotected tunnel
 	configContent := fmt.Sprintf("server: %s\ntoken: test\n\ntunnels:\n  - type: http\n    local_port: 8080\n    auth: invalidnocolon\n", addr)
 	os.WriteFile(configFile, []byte(configContent), 0644)
 
@@ -1547,9 +1548,30 @@ func TestDoStartWithInvalidAuth(t *testing.T) {
 	}()
 
 	args := []string{"wirerift", "start", configFile}
-	err := doStart(ctx, args)
-	if err != nil {
-		t.Fatalf("doStart should not error for invalid auth format (silently skipped): %v", err)
+	assertErrContains(t, doStart(ctx, args), "auth must be in user:pass format")
+}
+
+func TestNormalizeArgsEqualsFlagDoesNotSwallowNext(t *testing.T) {
+	got := normalizeArgs([]string{"--token=abc", "8080", "--auth", "u:p"})
+	want := []string{"-token=abc", "-auth", "u:p", "8080"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("normalizeArgs = %v, want %v", got, want)
+	}
+}
+
+func TestStripYAMLValue(t *testing.T) {
+	cases := map[string]string{
+		`""  # Set your API token here`: "",
+		`       # Leave empty`:          "",
+		`"a # b"`:                       "a # b",
+		`abc # note`:                    "abc",
+		`'x'`:                           "x",
+		`localhost:4443`:                "localhost:4443",
+	}
+	for in, want := range cases {
+		if got := stripYAMLValue(in); got != want {
+			t.Errorf("stripYAMLValue(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
@@ -1692,5 +1714,19 @@ func TestNormalizeArgsBoolFlags(t *testing.T) {
 	}
 	if !foundInspect {
 		t.Errorf("Expected -inspect in args, got %v", args)
+	}
+}
+
+func TestServerHost(t *testing.T) {
+	cases := map[string]string{
+		"localhost:4443":               "localhost",
+		"tls://tunnel.example.com:443": "tunnel.example.com",
+		"[::1]:4443":                   "::1",
+		"example.com":                  "example.com",
+	}
+	for in, want := range cases {
+		if got := serverHost(in); got != want {
+			t.Errorf("serverHost(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
