@@ -534,8 +534,8 @@ func (m *ACMEManager) jwk() map[string]string {
 	return map[string]string{
 		"kty": "EC",
 		"crv": "P-256",
-		"x":   base64URLEncode(pub.X.Bytes()),
-		"y":   base64URLEncode(pub.Y.Bytes()),
+		"x":   base64URLEncode(padTo32(pub.X.Bytes())),
+		"y":   base64URLEncode(padTo32(pub.Y.Bytes())),
 	}
 }
 

@@ -400,9 +400,19 @@ func TestGetCertificateDifferentDomains(t *testing.T) {
 			wantErr:    false,
 		},
 		{
-			name:       "different domain - auto cert enabled",
+			name:       "different domain is refused",
 			serverName: "other.com",
-			wantErr:    false, // AutoCert is enabled, so it will generate a cert
+			wantErr:    true, // outside the base domain: never issue or write files
+		},
+		{
+			name:       "path traversal SNI",
+			serverName: "../../../pwn.example.com",
+			wantErr:    true,
+		},
+		{
+			name:       "slash in SNI",
+			serverName: "a/b.example.com",
+			wantErr:    true,
 		},
 		{
 			name:       "empty server name",
@@ -774,7 +784,7 @@ func TestGetCertificate_NilServerName(t *testing.T) {
 
 func TestGetCertificate_AutoCertDisabled(t *testing.T) {
 	dir := t.TempDir()
-	m, err := NewManager(Config{CertDir: dir, AutoCert: false})
+	m, err := NewManager(Config{Domain: "example.com", CertDir: dir, AutoCert: false})
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}

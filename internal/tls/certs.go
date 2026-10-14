@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -97,19 +98,22 @@ func NewManager(config Config) (*Manager, error) {
 
 // GetCertificate returns a certificate for the given host.
 func (m *Manager) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-	host := hello.ServerName
-	if host == "" {
-		return nil, ErrDomainNotConfigured
+	host, err := m.normalizeHost(hello.ServerName)
+	if err != nil {
+		return nil, err
 	}
 
-	// Check cache first
-	if cert, ok := m.certs.Load(host); ok {
-		return cert.(*tls.Certificate), nil
+	// Check cache first (dropping entries that are expired or about to be)
+	if cached, ok := m.certs.Load(host); ok {
+		if c := cached.(*tls.Certificate); certUsable(c) {
+			return c, nil
+		}
+		m.certs.Delete(host)
 	}
 
 	// Try to load from disk
 	cert, err := m.loadCertificate(host)
-	if err == nil {
+	if err == nil && certUsable(cert) {
 		m.certs.Store(host, cert)
 		return cert, nil
 	}
@@ -140,6 +144,53 @@ func (m *Manager) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, 
 	}
 
 	return nil, ErrCertificateNotFound
+}
+
+// certRenewWindow is how long before expiry a certificate stops being served
+// from cache/disk so that it is re-issued.
+const certRenewWindow = 14 * 24 * time.Hour
+
+// certUsable reports whether c is not expired and not within the renewal window.
+func certUsable(c *tls.Certificate) bool {
+	leaf := c.Leaf
+	if leaf == nil {
+		if len(c.Certificate) == 0 {
+			return false
+		}
+		var err error
+		if leaf, err = x509.ParseCertificate(c.Certificate[0]); err != nil {
+			return false
+		}
+	}
+	return time.Now().Add(certRenewWindow).Before(leaf.NotAfter)
+}
+
+// normalizeHost validates and lowercases a client-supplied SNI name. The name
+// is used to build file paths and trigger certificate issuance, so it must be
+// a plain hostname under the configured base domain.
+func (m *Manager) normalizeHost(name string) (string, error) {
+	host := strings.ToLower(strings.TrimSuffix(name, "."))
+	if host == "" {
+		return "", ErrDomainNotConfigured
+	}
+	if len(host) > 253 {
+		return "", ErrDomainNotConfigured
+	}
+	for _, label := range strings.Split(host, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return "", ErrDomainNotConfigured
+		}
+		for i := 0; i < len(label); i++ {
+			c := label[i]
+			if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
+				return "", ErrDomainNotConfigured
+			}
+		}
+	}
+	if base := strings.ToLower(m.config.Domain); base != "" && host != base && !strings.HasSuffix(host, "."+base) {
+		return "", ErrDomainNotConfigured
+	}
+	return host, nil
 }
 
 // loadCertificate loads a certificate from disk.
@@ -197,10 +248,13 @@ func (m *Manager) generateSelfSigned(host string) (*tls.Certificate, error) {
 		Leaf:        template,
 	}
 
-	// Save to disk
-	if err := m.saveCertificate(host, certDER, keyDER); err != nil {
-		// Log but don't fail
-		slog.Warn("failed to save certificate", "host", host, "error", err)
+	// Persist only when ACME is not in play: a saved fallback would be loaded
+	// ahead of ACME forever and keep serving an untrusted cert.
+	if m.acme == nil {
+		if err := m.saveCertificate(host, certDER, keyDER); err != nil {
+			// Log but don't fail
+			slog.Warn("failed to save certificate", "host", host, "error", err)
+		}
 	}
 
 	return cert, nil
