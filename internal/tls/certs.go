@@ -1,6 +1,7 @@
 package tls
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -52,6 +53,12 @@ type Manager struct {
 	// Certificate cache
 	certs sync.Map // map[string]*tls.Certificate
 
+	// Per-host coalescing of concurrent issuances: parallel handshakes for
+	// the same uncached host (a browser opens ~6 connections at once) must
+	// run one disk load / ACME order, not one per connection.
+	issueMu  sync.Mutex
+	inflight map[string]*issueCall
+
 	// CA certificate for development
 	caCert *x509.Certificate
 	caKey  *ecdsa.PrivateKey
@@ -59,6 +66,14 @@ type Manager struct {
 
 	// ACME (Let's Encrypt)
 	acme *ACMEManager
+}
+
+// issueCall tracks one in-flight certificate issuance for a host. Waiters
+// receive the leader's result after done is closed.
+type issueCall struct {
+	done chan struct{}
+	cert *tls.Certificate
+	err  error
 }
 
 // NewManager creates a new TLS manager.
@@ -111,6 +126,41 @@ func (m *Manager) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, 
 		m.certs.Delete(host)
 	}
 
+	// Coalesce concurrent issuances for the same host: parallel handshakes
+	// for one uncached host must run a single disk load / ACME order, not
+	// one per connection.
+	m.issueMu.Lock()
+	if call, ok := m.inflight[host]; ok {
+		m.issueMu.Unlock()
+		<-call.done
+		if call.err != nil {
+			return nil, call.err
+		}
+		return call.cert, nil
+	}
+	call := &issueCall{done: make(chan struct{})}
+	if m.inflight == nil {
+		m.inflight = make(map[string]*issueCall)
+	}
+	m.inflight[host] = call
+	m.issueMu.Unlock()
+
+	cert, err := m.issueCertificate(hello.Context(), host)
+
+	call.cert, call.err = cert, err
+	close(call.done)
+
+	m.issueMu.Lock()
+	delete(m.inflight, host)
+	m.issueMu.Unlock()
+
+	return cert, err
+}
+
+// issueCertificate runs the full issuance path for a host: disk cache,
+// then ACME, then the self-signed development fallback. The caller must
+// have registered itself as the leader for this host.
+func (m *Manager) issueCertificate(ctx context.Context, host string) (*tls.Certificate, error) {
 	// Try to load from disk
 	cert, err := m.loadCertificate(host)
 	if err == nil && certUsable(cert) {
@@ -120,7 +170,6 @@ func (m *Manager) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, 
 
 	// Try ACME (Let's Encrypt) first
 	if m.acme != nil {
-		ctx := hello.Context()
 		bundle, err := m.acme.ObtainCertificate(ctx, []string{host})
 		if err == nil {
 			tlsCert, err := bundle.TLSCertificate()
