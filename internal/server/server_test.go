@@ -5380,12 +5380,12 @@ func TestHandleTunnelRequestsHeartbeatTicker(t *testing.T) {
 	defer m.Close()
 
 	session := &Session{
-		ID:         "test-sess-hb",
-		AccountID:  "account-1",
-		Mux:        m,
-		Tunnels:    make(map[string]*Tunnel),
-		CreatedAt:  time.Now(),
-		LastSeen:   time.Now(),
+		ID:        "test-sess-hb",
+		AccountID: "account-1",
+		Mux:       m,
+		Tunnels:   make(map[string]*Tunnel),
+		CreatedAt: time.Now(),
+		LastSeen:  time.Now(),
 	}
 
 	// Set a very short heartbeat interval for testing
@@ -5453,12 +5453,12 @@ func TestHandleTunnelRequestsCtxDone(t *testing.T) {
 	defer func() { c1.Close(); c2.Close() }()
 
 	session := &Session{
-		ID:         "test-sess-ctx",
-		AccountID:  "account-1",
-		Mux:        m,
-		Tunnels:    make(map[string]*Tunnel),
-		CreatedAt:  time.Now(),
-		LastSeen:   time.Now(),
+		ID:        "test-sess-ctx",
+		AccountID: "account-1",
+		Mux:       m,
+		Tunnels:   make(map[string]*Tunnel),
+		CreatedAt: time.Now(),
+		LastSeen:  time.Now(),
 	}
 
 	// Start handleTunnelRequests in a goroutine

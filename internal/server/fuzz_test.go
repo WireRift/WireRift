@@ -44,7 +44,7 @@ func FuzzExtractSubdomain(f *testing.F) {
 	f.Add(string(make([]byte, 10000)), "wirerift.com")
 
 	f.Fuzz(func(t *testing.T, host, domain string) {
-		extractSubdomain(host, domain) // Should not panic
+		_ = extractSubdomain(host, domain) // Should not panic
 	})
 }
 

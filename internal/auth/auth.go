@@ -98,6 +98,9 @@ func (m *Manager) ValidateToken(tokenSecret string) (*Token, *Account, error) {
 		if !ok {
 			return nil, nil, ErrInvalidToken
 		}
+		if !account.(*Account).Active {
+			return nil, nil, ErrInvalidToken
+		}
 		return m.devToken, account.(*Account), nil
 	}
 
@@ -116,6 +119,9 @@ func (m *Manager) ValidateToken(tokenSecret string) (*Token, *Account, error) {
 			account, ok := m.accounts.Load(t.AccountID)
 			if !ok {
 				return false
+			}
+			if !account.(*Account).Active {
+				return false // disabled accounts cannot authenticate
 			}
 			foundToken = t
 			foundAccount = account.(*Account)

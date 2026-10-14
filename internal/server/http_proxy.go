@@ -3,14 +3,48 @@ package server
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
+// maxRequestBodySize bounds the request body buffered for tunneling.
+const maxRequestBodySize = 32 * 1024 * 1024
+
+// ErrRequestTooLarge is returned when a request body exceeds maxRequestBodySize.
+var ErrRequestTooLarge = errors.New("request body too large")
+
+// skipForwardHeader reports headers that must not be copied verbatim from the
+// visitor: the proxy re-emits trusted values (forwarding headers), the framing
+// is recomputed from the buffered body, and the PIN is a credential for this
+// server that must not leak to the local app.
+func skipForwardHeader(key string) bool {
+	switch http.CanonicalHeaderKey(key) {
+	case "X-Forwarded-For", "X-Forwarded-Proto", "X-Forwarded-Host",
+		"Content-Length", "Transfer-Encoding", "X-Wirerift-Pin":
+		return true
+	}
+	return false
+}
+
 // SerializeRequest serializes an HTTP request for tunneling.
 func SerializeRequest(r *http.Request) ([]byte, error) {
+	// Buffer the body first so the framing headers match what is sent.
+	var body []byte
+	if r.Body != nil {
+		var err error
+		body, err = io.ReadAll(io.LimitReader(r.Body, maxRequestBodySize+1))
+		if err != nil {
+			return nil, err
+		}
+		if len(body) > maxRequestBodySize {
+			return nil, ErrRequestTooLarge
+		}
+	}
+
 	var buf bytes.Buffer
 
 	// Write request line
@@ -23,6 +57,9 @@ func SerializeRequest(r *http.Request) ([]byte, error) {
 
 	// Write headers
 	for key, values := range r.Header {
+		if skipForwardHeader(key) {
+			continue
+		}
 		for _, value := range values {
 			buf.WriteString(key)
 			buf.WriteString(": ")
@@ -31,7 +68,8 @@ func SerializeRequest(r *http.Request) ([]byte, error) {
 		}
 	}
 
-	// Add forwarding headers
+	// Add forwarding headers (exactly one of each, never client-supplied
+	// duplicates that a backend could read first).
 	clientIP := r.RemoteAddr
 	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
 		clientIP = host
@@ -54,17 +92,15 @@ func SerializeRequest(r *http.Request) ([]byte, error) {
 	buf.WriteString(r.Host)
 	buf.WriteString("\r\n")
 
+	// Body framing: chunked/unknown-length bodies were decoded by net/http,
+	// so always declare the real length.
+	if len(body) > 0 || r.ContentLength != 0 {
+		buf.WriteString("Content-Length: " + strconv.Itoa(len(body)) + "\r\n")
+	}
+
 	// End headers
 	buf.WriteString("\r\n")
-
-	// Write body (limit to 32 MB to prevent memory exhaustion)
-	if r.Body != nil {
-		body, err := io.ReadAll(io.LimitReader(r.Body, 32*1024*1024))
-		if err != nil {
-			return nil, err
-		}
-		buf.Write(body)
-	}
+	buf.Write(body)
 
 	return buf.Bytes(), nil
 }

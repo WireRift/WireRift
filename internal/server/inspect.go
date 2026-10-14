@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -52,15 +53,25 @@ func (w *inspectResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return nil, nil, fmt.Errorf("underlying ResponseWriter does not support hijacking")
 }
 
+// redactHeader hides credentials so the inspector (and its API) never stores
+// or exposes them.
+func redactHeader(key, value string) string {
+	switch http.CanonicalHeaderKey(key) {
+	case "Authorization", "Proxy-Authorization", "Cookie", "Set-Cookie", "X-Wirerift-Pin":
+		return "[redacted]"
+	}
+	return value
+}
+
 // logRequest captures a request/response pair for the traffic inspector.
 func (s *Server) logRequest(tunnel *Tunnel, r *http.Request, w *inspectResponseWriter, clientIP string, start time.Time) {
 	reqHeaders := make(map[string]string)
 	for k := range r.Header {
-		reqHeaders[k] = r.Header.Get(k)
+		reqHeaders[k] = redactHeader(k, strings.Join(r.Header.Values(k), ", "))
 	}
 	resHeaders := make(map[string]string)
 	for k := range w.Header() {
-		resHeaders[k] = w.Header().Get(k)
+		resHeaders[k] = redactHeader(k, strings.Join(w.Header().Values(k), ", "))
 	}
 
 	log := RequestLog{
@@ -191,6 +202,9 @@ func (s *Server) ReplayRequest(logID string) (*RequestLog, error) {
 
 	s.logMu.Lock()
 	s.requestLogs = append(s.requestLogs, *replay)
+	if len(s.requestLogs) > s.maxLogs {
+		s.requestLogs = append([]RequestLog(nil), s.requestLogs[len(s.requestLogs)-s.maxLogs:]...)
+	}
 	s.logMu.Unlock()
 
 	return replay, nil

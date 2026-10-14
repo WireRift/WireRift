@@ -6,8 +6,71 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
+	"mime"
+	"net"
 	"net/http"
+	"sync"
+	"time"
 )
+
+const (
+	pinMaxFailures = 5
+	pinLockout     = 5 * time.Minute
+)
+
+// pinGuard throttles PIN guessing per tunnel and client IP.
+type pinGuard struct {
+	mu       sync.Mutex
+	failures map[string]*pinFailure
+}
+
+type pinFailure struct {
+	count int
+	until time.Time // locked until (zero = not locked)
+	last  time.Time
+}
+
+func (g *pinGuard) locked(key string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	f := g.failures[key]
+	return f != nil && time.Now().Before(f.until)
+}
+
+// fail records a failed attempt and returns true once the key is locked.
+func (g *pinGuard) fail(key string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.failures == nil {
+		g.failures = make(map[string]*pinFailure)
+	}
+	now := time.Now()
+	if len(g.failures) > 10000 { // bound memory: drop stale entries
+		for k, f := range g.failures {
+			if now.Sub(f.last) > pinLockout {
+				delete(g.failures, k)
+			}
+		}
+	}
+	f := g.failures[key]
+	if f == nil || now.Sub(f.last) > pinLockout {
+		f = &pinFailure{}
+		g.failures[key] = f
+	}
+	f.count++
+	f.last = now
+	if f.count >= pinMaxFailures {
+		f.until = now.Add(pinLockout)
+		f.count = 0
+	}
+	return now.Before(f.until)
+}
+
+func (g *pinGuard) reset(key string) {
+	g.mu.Lock()
+	delete(g.failures, key)
+	g.mu.Unlock()
+}
 
 // pinMAC computes an HMAC of the PIN for safe cookie storage using a server-level secret.
 func (s *Server) pinMAC(pin, subdomain string) string {
@@ -25,6 +88,16 @@ func pinMatch(submitted, expected string) bool {
 // Returns true if access is allowed, false if response was written (PIN page or error).
 func (s *Server) checkPIN(w http.ResponseWriter, r *http.Request, pin, subdomain string) bool {
 	cookieName := "wirerift_pin_" + subdomain
+	ip := r.RemoteAddr
+	if host, _, err := net.SplitHostPort(ip); err == nil {
+		ip = host
+	}
+	guardKey := subdomain + "|" + ip
+	if s.pinGuard.locked(guardKey) {
+		w.Header().Set("Retry-After", "300")
+		http.Error(w, "Too many invalid PIN attempts. Try again later.", http.StatusTooManyRequests)
+		return false
+	}
 	expectedMAC := s.pinMAC(pin, subdomain)
 
 	// Check PIN cookie (stores HMAC, not raw PIN)
@@ -35,8 +108,12 @@ func (s *Server) checkPIN(w http.ResponseWriter, r *http.Request, pin, subdomain
 	}
 
 	// Check X-WireRift-PIN header (for API/CLI access)
-	if headerPIN := r.Header.Get("X-WireRift-PIN"); headerPIN != "" && pinMatch(headerPIN, pin) {
-		return true
+	if headerPIN := r.Header.Get("X-WireRift-PIN"); headerPIN != "" {
+		if pinMatch(headerPIN, pin) {
+			s.pinGuard.reset(guardKey)
+			return true
+		}
+		s.pinGuard.fail(guardKey)
 	}
 
 	// setPINcookie sets a secure HMAC-based PIN cookie
@@ -53,7 +130,10 @@ func (s *Server) checkPIN(w http.ResponseWriter, r *http.Request, pin, subdomain
 	}
 
 	// Check ?pin= query parameter
-	if queryPIN := r.URL.Query().Get("pin"); queryPIN != "" && pinMatch(queryPIN, pin) {
+	if queryPIN := r.URL.Query().Get("pin"); queryPIN != "" && !pinMatch(queryPIN, pin) {
+		s.pinGuard.fail(guardKey)
+	} else if queryPIN != "" {
+		s.pinGuard.reset(guardKey)
 		setPINcookie()
 		// Redirect to clean URL (strip pin param)
 		q := r.URL.Query()
@@ -67,14 +147,16 @@ func (s *Server) checkPIN(w http.ResponseWriter, r *http.Request, pin, subdomain
 	}
 
 	// Handle POST from PIN form
-	if r.Method == http.MethodPost && r.Header.Get("Content-Type") == "application/x-www-form-urlencoded" {
+	if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); r.Method == http.MethodPost && mt == "application/x-www-form-urlencoded" {
 		r.ParseForm()
 		if pinMatch(r.FormValue("pin"), pin) {
+			s.pinGuard.reset(guardKey)
 			setPINcookie()
 			http.Redirect(w, r, r.URL.Path, http.StatusFound)
 			return false
 		}
 		// Wrong PIN - show form again with error
+		s.pinGuard.fail(guardKey)
 		s.servePINPage(w, subdomain, true)
 		return false
 	}

@@ -45,8 +45,12 @@ type Config struct {
 	// TCPAddrRange is the range for TCP tunnel ports (e.g., "20000-29999").
 	TCPAddrRange string
 
-	// TLSConfig is the TLS configuration for the control plane.
+	// TLSConfig is the TLS configuration for the HTTPS edge.
 	TLSConfig *tls.Config
+
+	// ControlTLSConfig, when set, makes the control plane (:4443) serve TLS so
+	// the auth token is not sent in cleartext. Clients use a tls:// address.
+	ControlTLSConfig *tls.Config
 
 	// HeartbeatInterval is the interval for heartbeat checks.
 	HeartbeatInterval time.Duration
@@ -94,6 +98,7 @@ type Server struct {
 	httpsServer *http.Server
 
 	// PIN HMAC secret (generated at startup)
+	pinGuard  pinGuard
 	pinSecret []byte
 
 	// State
@@ -153,6 +158,39 @@ type Tunnel struct {
 	Inspect    bool              // Traffic inspection enabled
 	CreatedAt  time.Time
 	mu         sync.RWMutex
+
+	listener net.Listener // public TCP listener (TCP tunnels), closed on shutdown
+	stop     chan struct{}
+	stopOnce sync.Once
+}
+
+// shutdown stops the tunnel's public TCP listener, if any. It is idempotent
+// and returns only after the listener is closed, so the port can be reused.
+func (t *Tunnel) shutdown() {
+	t.stopOnce.Do(func() {
+		if t.stop != nil {
+			close(t.stop)
+		}
+		t.mu.Lock()
+		l := t.listener
+		t.mu.Unlock()
+		if l != nil {
+			l.Close()
+		}
+	})
+}
+
+// addTunnel registers a tunnel on the session. It fails if the session was
+// already removed (Tunnels == nil) or is at capacity, so a tunnel can never
+// be registered on a dead session.
+func (sess *Session) addTunnel(t *Tunnel, max int) bool {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if sess.Tunnels == nil || len(sess.Tunnels) >= max {
+		return false
+	}
+	sess.Tunnels[t.ID] = t
+	return true
 }
 
 // RequestLog represents a captured HTTP request/response for inspection.
@@ -306,6 +344,9 @@ func (s *Server) startControlListener() error {
 	s.controlListener, err = net.Listen("tcp", s.config.ControlAddr)
 	if err != nil {
 		return err
+	}
+	if s.config.ControlTLSConfig != nil {
+		s.controlListener = tls.NewListener(s.controlListener, s.config.ControlTLSConfig)
 	}
 
 	s.wg.Add(1)
@@ -540,7 +581,9 @@ func (s *Server) handleTunnelRequest(m *mux.Mux, session *Session, frame *proto.
 
 // createHTTPTunnel handles HTTP tunnel creation.
 func (s *Server) createHTTPTunnel(m *mux.Mux, session *Session, req *proto.TunnelRequest, tunnelID string) {
-	subdomain := req.Subdomain
+	// Subdomains are case-insensitive on the wire; normalize so "MyApp" and
+	// "myapp" are the same tunnel and the edge lookup (lowercased) finds it.
+	subdomain := strings.ToLower(req.Subdomain)
 	if subdomain == "" {
 		subdomain = generateSubdomain()
 	}
@@ -572,9 +615,11 @@ func (s *Server) createHTTPTunnel(m *mux.Mux, session *Session, req *proto.Tunne
 		return
 	}
 
-	session.mu.Lock()
-	session.Tunnels[tunnelID] = tunnel
-	session.mu.Unlock()
+	if !session.addTunnel(tunnel, s.config.MaxTunnelsPerSession) {
+		s.tunnels.Delete(subdomain)
+		sendTunnelError(m, "session closed")
+		return
+	}
 
 	resp := &proto.TunnelResponse{
 		OK:        true,
@@ -607,17 +652,32 @@ func (s *Server) createTCPTunnel(m *mux.Mux, session *Session, req *proto.Tunnel
 		CreatedAt:  time.Now(),
 	}
 
+	// Bind before announcing success so a listen failure is reported.
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		s.releasePort(port)
+		s.logger.Error("failed to start TCP tunnel listener", "port", port, "error", err)
+		sendTunnelError(m, "failed to bind tunnel port")
+		return
+	}
+	tunnel.listener = listener
+	tunnel.stop = make(chan struct{})
+
 	portKey := "tcp:" + strconv.Itoa(port)
 	s.tunnels.Store(portKey, tunnel)
 
-	session.mu.Lock()
-	session.Tunnels[tunnelID] = tunnel
-	session.mu.Unlock()
+	if !session.addTunnel(tunnel, s.config.MaxTunnelsPerSession) {
+		s.tunnels.Delete(portKey)
+		listener.Close()
+		s.releasePort(port)
+		sendTunnelError(m, "session closed")
+		return
+	}
 
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		s.startTCPTunnelListener(port, tunnel, session)
+		s.serveTCPTunnelListener(listener, tunnel, session)
 	}()
 
 	resp := &proto.TunnelResponse{
@@ -661,6 +721,7 @@ func (s *Server) handleTunnelClose(session *Session, frame *proto.Frame) {
 	case proto.TunnelTypeTCP:
 		portKey := "tcp:" + strconv.Itoa(tunnel.Port)
 		s.tunnels.Delete(portKey)
+		tunnel.shutdown()
 		s.releasePort(tunnel.Port)
 	}
 
@@ -691,6 +752,7 @@ func (s *Server) removeSession(sessionID string) {
 		case proto.TunnelTypeTCP:
 			portKey := "tcp:" + strconv.Itoa(tunnel.Port)
 			s.tunnels.Delete(portKey)
+			tunnel.shutdown()
 			s.releasePort(tunnel.Port)
 		}
 	}
@@ -704,13 +766,23 @@ func (s *Server) startTCPTunnelListener(port int, tunnel *Tunnel, session *Sessi
 		s.logger.Error("failed to start TCP tunnel listener", "port", port, "error", err)
 		return
 	}
+	tunnel.mu.Lock()
+	tunnel.listener = listener
+	tunnel.mu.Unlock()
+	s.serveTCPTunnelListener(listener, tunnel, session)
+}
+
+// serveTCPTunnelListener accepts visitors on an already-bound listener until
+// the server, the session mux, or the tunnel itself shuts down.
+func (s *Server) serveTCPTunnelListener(listener net.Listener, tunnel *Tunnel, session *Session) {
 	defer listener.Close()
 
-	// Close listener when context or mux is done to unblock Accept
+	// Close listener when context, mux or tunnel is done to unblock Accept
 	go func() {
 		select {
 		case <-s.ctx.Done():
 		case <-session.Mux.Done():
+		case <-tunnel.stop: // nil (never fires) for tunnels without a stop channel
 		}
 		listener.Close()
 	}()

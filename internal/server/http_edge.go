@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -12,10 +13,21 @@ import (
 	"time"
 )
 
+// hostHasTunnel reports whether host maps to a registered HTTP tunnel.
+func (s *Server) hostHasTunnel(host string) bool {
+	sub := extractSubdomain(host, s.config.Domain)
+	if sub == "" {
+		return false
+	}
+	_, ok := s.getTunnelBySubdomain(sub)
+	return ok
+}
+
 // handleHTTPRequest handles incoming HTTP requests.
 func (s *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
-	// Health check endpoint (not subdomain-dependent)
-	if r.URL.Path == "/healthz" {
+	// Health check endpoint. A tunnel's own /healthz (and its PIN/auth/IP
+	// checks) must not be shadowed, so only answer for hosts without a tunnel.
+	if r.URL.Path == "/healthz" && !s.hostHasTunnel(r.Host) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"status":"ok"}`))
 		return
@@ -144,6 +156,10 @@ func (s *Server) forwardHTTPRequest(w http.ResponseWriter, r *http.Request, sess
 	// 3. Serialize the HTTP request and write through the stream
 	reqData, err := SerializeRequest(r)
 	if err != nil {
+		if errors.Is(err, ErrRequestTooLarge) {
+			http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "Failed to serialize request", http.StatusInternalServerError)
 		return
 	}
@@ -203,6 +219,10 @@ func (s *Server) forwardWebSocket(w http.ResponseWriter, r *http.Request, sessio
 	// Serialize and send the upgrade request
 	reqData, err := SerializeRequest(r)
 	if err != nil {
+		if errors.Is(err, ErrRequestTooLarge) {
+			http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "Failed to serialize request", http.StatusInternalServerError)
 		return
 	}
