@@ -30,6 +30,7 @@ type Stream struct {
 	readBuf   *ringBuffer
 	readCh    chan struct{} // signals new data available
 	window    atomic.Int32  // send window remaining
+	maxWindow int32         // initial window; a peer can never credit more than this
 	windowCh  chan struct{} // signals window update
 	state     atomic.Int32
 	closeOnce sync.Once
@@ -44,11 +45,12 @@ type Stream struct {
 // newStream creates a new stream.
 func newStream(id uint32, m *Mux, windowSize int32) *Stream {
 	s := &Stream{
-		id:       id,
-		mux:      m,
-		readBuf:  newRingBuffer(int(windowSize)),
-		readCh:   make(chan struct{}, 1),
-		windowCh: make(chan struct{}, 1),
+		id:        id,
+		mux:       m,
+		readBuf:   newRingBuffer(int(windowSize)),
+		readCh:    make(chan struct{}, 1),
+		windowCh:  make(chan struct{}, 1),
+		maxWindow: windowSize,
 	}
 	s.window.Store(windowSize)
 	return s
@@ -85,14 +87,16 @@ func (s *Stream) SetMetadata(remoteAddr, protocol, tunnelID string) {
 // Read reads data from the stream. Blocks until data is available or stream is closed.
 func (s *Stream) Read(p []byte) (n int, err error) {
 	for {
-		// Try to read from buffer
+		// Observe the state before draining the buffer: if the remote has
+		// already closed, any data it sent is guaranteed to be buffered by now,
+		// so an empty buffer after this point really means EOF.
+		state := s.state.Load()
+
 		n, _ = s.readFromBuffer(p)
 		if n > 0 {
 			return n, nil
 		}
 
-		// Check state
-		state := s.state.Load()
 		if state == streamStateClosed || state == streamStateHalfClosedRemote {
 			return 0, io.EOF
 		}
@@ -187,6 +191,9 @@ func (s *Stream) Close() error {
 		} else if state == streamStateHalfClosedRemote {
 			s.state.CompareAndSwap(streamStateHalfClosedRemote, streamStateClosed)
 		}
+		// Re-read: the remote may have closed concurrently.
+		final := s.state.Load()
+		fullyClosed := final == streamStateClosed || final == streamStateReset
 
 		// Send close frame (non-blocking, ignore error if mux is closed)
 		select {
@@ -196,8 +203,12 @@ func (s *Stream) Close() error {
 			err = s.mux.sendStreamClose(s.id)
 		}
 
-		// Cleanup
-		s.cleanup()
+		// Keep a half-closed stream registered so the remote can still
+		// deliver its remaining data (half-close semantics); it is removed
+		// once the remote side closes as well.
+		if fullyClosed {
+			s.cleanup()
+		}
 	})
 	return err
 }
@@ -225,8 +236,15 @@ func (s *Stream) cleanup() {
 
 // onDataFrame handles incoming data.
 func (s *Stream) onDataFrame(data []byte) error {
-	// ringBuffer.Write always returns nil error
-	s.readBuf.Write(data)
+	// A conforming peer never has more than one window of unread data in
+	// flight; anything beyond that is a protocol violation, not data to drop.
+	if s.readBuf.Len()+len(data) > int(s.maxWindow) {
+		s.onResetFrame()
+		s.mux.sendStreamReset(s.id)
+		s.cleanup()
+		return nil
+	}
+	s.readBuf.Write(data) //nolint:errcheck // ringBuffer.Write never fails
 
 	// Signal data available
 	select {
@@ -239,7 +257,19 @@ func (s *Stream) onDataFrame(data []byte) error {
 
 // onWindowUpdate handles window update.
 func (s *Stream) onWindowUpdate(delta uint32) {
-	s.window.Add(int32(delta))
+	// Saturating add: a hostile peer must not be able to wrap the window
+	// negative (stalling the stream) or inflate it without bound.
+	limit := int64(s.maxWindow)
+	for {
+		cur := s.window.Load()
+		next := int64(cur) + int64(delta)
+		if next > limit {
+			next = limit
+		}
+		if s.window.CompareAndSwap(cur, int32(next)) {
+			break
+		}
+	}
 
 	// Signal window available
 	select {
@@ -254,7 +284,9 @@ func (s *Stream) onCloseFrame() {
 	if state == streamStateActive {
 		s.state.CompareAndSwap(streamStateActive, streamStateHalfClosedRemote)
 	} else if state == streamStateHalfClosedLocal {
-		s.state.CompareAndSwap(streamStateHalfClosedLocal, streamStateClosed)
+		if s.state.CompareAndSwap(streamStateHalfClosedLocal, streamStateClosed) {
+			defer s.cleanup()
+		}
 	}
 
 	// Signal EOF to readers
@@ -267,6 +299,7 @@ func (s *Stream) onCloseFrame() {
 // onResetFrame handles reset frame from remote.
 func (s *Stream) onResetFrame() {
 	s.state.Store(streamStateReset)
+	defer s.cleanup()
 
 	// Signal to readers/writers
 	select {

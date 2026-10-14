@@ -890,12 +890,18 @@ func TestStreamOnWindowUpdate(t *testing.T) {
 		t.Errorf("Initial window = %d, want 100", stream.window.Load())
 	}
 
-	// Apply window update
+	// Consume 60 bytes of window, then credit 50 back
+	stream.window.Add(-60)
 	stream.onWindowUpdate(50)
+	if stream.window.Load() != 90 {
+		t.Errorf("Window after update = %d, want 90", stream.window.Load())
+	}
 
-	// Window should now be 150
-	if stream.window.Load() != 150 {
-		t.Errorf("Window after update = %d, want 150", stream.window.Load())
+	// Hostile credits must saturate at the initial window, never wrap
+	stream.onWindowUpdate(0xFFFFFFF0)
+	stream.onWindowUpdate(0x7FFFFFFF)
+	if got := stream.window.Load(); got != 100 {
+		t.Errorf("Window after hostile updates = %d, want 100", got)
 	}
 }
 
@@ -1502,6 +1508,7 @@ func TestHandleStreamWindowSuccessWithStream(t *testing.T) {
 	stream := newStream(1, server, proto.DefaultWindowSize)
 	server.streams.Store(uint32(1), stream)
 
+	stream.window.Add(-2048) // consume some window so a credit is legitimate
 	initialWindow := stream.window.Load()
 
 	// Send window update for this stream
@@ -1916,5 +1923,63 @@ func TestMuxLocalAddrAfterClose(t *testing.T) {
 	}
 	if remoteAddr == nil {
 		t.Error("RemoteAddr should not be nil after close")
+	}
+}
+
+// TestHalfCloseStillReceivesRemoteData verifies that closing the write side
+// of a stream does not discard data the peer sends afterwards.
+func TestHalfCloseStillReceivesRemoteData(t *testing.T) {
+	client, server := newTestPipe(t)
+	go client.Run()
+	go server.Run()
+	defer client.Close()
+	defer server.Close()
+
+	cs, err := client.OpenStream()
+	if err != nil {
+		t.Fatal(err)
+	}
+	openFrame, _ := proto.EncodeJSONPayload(proto.FrameStreamOpen, cs.ID(), &proto.StreamOpen{Protocol: "tcp"})
+	if err := client.GetFrameWriter().Write(openFrame); err != nil {
+		t.Fatal(err)
+	}
+	ss, err := server.AcceptStream()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := cs.Close(); err != nil { // client half-closes
+		t.Fatal(err)
+	}
+	if _, err := io.ReadAll(ss); err != nil { // server sees EOF
+		t.Fatal(err)
+	}
+	if _, err := ss.Write([]byte("reply")); err != nil {
+		t.Fatal(err)
+	}
+	ss.Close()
+
+	got, err := io.ReadAll(cs)
+	if err != nil || string(got) != "reply" {
+		t.Errorf("read after half-close = %q, %v; want \"reply\"", got, err)
+	}
+}
+
+// TestDuplicateStreamOpenRejected verifies a peer cannot clobber a live stream.
+func TestDuplicateStreamOpenRejected(t *testing.T) {
+	client, server := newTestPipe(t)
+	defer server.Close()
+	defer client.Close()
+
+	live := newStream(4, server, server.config.WindowSize)
+	server.addStream(live)
+
+	frame, _ := proto.EncodeJSONPayload(proto.FrameStreamOpen, 4, &proto.StreamOpen{Protocol: "tcp"})
+	go io.Copy(io.Discard, client.conn) // absorb the reset the mux sends back
+	if err := server.handleFrame(frame); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := server.streams.Load(uint32(4)); v != live {
+		t.Error("live stream was replaced by a duplicate STREAM_OPEN")
 	}
 }

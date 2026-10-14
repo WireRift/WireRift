@@ -101,6 +101,13 @@ func (rb *ringBuffer) Read(p []byte) (int, error) {
 	return n, nil
 }
 
+// Len returns the number of buffered bytes.
+func (rb *ringBuffer) Len() int {
+	rb.mu.Lock()
+	defer rb.mu.Unlock()
+	return rb.lenLocked()
+}
+
 // Reset clears the buffer.
 func (rb *ringBuffer) Reset() {
 	rb.mu.Lock()

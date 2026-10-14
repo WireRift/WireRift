@@ -1,6 +1,7 @@
 package proto
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -103,8 +104,22 @@ func ReadFrame(r io.Reader) (*Frame, error) {
 	// Read payload
 	var payload []byte
 	if payloadLen > 0 {
-		payload = make([]byte, payloadLen)
-		if _, err := io.ReadFull(r, payload); err != nil {
+		var err error
+		if payloadLen <= smallPayloadSize {
+			payload = make([]byte, payloadLen)
+			_, err = io.ReadFull(r, payload)
+		} else {
+			// Don't trust the claimed length for a large allocation: grow as
+			// data actually arrives, so a bare header costs nothing.
+			var buf bytes.Buffer
+			var n int64
+			n, err = io.CopyN(&buf, r, int64(payloadLen))
+			payload = buf.Bytes()
+			if err == io.EOF && n > 0 {
+				err = io.ErrUnexpectedEOF
+			}
+		}
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -116,6 +131,9 @@ func ReadFrame(r io.Reader) (*Frame, error) {
 		Payload:  payload,
 	}, nil
 }
+
+// smallPayloadSize is the largest payload allocated up front from the header.
+const smallPayloadSize = 64 * 1024
 
 // FrameReader wraps an io.Reader for reading frames.
 type FrameReader struct {

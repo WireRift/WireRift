@@ -57,6 +57,7 @@ type Mux struct {
 	done      chan struct{}
 	err       atomic.Value // error that caused shutdown
 
+	streamCount   atomic.Int32 // number of registered streams
 	lastHeartbeat atomic.Int64 // unix nano of last heartbeat ack
 
 	maxFrameSize int
@@ -100,13 +101,19 @@ func (m *Mux) OpenStream() (*Stream, error) {
 	}
 
 	// Generate client stream ID (even numbers)
-	id := m.nextID.Add(2) - 2 // 0, 2, 4, 6...
+	if m.nextID.Load() > proto.MaxStreamID {
+		return nil, ErrTooManyStreams // don't keep incrementing into a wrap
+	}
+	if int(m.streamCount.Load()) >= m.config.MaxStreams {
+		return nil, ErrTooManyStreams
+	}
+	id := m.nextID.Add(2) - 2 // 2, 4, 6...
 	if id > proto.MaxStreamID {
 		return nil, ErrTooManyStreams
 	}
 
 	stream := newStream(id, m, m.config.WindowSize)
-	m.streams.Store(id, stream)
+	m.addStream(stream)
 
 	return stream, nil
 }
@@ -257,9 +264,20 @@ func (m *Mux) handleStreamOpen(frame *proto.Frame) error {
 		return err
 	}
 
+	// Reject IDs that would clobber a live stream, the control stream, and
+	// opens beyond the configured concurrency limit.
+	if frame.StreamID == proto.ControlStreamID || int(m.streamCount.Load()) >= m.config.MaxStreams {
+		m.sendStreamReset(frame.StreamID)
+		return nil
+	}
+	if _, exists := m.streams.Load(frame.StreamID); exists {
+		m.sendStreamReset(frame.StreamID)
+		return nil
+	}
+
 	stream := newStream(frame.StreamID, m, m.config.WindowSize)
 	stream.SetMetadata(msg.RemoteAddr, msg.Protocol, msg.TunnelID)
-	m.streams.Store(frame.StreamID, stream)
+	m.addStream(stream)
 
 	// Notify acceptor
 	select {
@@ -416,5 +434,12 @@ func (m *Mux) getStream(id uint32) (*Stream, bool) {
 
 // removeStream removes a stream from the mux.
 func (m *Mux) removeStream(id uint32) {
-	m.streams.Delete(id)
+	if _, loaded := m.streams.LoadAndDelete(id); loaded {
+		m.streamCount.Add(-1)
+	}
+}
+
+func (m *Mux) addStream(s *Stream) {
+	m.streams.Store(s.id, s)
+	m.streamCount.Add(1)
 }
