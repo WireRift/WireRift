@@ -68,6 +68,18 @@ func SerializeRequest(r *http.Request) ([]byte, error) {
 		}
 	}
 
+	// RFC 9112 Section 3.2: an HTTP/1.1 request on the wire must carry a
+	// Host header. net/http removes Host from r.Header, so the loop above
+	// never emits it; without this line the tunneled request reaches the
+	// local service with an empty Host (or none), which strict servers —
+	// including Go's own net/http server — reject with 400, breaking the
+	// WebSocket relay and any Host-based routing on the local app.
+	if r.Host != "" {
+		buf.WriteString("Host: ")
+		buf.WriteString(r.Host)
+		buf.WriteString("\r\n")
+	}
+
 	// Add forwarding headers (exactly one of each, never client-supplied
 	// duplicates that a backend could read first).
 	clientIP := r.RemoteAddr
@@ -107,8 +119,15 @@ func SerializeRequest(r *http.Request) ([]byte, error) {
 
 // DeserializeResponse deserializes an HTTP response from tunneling.
 func DeserializeResponse(data []byte) (*http.Response, error) {
+	return DeserializeResponseFor(data, nil)
+}
+
+// DeserializeResponseFor deserializes a response to req. Passing the request
+// matters for HEAD: its response carries Content-Length but no body, which
+// would otherwise surface as an unexpected EOF while copying the body.
+func DeserializeResponseFor(data []byte, req *http.Request) (*http.Response, error) {
 	reader := bufio.NewReader(bytes.NewReader(data))
-	resp, err := http.ReadResponse(reader, nil)
+	resp, err := http.ReadResponse(reader, req)
 	if err != nil {
 		return nil, err
 	}

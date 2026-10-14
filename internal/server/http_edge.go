@@ -176,7 +176,7 @@ func (s *Server) forwardHTTPRequest(w http.ResponseWriter, r *http.Request, sess
 	}
 
 	// 5. Deserialize the response
-	resp, err := DeserializeResponse(respData)
+	resp, err := DeserializeResponseFor(respData, r)
 	if err != nil {
 		http.Error(w, "Failed to deserialize response", http.StatusBadGateway)
 		return

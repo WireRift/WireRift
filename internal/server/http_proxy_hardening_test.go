@@ -75,3 +75,16 @@ func (zeroReader) Read(p []byte) (int, error) {
 }
 
 func bufioReader(b []byte) *bufio.Reader { return bufio.NewReader(bytes.NewReader(b)) }
+
+func TestDeserializeResponseForHEAD(t *testing.T) {
+	req := httptest.NewRequest("HEAD", "/", nil)
+	data := []byte("HTTP/1.1 200 OK\r\nContent-Length: 1234\r\n\r\n")
+	resp, err := DeserializeResponseFor(data, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	if err := WriteResponse(w, resp); err != nil {
+		t.Errorf("HEAD response body copy failed: %v", err)
+	}
+}

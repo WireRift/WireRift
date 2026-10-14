@@ -176,7 +176,7 @@ func (s *Server) ReplayRequest(logID string) (*RequestLog, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
-	resp, err := DeserializeResponse(respData)
+	resp, err := DeserializeResponseFor(respData, req)
 	if err != nil {
 		return nil, fmt.Errorf("deserialize: %w", err)
 	}
