@@ -146,14 +146,38 @@ func WriteResponse(w http.ResponseWriter, resp *http.Response) error {
 	// Write status code
 	w.WriteHeader(resp.StatusCode)
 
-	// Copy body
+	// Copy body. When the length is not declared (chunked, close-delimited,
+	// SSE) flush after every chunk so data reaches the visitor immediately.
 	if resp.Body != nil {
-		_, err := io.Copy(w, resp.Body)
-		resp.Body.Close()
-		return err
+		defer resp.Body.Close()
+		flusher, _ := w.(http.Flusher)
+		if flusher == nil || (resp.ContentLength >= 0 && !isEventStream(resp)) {
+			_, err := io.Copy(w, resp.Body)
+			return err
+		}
+		buf := make([]byte, 32*1024)
+		for {
+			n, rerr := resp.Body.Read(buf)
+			if n > 0 {
+				if _, werr := w.Write(buf[:n]); werr != nil {
+					return werr
+				}
+				flusher.Flush()
+			}
+			if rerr == io.EOF {
+				return nil
+			}
+			if rerr != nil {
+				return rerr
+			}
+		}
 	}
 
 	return nil
+}
+
+func isEventStream(resp *http.Response) bool {
+	return strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream")
 }
 
 // IsWebSocketRequest checks if a request is a WebSocket upgrade per RFC 6455.

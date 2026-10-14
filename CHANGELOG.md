@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dashboard binds to `127.0.0.1` by default (`-dashboard-bind`); failed-auth lockout (10 bad tokens per IP, 5 min); optional HTTPS via `-dashboard-tls-cert/-key`
 - Startup banner no longer prints a token the operator supplied (only auto-generated ones)
 
+### Changed
+- HTTP responses are streamed to the visitor instead of fully buffered: SSE, long polling and downloads larger than 64 MB now work; unknown-length bodies are flushed per chunk; the local app's stalled response is bounded (2 min to first byte) and a visitor disconnect releases the stream
+
 ### Fixed
 - HEAD responses no longer fail with "unexpected EOF"
 - Chunked request bodies were forwarded empty; oversized bodies now get 413

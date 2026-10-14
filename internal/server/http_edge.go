@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -168,27 +170,62 @@ func (s *Server) forwardHTTPRequest(w http.ResponseWriter, r *http.Request, sess
 		return
 	}
 
-	// 4. Read response data from the stream (limit to 64 MB to prevent memory exhaustion)
-	respData, err := io.ReadAll(io.LimitReader(stream, 64*1024*1024))
-	if err != nil {
-		http.Error(w, "Failed to read response from stream", http.StatusBadGateway)
-		return
-	}
+	s.bytesIn.Add(int64(len(reqData)))
 
-	// 5. Deserialize the response
-	resp, err := DeserializeResponseFor(respData, r)
+	// 4. Stop waiting if the visitor goes away, so a slow or hung local app
+	// cannot pin this goroutine and its stream.
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-r.Context().Done():
+			stream.Reset()
+		case <-done:
+		}
+	}()
+
+	// 5. Parse the response head from the stream and stream the body back as it
+	// arrives (no full buffering), so large downloads, SSE and long polling work.
+	headTimer := time.AfterFunc(responseHeadTimeout, func() { stream.Reset() })
+	cr := &countingReader{r: stream, n: &s.bytesOut}
+	br := bufio.NewReader(cr)
+	resp, err := http.ReadResponse(br, r)
+	headTimer.Stop()
 	if err != nil {
+		if cr.err != nil && cr.err != io.EOF {
+			http.Error(w, "Failed to read response from stream", http.StatusBadGateway)
+			return
+		}
 		http.Error(w, "Failed to deserialize response", http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
 
-	// Track bytes
-	s.bytesIn.Add(int64(len(reqData)))
-	s.bytesOut.Add(int64(len(respData)))
-
 	// 6. Write the response back to the edge HTTP client
-	WriteResponse(w, resp)
+	if err := WriteResponse(w, resp); err != nil && resp.ContentLength < 0 {
+		// The length is not declared, so a silent early end would look like a
+		// complete chunked/close-delimited body. Abort the connection instead.
+		panic(http.ErrAbortHandler)
+	}
+}
+
+// responseHeadTimeout bounds how long the local app may take to start responding.
+const responseHeadTimeout = 2 * time.Minute
+
+// countingReader adds the bytes read to a shared counter.
+type countingReader struct {
+	r   io.Reader
+	n   *atomic.Int64
+	err error // last read error (only touched by the single reading goroutine)
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n.Add(int64(n))
+	if err != nil {
+		c.err = err
+	}
+	return n, err
 }
 
 // forwardWebSocket handles WebSocket upgrade requests by hijacking the connection
