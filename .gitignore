@@ -45,3 +45,9 @@ website/dist/
 
 # Fuzz corpus (can be large)
 **/testdata/fuzz/
+.temp_files/
+
+.wrongstack/
+!/.wrongstack/
+/.wrongstack/*
+!/.wrongstack/project.json
