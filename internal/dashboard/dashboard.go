@@ -103,6 +103,7 @@ type authFailure struct {
 	count int
 	first time.Time
 	until time.Time
+	last  time.Time // most recent failure for this IP (eviction order)
 }
 
 func (g *authGuard) locked(ip string) bool {
@@ -132,10 +133,33 @@ func (g *authGuard) fail(ip string) {
 		g.fails[ip] = f
 	}
 	f.count++
+	f.last = now
 	if f.count >= authMaxFailures {
 		f.until = now.Add(authWindow)
 		f.count = 0
 		f.first = now
+	}
+	// A flood of distinct fresh IPs gives the sweep above nothing to
+	// expire — every entry is brand new, so the map would grow without
+	// bound for as long as the flood lasts. Enforce the cap by evicting
+	// the least-recently-failed entries: under a distributed flood those
+	// are attacker entries, and a guard that can exhaust the server's
+	// memory protects no one. Runs after the insert so the bound holds
+	// exactly after every call (the just-recorded entry is the newest
+	// and is never the eviction victim).
+	for len(g.fails) > 10000 {
+		oldestKey := ""
+		var oldest time.Time
+		first := true
+		for k, fc := range g.fails {
+			if first || fc.last.Before(oldest) {
+				oldestKey, oldest, first = k, fc.last, false
+			}
+		}
+		if first {
+			break
+		}
+		delete(g.fails, oldestKey)
 	}
 }
 
