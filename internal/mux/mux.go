@@ -342,6 +342,13 @@ func (m *Mux) handleStreamWindow(frame *proto.Frame) error {
 
 // handleHeartbeat handles a HEARTBEAT frame by responding with HEARTBEAT_ACK.
 func (m *Mux) handleHeartbeat(frame *proto.Frame) error {
+	// Receipt of a HEARTBEAT ping is itself a liveness signal from the
+	// peer. In this protocol only the client sends pings, so without
+	// recording them here the server's LastHeartbeat() never advances (it
+	// never receives ACKs) and session cleanup kills healthy, idle
+	// tunnels even while pings keep arriving.
+	m.lastHeartbeat.Store(time.Now().UnixNano())
+
 	ack := &proto.Frame{
 		Version:  proto.Version,
 		Type:     proto.FrameHeartbeatAck,
@@ -357,7 +364,8 @@ func (m *Mux) handleHeartbeatAck(frame *proto.Frame) error {
 	return nil
 }
 
-// LastHeartbeat returns the time of the last heartbeat ack.
+// LastHeartbeat returns the time of the last heartbeat frame received,
+// whether a ping or an ack — either proves the peer connection is alive.
 func (m *Mux) LastHeartbeat() time.Time {
 	ns := m.lastHeartbeat.Load()
 	if ns == 0 {
