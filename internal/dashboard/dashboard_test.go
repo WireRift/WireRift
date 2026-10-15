@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -535,7 +536,13 @@ func TestHandleDomainActionsVerify(t *testing.T) {
 	authMgr := auth.NewManager()
 	srv := server.New(server.DefaultConfig(), nil)
 	domainMgr := config.NewDomainManager("test.dev")
-	domainMgr.AddDomain("verify.test.dev", "test-account")
+	cd, _ := domainMgr.AddDomain("verify.test.dev", "test-account")
+	domainMgr.SetTXTResolver(func(_ context.Context, name string) ([]string, error) {
+		if name != "_wirerift.verify.test.dev" {
+			t.Errorf("looked up %q", name)
+		}
+		return []string{"wirerift-verification=" + cd.VerifyCode}, nil
+	})
 
 	d := New(Config{
 		Server:      srv,
@@ -946,8 +953,30 @@ func TestHandleDomainActionsVerifyNonExistent(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusInternalServerError {
-		t.Errorf("Status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("Status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+// Verification must fail (422) when the DNS TXT proof is missing, and the
+// domain must stay unverified.
+func TestHandleDomainVerifyWithoutDNSProof(t *testing.T) {
+	authMgr := auth.NewManager()
+	domainMgr := config.NewDomainManager("test.dev")
+	domainMgr.AddDomain("proof.test.dev", "acct")
+	domainMgr.SetTXTResolver(func(context.Context, string) ([]string, error) { return nil, nil })
+	d := New(Config{Server: server.New(server.DefaultConfig(), nil), AuthManager: authMgr, DomainMgr: domainMgr})
+
+	req := httptest.NewRequest("POST", "/api/domains/proof.test.dev/verify", nil)
+	req.Header.Set("Authorization", "Bearer "+authMgr.DevToken())
+	rec := httptest.NewRecorder()
+	d.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("Status = %d, want 422", rec.Code)
+	}
+	if got, _ := domainMgr.GetDomain("proof.test.dev"); got.Verified {
+		t.Error("domain verified without DNS proof")
 	}
 }
 

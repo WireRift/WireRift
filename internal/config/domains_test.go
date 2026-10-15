@@ -1,6 +1,8 @@
 package config
 
 import (
+	"context"
+	"errors"
 	"testing"
 )
 
@@ -258,7 +260,9 @@ func TestIsValidDomain(t *testing.T) {
 		{"123.example.com", true},
 		{"", false},
 		{".", false},
-		{"example..com", true}, // simplified validation allows consecutive dots
+		{"example..com", false}, // empty label
+		{"-bad.example.com", false},
+		{"bad-.example.com", false},
 	}
 
 	for _, tt := range tests {
@@ -336,4 +340,55 @@ func findSubstr(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+func TestCheckDNS(t *testing.T) {
+	m := NewDomainManager("wirerift.com")
+	cd, err := m.AddDomain("App.Example.com", "acct") // normalized to lowercase
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cd.Domain != "app.example.com" {
+		t.Fatalf("domain not normalized: %q", cd.Domain)
+	}
+	if _, err := m.AddDomain("APP.example.com", "other"); err != ErrDomainAlreadyExists {
+		t.Errorf("case-variant duplicate err = %v, want ErrDomainAlreadyExists", err)
+	}
+
+	var asked string
+	records := []string{"unrelated"}
+	m.SetTXTResolver(func(_ context.Context, name string) ([]string, error) {
+		asked = name
+		return records, nil
+	})
+
+	// No matching TXT record: must NOT verify.
+	if err := m.CheckDNS(context.Background(), "app.example.com"); !errors.Is(err, ErrDNSVerification) {
+		t.Fatalf("err = %v, want ErrDNSVerification", err)
+	}
+	if asked != "_wirerift.app.example.com" {
+		t.Errorf("looked up %q", asked)
+	}
+	if got, _ := m.GetDomain("app.example.com"); got.Verified {
+		t.Fatal("domain verified without a matching TXT record")
+	}
+
+	// Matching record verifies.
+	records = []string{"wirerift-verification=" + cd.VerifyCode}
+	if err := m.CheckDNS(context.Background(), "APP.example.com"); err != nil {
+		t.Fatalf("CheckDNS: %v", err)
+	}
+	if got, _ := m.GetDomain("app.example.com"); !got.Verified {
+		t.Error("domain not verified after matching TXT record")
+	}
+
+	// Lookup failure and unknown domain.
+	m.SetTXTResolver(func(context.Context, string) ([]string, error) { return nil, errors.New("nxdomain") })
+	cd2, _ := m.AddDomain("b.example.com", "acct")
+	if err := m.CheckDNS(context.Background(), cd2.Domain); !errors.Is(err, ErrDNSVerification) {
+		t.Errorf("lookup failure err = %v", err)
+	}
+	if err := m.CheckDNS(context.Background(), "missing.example.com"); err != ErrDomainNotFound {
+		t.Errorf("unknown domain err = %v", err)
+	}
 }

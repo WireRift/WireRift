@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - HTTP responses are streamed to the visitor instead of fully buffered: SSE, long polling and downloads larger than 64 MB now work; unknown-length bodies are flushed per chunk; the local app's stalled response is bounded (2 min to first byte) and a visitor disconnect releases the stream
 
 ### Fixed
+- Custom domain verification now checks the DNS TXT record (`_wirerift.<domain>`) instead of marking any domain verified; domains are case-insensitive and labels are validated
 - HEAD responses no longer fail with "unexpected EOF"
 - Chunked request bodies were forwarded empty; oversized bodies now get 413
 - Closing a TCP tunnel left its public port listening; bind errors are now reported to the client

@@ -1,10 +1,12 @@
 package dashboard
 
 import (
+	"context"
 	"crypto/rand"
 	"embed"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net"
@@ -342,9 +344,15 @@ func (d *Dashboard) handleDomainActions(w http.ResponseWriter, r *http.Request) 
 
 			case "verify":
 				// Verify domain
-				err := d.domainMgr.VerifyDomain(domain, nil, nil)
+				ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+				err := d.domainMgr.CheckDNS(ctx, domain)
+				cancel()
+				if errors.Is(err, config.ErrDomainNotFound) {
+					d.jsonError(w, err.Error(), http.StatusNotFound)
+					return
+				}
 				if err != nil {
-					d.jsonError(w, err.Error(), http.StatusInternalServerError)
+					d.jsonError(w, "DNS verification failed: TXT record _wirerift."+domain+" not found or does not match (see /dns)", http.StatusUnprocessableEntity)
 					return
 				}
 				d.jsonResponse(w, map[string]string{"status": "verified"})

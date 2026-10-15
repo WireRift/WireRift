@@ -543,7 +543,7 @@ All endpoints require `Authorization: Bearer TOKEN` header.
 | `/api/domains` | GET/POST | List/add custom domains |
 | `/api/domains/{domain}` | GET/DELETE | Get/remove domain |
 | `/api/domains/{domain}/dns` | GET | DNS records for verification |
-| `/api/domains/{domain}/verify` | POST | Verify domain ownership |
+| `/api/domains/{domain}/verify` | POST | Verify ownership: succeeds only if TXT `_wirerift.{domain}` contains `wirerift-verification=<code>` (see `/dns`); 422 otherwise |
 
 ### Response Headers
 
