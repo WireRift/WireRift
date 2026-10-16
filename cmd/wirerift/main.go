@@ -53,7 +53,7 @@ func run(args []string) error {
 		return doList(args)
 	case "config":
 		return doConfig(args)
-	case "version":
+	case "version", "-version", "--version":
 		fmt.Printf("WireRift %s (commit: %s, built: %s)\n", version, commit, date)
 	case "help", "-h", "--help":
 		printUsage()
@@ -79,6 +79,7 @@ Commands:
   list                            List active tunnels
   config                          Show/edit configuration
   version                         Show version information
+  version                         Show version (also --version)
   help                            Show this help
 
 Examples:

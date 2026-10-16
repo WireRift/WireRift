@@ -178,8 +178,13 @@ func TestLoadConfigInvalidLine(t *testing.T) {
 
 // --- run() tests ---
 
-func TestRun_NoArgs(t *testing.T)         { assertErr(t, run([]string{"wirerift"})) }
-func TestRun_Version(t *testing.T)        { assertNoErr(t, run([]string{"wirerift", "version"})) }
+func TestRun_NoArgs(t *testing.T)  { assertErr(t, run([]string{"wirerift"})) }
+func TestRun_Version(t *testing.T) { assertNoErr(t, run([]string{"wirerift", "version"})) }
+func TestRun_VersionFlags(t *testing.T) {
+	for _, f := range []string{"-version", "--version"} {
+		assertNoErr(t, run([]string{"wirerift", f}))
+	}
+}
 func TestRun_UnknownCommand(t *testing.T) { assertErr(t, run([]string{"wirerift", "bogus"})) }
 
 func TestRun_Help(t *testing.T) {
