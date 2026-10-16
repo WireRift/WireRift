@@ -88,3 +88,26 @@ func TestDeserializeResponseForHEAD(t *testing.T) {
 		t.Errorf("HEAD response body copy failed: %v", err)
 	}
 }
+
+func TestPublicHTTPURL(t *testing.T) {
+	cases := []struct {
+		scheme string
+		port   int
+		want   string
+	}{
+		{"", 0, "http://app.example.com"},
+		{"http", 80, "http://app.example.com"},
+		{"http", 8080, "http://app.example.com:8080"},
+		{"https", 443, "https://app.example.com"},
+		{"https", 8443, "https://app.example.com:8443"},
+		{"https", 0, "https://app.example.com"},
+	}
+	for _, c := range cases {
+		cfg := DefaultConfig()
+		cfg.Domain = "example.com"
+		cfg.PublicScheme, cfg.PublicPort = c.scheme, c.port
+		if got := New(cfg, nil).publicHTTPURL("app"); got != c.want {
+			t.Errorf("scheme=%q port=%d: got %q, want %q", c.scheme, c.port, got, c.want)
+		}
+	}
+}

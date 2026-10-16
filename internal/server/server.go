@@ -42,6 +42,12 @@ type Config struct {
 	// HTTPSAddr is the address for HTTPS edge listener.
 	HTTPSAddr string
 
+	// PublicScheme ("http" or "https") and PublicPort shape the public URLs
+	// handed to clients. Defaults: "http" and the scheme's standard port,
+	// which is omitted from the URL.
+	PublicScheme string
+	PublicPort   int
+
 	// TCPAddrRange is the range for TCP tunnel ports (e.g., "20000-29999").
 	TCPAddrRange string
 
@@ -600,7 +606,7 @@ func (s *Server) createHTTPTunnel(m *mux.Mux, session *Session, req *proto.Tunne
 		Type:       proto.TunnelTypeHTTP,
 		SessionID:  session.ID,
 		Subdomain:  subdomain,
-		PublicURL:  "http://" + subdomain + "." + s.config.Domain,
+		PublicURL:  s.publicHTTPURL(subdomain),
 		LocalAddr:  req.LocalAddr,
 		AllowedIPs: req.AllowedIPs,
 		PIN:        req.PIN,
@@ -1132,4 +1138,18 @@ func (s *Server) cleanupInactiveSessions() {
 		}
 		return true
 	})
+}
+
+// publicHTTPURL builds the public URL of an HTTP tunnel.
+func (s *Server) publicHTTPURL(subdomain string) string {
+	scheme := s.config.PublicScheme
+	if scheme == "" {
+		scheme = "http"
+	}
+	host := subdomain + "." + s.config.Domain
+	port := s.config.PublicPort
+	if port == 0 || (scheme == "http" && port == 80) || (scheme == "https" && port == 443) {
+		return scheme + "://" + host
+	}
+	return scheme + "://" + net.JoinHostPort(host, strconv.Itoa(port))
 }
