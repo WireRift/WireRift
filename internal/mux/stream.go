@@ -119,7 +119,7 @@ func (s *Stream) readFromBuffer(p []byte) (int, error) {
 	n, _ := s.readBuf.Read(p)
 	if n > 0 {
 		// Send window update
-		if err := s.mux.sendWindowUpdate(s.id, uint32(n)); err != nil {
+		if err := s.mux.sendWindowUpdate(s.id, uint32(n)); err != nil { //nolint:gosec // n <= len(buffer) <= 16 MB
 			return n, err
 		}
 	}
@@ -174,7 +174,7 @@ func (s *Stream) Write(p []byte) (n int, err error) {
 			return total, err
 		}
 
-		s.window.Add(-int32(chunk))
+		s.window.Add(-int32(chunk)) //nolint:gosec // chunk <= window (int32)
 		total += chunk
 	}
 
@@ -222,7 +222,7 @@ func (s *Stream) Reset() error {
 	case <-s.mux.done:
 		// Mux closed, can't send
 	default:
-		s.mux.sendStreamReset(s.id)
+		_ = s.mux.sendStreamReset(s.id)
 	}
 
 	s.cleanup()
@@ -240,7 +240,7 @@ func (s *Stream) onDataFrame(data []byte) error {
 	// flight; anything beyond that is a protocol violation, not data to drop.
 	if s.readBuf.Len()+len(data) > int(s.maxWindow) {
 		s.onResetFrame()
-		s.mux.sendStreamReset(s.id)
+		_ = s.mux.sendStreamReset(s.id)
 		s.cleanup()
 		return nil
 	}
@@ -266,7 +266,7 @@ func (s *Stream) onWindowUpdate(delta uint32) {
 		if next > limit {
 			next = limit
 		}
-		if s.window.CompareAndSwap(cur, int32(next)) {
+		if s.window.CompareAndSwap(cur, int32(next)) { //nolint:gosec // next clamped to maxWindow (int32)
 			break
 		}
 	}

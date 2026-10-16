@@ -148,7 +148,7 @@ func (s *Server) checkPIN(w http.ResponseWriter, r *http.Request, pin, subdomain
 
 	// Handle POST from PIN form
 	if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); r.Method == http.MethodPost && mt == "application/x-www-form-urlencoded" {
-		r.ParseForm()
+		_ = r.ParseForm()
 		if pinMatch(r.FormValue("pin"), pin) {
 			s.pinGuard.reset(guardKey)
 			setPINcookie()

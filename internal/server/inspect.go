@@ -2,6 +2,7 @@ package server
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -146,7 +147,7 @@ func (s *Server) ReplayRequest(logID string) (*RequestLog, error) {
 	}
 
 	// Create a new HTTP request from the log
-	req, _ := http.NewRequest(original.Method, original.Path, nil)
+	req, _ := http.NewRequestWithContext(context.Background(), original.Method, original.Path, nil)
 	for k, v := range original.ReqHeaders {
 		req.Header.Set(k, v)
 	}

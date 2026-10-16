@@ -49,8 +49,8 @@ func normalizeArgs(args []string) []string {
 			flags = append(flags, a)
 			// "-flag=value" carries its own value and must not swallow the next arg.
 			if !strings.Contains(a, "=") && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-				if a == "-v" || a == "-json" || a == "-auto-cert" || a == "-acme-staging" || a == "-version" {
-				} else {
+				isBool := a == "-v" || a == "-json" || a == "-auto-cert" || a == "-acme-staging" || a == "-version"
+				if !isBool {
 					i++
 					flags = append(flags, args[i])
 				}
@@ -165,7 +165,7 @@ Environment Variables:
 	if *tokenFlag != "" {
 		tokenSource = "-token flag"
 	} else if os.Getenv("WIRERIFT_TOKEN") != "" {
-		tokenSource = "WIRERIFT_TOKEN env"
+		tokenSource = "WIRERIFT_TOKEN env" //nolint:gosec // a label, not a credential
 	}
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "╔══════════════════════════════════════════════╗")
@@ -326,10 +326,10 @@ Environment Variables:
 	// Shutdown dashboard with timeout
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
-	dashServer.Shutdown(shutdownCtx)
+	_ = dashServer.Shutdown(shutdownCtx)
 
 	// Stop server (Stop always returns nil)
-	srv.Stop()
+	_ = srv.Stop()
 
 	logger.Info("server stopped")
 	return nil

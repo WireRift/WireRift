@@ -141,10 +141,10 @@ func normalizeArgs(args []string) []string {
 				// Could be a flag value — check if current flag is a bool flag
 				// For simplicity, always treat next arg as value if it doesn't start with -
 				// Exception: if it looks like a port number and current flag is a known bool flag
-				if a == "-v" || a == "-inspect" || a == "-json" || a == "-auto-cert" ||
-					a == "-acme-staging" || a == "-version" {
-					// Bool flags don't consume next arg
-				} else {
+				// Bool flags don't consume the next arg
+				isBool := a == "-v" || a == "-inspect" || a == "-json" || a == "-auto-cert" ||
+					a == "-acme-staging" || a == "-version"
+				if !isBool {
 					i++
 					flags = append(flags, args[i])
 				}
@@ -708,8 +708,8 @@ func doServe(parentCtx context.Context, args []string) error {
 	}
 	localPort := listener.Addr().(*net.TCPAddr).Port
 
-	fileSrv := &http.Server{Handler: http.FileServer(http.Dir(dir))}
-	go fileSrv.Serve(listener)
+	fileSrv := &http.Server{Handler: http.FileServer(http.Dir(dir)), ReadHeaderTimeout: 10 * time.Second}
+	go func() { _ = fileSrv.Serve(listener) }()
 
 	opts := parseCommonOptions()
 	if *server != "" {
@@ -779,7 +779,7 @@ func doServe(parentCtx context.Context, args []string) error {
 	<-ctx.Done()
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
-	fileSrv.Shutdown(shutdownCtx)
+	_ = fileSrv.Shutdown(shutdownCtx)
 	c.Close()
 	return nil
 }
@@ -813,7 +813,7 @@ func doList(args []string) error {
 	// Query the dashboard API
 	url := fmt.Sprintf("http://%s/api/tunnels", net.JoinHostPort(serverHost(opts.server), "4040"))
 
-	req, _ := http.NewRequest("GET", url, nil)
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
 	if opts.token != "" {
 		req.Header.Set("Authorization", "Bearer "+opts.token)
 	}

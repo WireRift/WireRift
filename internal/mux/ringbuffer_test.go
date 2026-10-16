@@ -117,7 +117,7 @@ func TestRingBufferPartialRead(t *testing.T) {
 	}
 }
 
-func TestRingBufferConcurrent(t *testing.T) {
+func TestRingBufferConcurrent(_ *testing.T) {
 	rb := newRingBuffer(4096)
 	done := make(chan bool)
 

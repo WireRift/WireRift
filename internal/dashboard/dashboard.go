@@ -328,7 +328,7 @@ func (d *Dashboard) handleDomainActions(w http.ResponseWriter, r *http.Request) 
 
 	case http.MethodDelete:
 		// Remove domain (RemoveDomain always returns nil)
-		d.domainMgr.RemoveDomain(domain)
+		_ = d.domainMgr.RemoveDomain(domain)
 		w.WriteHeader(http.StatusNoContent)
 
 	default:

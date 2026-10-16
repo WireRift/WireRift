@@ -267,11 +267,11 @@ func (m *Mux) handleStreamOpen(frame *proto.Frame) error {
 	// Reject IDs that would clobber a live stream, the control stream, and
 	// opens beyond the configured concurrency limit.
 	if frame.StreamID == proto.ControlStreamID || int(m.streamCount.Load()) >= m.config.MaxStreams {
-		m.sendStreamReset(frame.StreamID)
+		_ = m.sendStreamReset(frame.StreamID)
 		return nil
 	}
 	if _, exists := m.streams.Load(frame.StreamID); exists {
-		m.sendStreamReset(frame.StreamID)
+		_ = m.sendStreamReset(frame.StreamID)
 		return nil
 	}
 
@@ -284,7 +284,7 @@ func (m *Mux) handleStreamOpen(frame *proto.Frame) error {
 	case m.accept <- stream:
 	default:
 		// Accept queue full, reset stream
-		stream.Reset()
+		_ = stream.Reset()
 	}
 
 	return nil
@@ -295,7 +295,7 @@ func (m *Mux) handleStreamData(frame *proto.Frame) error {
 	stream, ok := m.getStream(frame.StreamID)
 	if !ok {
 		// Stream not found, send reset
-		m.sendStreamReset(frame.StreamID)
+		_ = m.sendStreamReset(frame.StreamID)
 		return nil
 	}
 

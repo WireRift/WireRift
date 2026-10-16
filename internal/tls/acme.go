@@ -132,7 +132,13 @@ func (m *ACMEManager) Initialize() error {
 	}
 	m.logger.Info("fetching ACME directory", "url", dirURL)
 
-	resp, err := m.httpClient.Get(dirURL)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	dirReq, err := http.NewRequestWithContext(ctx, http.MethodGet, dirURL, nil)
+	if err != nil {
+		return fmt.Errorf("fetch directory: %w", err)
+	}
+	resp, err := m.httpClient.Do(dirReq)
 	if err != nil {
 		return fmt.Errorf("fetch directory: %w", err)
 	}

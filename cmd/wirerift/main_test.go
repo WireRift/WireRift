@@ -1706,8 +1706,8 @@ func TestNormalizeArgsBoolFlags(t *testing.T) {
 		if a == "-inspect" {
 			foundInspect = true
 			// 8080 should be after -inspect in the result
-			if i+1 < len(args) && args[i+1] == "8080" {
-				// Good - 8080 is positional after -inspect
+			if i+1 >= len(args) || args[i+1] != "8080" {
+				t.Errorf("8080 should be positional right after -inspect, got %v", args)
 			}
 			break
 		}

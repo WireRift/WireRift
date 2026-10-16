@@ -53,10 +53,10 @@ func (f *Frame) Encode(w io.Writer) error {
 	// Encode header
 	header[0] = f.Version
 	header[1] = byte(f.Type)
-	header[2] = byte(f.StreamID >> 16) // Stream ID high byte
-	header[3] = byte(f.StreamID >> 8)  // Stream ID mid byte
-	header[4] = byte(f.StreamID)       // Stream ID low byte
-	binary.BigEndian.PutUint32(header[5:9], uint32(len(f.Payload)))
+	header[2] = byte(f.StreamID >> 16)                              // Stream ID high byte
+	header[3] = byte(f.StreamID >> 8)                               // Stream ID mid byte
+	header[4] = byte(f.StreamID)                                    // Stream ID low byte
+	binary.BigEndian.PutUint32(header[5:9], uint32(len(f.Payload))) //nolint:gosec // payload length is bounded by MaxPayloadSize
 
 	// Write header
 	if _, err := w.Write(header); err != nil {

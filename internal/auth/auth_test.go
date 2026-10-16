@@ -408,10 +408,10 @@ func TestValidateTokenValidInStore(t *testing.T) {
 		t.Errorf("Expected no error, got %v", err)
 	}
 	if token == nil {
-		t.Error("Token should not be nil")
+		t.Fatal("Token should not be nil")
 	}
 	if acc == nil {
-		t.Error("Account should not be nil")
+		t.Fatal("Account should not be nil")
 	}
 	if token.ID != "tk_valid" {
 		t.Errorf("Token ID = %q, want tk_valid", token.ID)

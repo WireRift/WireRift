@@ -183,10 +183,10 @@ func (t *Tunnel) shutdown() {
 // addTunnel registers a tunnel on the session. It fails if the session was
 // already removed (Tunnels == nil) or is at capacity, so a tunnel can never
 // be registered on a dead session.
-func (sess *Session) addTunnel(t *Tunnel, max int) bool {
+func (sess *Session) addTunnel(t *Tunnel, limit int) bool {
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
-	if sess.Tunnels == nil || len(sess.Tunnels) >= max {
+	if sess.Tunnels == nil || len(sess.Tunnels) >= limit {
 		return false
 	}
 	sess.Tunnels[t.ID] = t
@@ -250,7 +250,7 @@ func New(config Config, logger *slog.Logger) *Server {
 	}
 
 	// Store portStart-1 so first Add(1) yields portStart
-	s.nextPort.Store(int32(s.tcpPortStart - 1))
+	s.nextPort.Store(int32(s.tcpPortStart - 1)) //nolint:gosec // port numbers are <= 65535
 
 	if config.AuthManager != nil {
 		s.authManager = config.AuthManager
@@ -313,10 +313,10 @@ func (s *Server) Stop() error {
 	defer shutdownCancel()
 
 	if s.httpServer != nil {
-		s.httpServer.Shutdown(shutdownCtx)
+		_ = s.httpServer.Shutdown(shutdownCtx)
 	}
 	if s.httpsServer != nil {
-		s.httpsServer.Shutdown(shutdownCtx)
+		_ = s.httpsServer.Shutdown(shutdownCtx)
 	}
 
 	// Close control listener
@@ -417,7 +417,7 @@ func (s *Server) handleControlConnection(conn net.Conn) {
 
 	// Create mux
 	m := mux.New(conn, mux.DefaultConfig())
-	go m.Run()
+	go func() { _ = m.Run() }()
 
 	// Authenticate
 	session, err := s.handleAuth(m, remoteAddr)
@@ -459,7 +459,7 @@ func (s *Server) handleAuth(m *mux.Mux, remoteAddr net.Addr) (*Session, error) {
 			// Send failure response
 			resp := &proto.AuthResponse{OK: false, Error: err.Error()}
 			respFrame, _ := proto.EncodeJSONPayload(proto.FrameAuthRes, 0, resp)
-			m.GetFrameWriter().Write(respFrame)
+			_ = m.GetFrameWriter().Write(respFrame)
 			return nil, fmt.Errorf("invalid token: %w", err)
 		}
 
@@ -484,7 +484,7 @@ func (s *Server) handleAuth(m *mux.Mux, remoteAddr net.Addr) (*Session, error) {
 			MaxTunnels: maxTunnels,
 		}
 		respFrame, _ := proto.EncodeJSONPayload(proto.FrameAuthRes, 0, resp)
-		m.GetFrameWriter().Write(respFrame)
+		_ = m.GetFrameWriter().Write(respFrame)
 
 		return session, nil
 
@@ -544,7 +544,7 @@ func (s *Server) handleTunnelRequests(m *mux.Mux, session *Session) {
 func sendTunnelError(m *mux.Mux, msg string) {
 	resp := &proto.TunnelResponse{OK: false, Error: msg}
 	respFrame, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, 0, resp)
-	m.GetFrameWriter().Write(respFrame)
+	_ = m.GetFrameWriter().Write(respFrame)
 }
 
 func (s *Server) handleTunnelRequest(m *mux.Mux, session *Session, frame *proto.Frame) {
@@ -628,7 +628,7 @@ func (s *Server) createHTTPTunnel(m *mux.Mux, session *Session, req *proto.Tunne
 		PublicURL: tunnel.PublicURL,
 	}
 	respFrame, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, 0, resp)
-	m.GetFrameWriter().Write(respFrame)
+	_ = m.GetFrameWriter().Write(respFrame)
 
 	s.logger.Info("tunnel created", "id", tunnelID, "type", "http", "subdomain", subdomain)
 }
@@ -687,7 +687,7 @@ func (s *Server) createTCPTunnel(m *mux.Mux, session *Session, req *proto.Tunnel
 		PublicURL: tunnel.PublicURL,
 	}
 	respFrame, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, 0, resp)
-	m.GetFrameWriter().Write(respFrame)
+	_ = m.GetFrameWriter().Write(respFrame)
 
 	s.logger.Info("tunnel created", "id", tunnelID, "type", "tcp", "port", port)
 }

@@ -179,14 +179,14 @@ func (s *Server) forwardHTTPRequest(w http.ResponseWriter, r *http.Request, sess
 	go func() {
 		select {
 		case <-r.Context().Done():
-			stream.Reset()
+			_ = stream.Reset()
 		case <-done:
 		}
 	}()
 
 	// 5. Parse the response head from the stream and stream the body back as it
 	// arrives (no full buffering), so large downloads, SSE and long polling work.
-	headTimer := time.AfterFunc(responseHeadTimeout, func() { stream.Reset() })
+	headTimer := time.AfterFunc(responseHeadTimeout, func() { _ = stream.Reset() })
 	cr := &countingReader{r: stream, n: &s.bytesOut}
 	br := bufio.NewReader(cr)
 	resp, err := http.ReadResponse(br, r)
@@ -288,8 +288,8 @@ func (s *Server) forwardWebSocket(w http.ResponseWriter, r *http.Request, sessio
 		// First flush any buffered data
 		if bufrw.Reader.Buffered() > 0 {
 			buffered := make([]byte, bufrw.Reader.Buffered())
-			bufrw.Read(buffered)
-			stream.Write(buffered)
+			_, _ = bufrw.Read(buffered)
+			_, _ = stream.Write(buffered)
 		}
 		io.Copy(stream, conn)
 		stream.Close()

@@ -98,7 +98,7 @@ type ErrorFrame struct {
 // HeartbeatPayload creates a heartbeat payload with current timestamp.
 func HeartbeatPayload() []byte {
 	buf := make([]byte, 8)
-	ts := uint64(time.Now().UnixNano())
+	ts := uint64(time.Now().UnixNano()) //nolint:gosec // UnixNano is positive
 	for i := 0; i < 8; i++ {
 		buf[i] = byte(ts >> (56 - i*8))
 	}
@@ -114,7 +114,7 @@ func ParseHeartbeat(payload []byte) time.Time {
 	for i := 0; i < 8; i++ {
 		ts = (ts << 8) | uint64(payload[i])
 	}
-	return time.Unix(0, int64(ts))
+	return time.Unix(0, int64(ts)) //nolint:gosec // round-trips the value encoded above
 }
 
 // EncodeJSONPayload creates a frame with JSON-encoded payload.

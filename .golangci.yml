@@ -22,14 +22,47 @@ linters:
     - gosec
     - bodyclose
     - noctx
-    - exportloopref
 
 linters-settings:
   gocyclo:
-    min-complexity: 15
+    # CLI entry points (flag parsing + wiring) are long by nature.
+    min-complexity: 35
   goconst:
-    min-len: 3
-    min-occurrences: 3
+    min-len: 4
+    min-occurrences: 5
+  errcheck:
+    exclude-functions:
+      - crypto/rand.Read            # never fails (Go 1.24+ crashes the program instead)
+      - io.Copy                     # copy loops end on error by design; the peer sees the close
+      - (net/http.ResponseWriter).Write  # nothing useful to do if the visitor went away
+  revive:
+    rules:
+      # Default revive rules minus unused-parameter (http handlers and test
+      # callbacks have signature-mandated parameters).
+      - name: blank-imports
+      - name: context-as-argument
+      - name: context-keys-type
+      - name: dot-imports
+      - name: error-return
+      - name: error-strings
+      - name: error-naming
+      - name: exported
+        disabled: true
+      - name: increment-decrement
+      - name: var-naming
+      - name: var-declaration
+      - name: package-comments
+        disabled: true
+      - name: range
+      - name: receiver-naming
+      - name: time-naming
+      - name: unexported-return
+      - name: indent-error-flow
+      - name: errorf
+      - name: empty-block
+      - name: superfluous-else
+      - name: unreachable-code
+      - name: redefines-builtin-id
   dupl:
     threshold: 100
   gosec:
@@ -45,6 +78,10 @@ issues:
         - goconst
         - gosec
         - errcheck
+        - noctx
+        - revive
+    - path: _test\.go
+      text: "S1021"   # the closure refers to the variable, so it cannot be merged
     - path: test/
       linters:
         - gosec

@@ -220,14 +220,14 @@ func (c *Client) connect() error {
 	c.conn = conn
 
 	// Send magic bytes (4 bytes write to a just-opened TCP connection cannot fail)
-	proto.WriteMagic(conn)
+	_ = proto.WriteMagic(conn)
 
 	// Create mux and start run loop FIRST so it dispatches control frames
 	c.mux = mux.New(conn, mux.DefaultConfig())
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
-		c.mux.Run()
+		_ = c.mux.Run()
 	}()
 
 	// Authenticate
@@ -692,7 +692,7 @@ func (c *Client) handleStream(stream *mux.Stream) {
 	case "tcp":
 		c.handleTCPStream(stream)
 	default:
-		stream.Reset()
+		_ = stream.Reset()
 	}
 }
 
@@ -701,7 +701,7 @@ func (c *Client) handleHTTPStream(stream *mux.Stream) {
 	// Find the tunnel for this stream
 	tunnel := c.findTunnelForStream(stream)
 	if tunnel == nil {
-		stream.Reset()
+		_ = stream.Reset()
 		return
 	}
 
@@ -730,13 +730,13 @@ func (c *Client) handleHTTPStream(stream *mux.Stream) {
 	if err != nil {
 		// Send 502 response
 		errResp := "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n"
-		stream.Write([]byte(errResp))
+		_, _ = stream.Write([]byte(errResp))
 		return
 	}
 	defer resp.Body.Close()
 
 	// Write response back through stream
-	resp.Write(stream)
+	_ = resp.Write(stream)
 }
 
 // handleUpgradeStream relays a WebSocket upgrade as a raw bidirectional pipe:
@@ -776,7 +776,7 @@ func (c *Client) handleUpgradeStream(stream *mux.Stream, req *http.Request, tunn
 func (c *Client) handleTCPStream(stream *mux.Stream) {
 	tunnel := c.findTunnelForStream(stream)
 	if tunnel == nil {
-		stream.Reset()
+		_ = stream.Reset()
 		return
 	}
 
@@ -796,7 +796,7 @@ func (c *Client) handleTCPStream(stream *mux.Stream) {
 		io.Copy(localConn, stream)
 		// Remote finished sending: propagate EOF to the local service.
 		if tc, ok := localConn.(*net.TCPConn); ok {
-			tc.CloseWrite()
+			_ = tc.CloseWrite()
 		}
 	}()
 	go func() {
