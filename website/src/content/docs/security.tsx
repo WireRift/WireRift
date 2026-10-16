@@ -160,8 +160,11 @@ Sliding Window (per-session tunnel):
       <h3>Firewall Configuration</h3>
 
       <CodeBlock
-        code={`# Restrict dashboard to localhost only
-wirerift-server -dashboard-port 127.0.0.1:4040 ...
+        code={`# The dashboard binds to 127.0.0.1 by default. To expose it:
+wirerift-server -dashboard-bind 0.0.0.0 -dashboard-tls-cert cert.pem -dashboard-tls-key key.pem ...
+
+# Encrypt the control plane (clients use tls://host:4443)
+wirerift-server -control-tls-cert cert.pem -control-tls-key key.pem ...
 
 # Or use firewall rules
 # Allow only your IP to access the dashboard

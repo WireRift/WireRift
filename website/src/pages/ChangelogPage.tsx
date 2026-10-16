@@ -13,6 +13,23 @@ interface ChangelogEntry {
 
 const changelog: ChangelogEntry[] = [
   {
+    version: '1.7.0',
+    date: '2026-10-16',
+    title: 'Security Hardening, Streaming & TLS Control Plane',
+    changes: [
+      { type: 'added', description: 'Optional TLS for the control plane (-control-tls-cert/-key, tls:// client addresses)' },
+      { type: 'added', description: 'Dashboard HTTPS option, localhost-only bind by default, failed-auth lockout' },
+      { type: 'added', description: 'PIN brute-force lockout; inspector redacts credentials' },
+      { type: 'changed', description: 'HTTP responses are streamed: SSE, long polling and downloads over 64 MB work' },
+      { type: 'changed', description: 'Custom domain verification checks the DNS TXT record' },
+      { type: 'fixed', description: 'Spoofable X-Forwarded-* headers, chunked request bodies, HEAD responses, missing Host header' },
+      { type: 'fixed', description: 'TLS SNI path traversal; expiring certificates are re-issued' },
+      { type: 'fixed', description: 'Closed TCP tunnels left their port listening; nil-map panic on session removal' },
+      { type: 'fixed', description: 'Mux half-close, window overflow and receive-window enforcement' },
+      { type: 'fixed', description: 'CLI --flag=value swallowing the next argument; YAML inline comments' },
+    ],
+  },
+  {
     version: '1.6.0',
     date: '2026-04-02',
     title: 'Persistent Tunnels & 100% Test Coverage',

@@ -42,6 +42,16 @@ export const configuration = {
             <td>Dashboard web UI port</td>
           </tr>
           <tr>
+            <td><code>-dashboard-bind</code></td>
+            <td><code>127.0.0.1</code></td>
+            <td>Dashboard bind address (plain HTTP unless <code>-dashboard-tls-cert/-key</code> are set)</td>
+          </tr>
+          <tr>
+            <td><code>-control-tls-cert</code>, <code>-control-tls-key</code></td>
+            <td>-</td>
+            <td>Serve the control plane (:4443) over TLS; clients connect with <code>tls://host:4443</code></td>
+          </tr>
+          <tr>
             <td><code>-domain</code></td>
             <td><code>wirerift.com</code></td>
             <td>Base domain for tunnel subdomains</td>
