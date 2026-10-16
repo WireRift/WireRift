@@ -71,7 +71,7 @@ Connects to server, performs magic+auth handshake, creates tunnels. Auto-reconne
 - `internal/auth/` — Token validation with constant-time comparison
 - `internal/config/` — Custom domain management with DNS verification, YAML/JSON config parsing
 - `internal/dashboard/` — Embedded web UI (`embed.FS` for static files), REST API, CSP nonce-based security
-- `internal/tls/` — ACME (Let's Encrypt) certificate management, self-signed cert generation
+- `internal/tls/` — ACME (Let's Encrypt) certificate management, self-signed cert generation, and the persistent name-constrained local dev CA (`localca.go`) with trust-store install/removal (`trust.go`) used by `wirerift-server -dev` / `ca` subcommands
 - `internal/ratelimit/` — Token bucket (per-IP) and sliding window (per-session) rate limiters
 
 ## Key Conventions

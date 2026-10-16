@@ -42,6 +42,16 @@ export const configuration = {
             <td>Dashboard web UI port</td>
           </tr>
           <tr>
+            <td><code>-dev</code></td>
+            <td><code>false</code></td>
+            <td>Local development: loopback listeners and trusted HTTPS for <code>*.localhost</code> from a local CA (run <code>wirerift-server ca trust</code> once)</td>
+          </tr>
+          <tr>
+            <td><code>-ca-dir</code></td>
+            <td>per-user config dir</td>
+            <td>Directory of the local development CA used by <code>-dev</code></td>
+          </tr>
+          <tr>
             <td><code>-dashboard-bind</code></td>
             <td><code>127.0.0.1</code></td>
             <td>Dashboard bind address (plain HTTP unless <code>-dashboard-tls-cert/-key</code> are set)</td>

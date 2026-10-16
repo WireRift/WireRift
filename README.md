@@ -217,6 +217,8 @@ Options:
   --dashboard-bind str  Dashboard bind address (default: 127.0.0.1)
   --dashboard-tls-cert  PEM certificate for the dashboard (with --dashboard-tls-key serves HTTPS)
   --dashboard-tls-key   PEM private key for the dashboard
+  --dev                 Local development: loopback + trusted HTTPS for *.localhost (see "Local HTTPS development")
+  --ca-dir str          Local CA directory for --dev (default: per-user config dir)
   --control-tls-cert    PEM certificate for the control plane (enables TLS on :4443)
   --control-tls-key     PEM private key for the control plane
   --tcp-ports string    TCP tunnel port range (default: 20000-29999)
@@ -431,6 +433,24 @@ wirerift-server -control-tls-cert cert.pem -control-tls-key key.pem ...
 wirerift http 8080 -server tls://tunnel.example.com:4443 -token TOKEN
 # Private/self-signed CA: export WIRERIFT_TLS_CA=/path/to/ca.pem
 ```
+
+## Local HTTPS development
+
+`-dev` runs the whole stack on your machine with **trusted HTTPS and fake domains**, no public domain or Let's Encrypt needed:
+
+```bash
+wirerift-server ca trust      # once: create the local CA and trust it (asks for sudo)
+wirerift-server -dev          # control 127.0.0.1:4443, http :8080, https :8443
+
+wirerift http 3000 -server 127.0.0.1:4443 -token TOKEN -subdomain myapp
+# HTTP tunnel created: https://myapp.localhost:8443 -> http://localhost:3000
+```
+
+- `*.localhost` resolves to loopback in browsers and curl, so no `/etc/hosts` edits. `.test` domains work too (`-domain myapp.test`, then add them to `/etc/hosts`).
+- Everything listens on loopback with unprivileged ports; nothing is exposed to the network.
+- **The CA is name-constrained.** It can only issue for `.localhost`, `.test` and loopback IPs, enforced by X.509 name constraints. Even if its key (`~/.config/wirerift/local-ca/rootCA-key.pem`, mode 0600) leaks, certificates for real sites are rejected by Go, OpenSSL/curl, Chrome, Firefox and Safari.
+- `wirerift-server ca status` shows the CA and whether this machine trusts it; `ca untrust [-purge]` undoes `ca trust` completely; `ca path` prints the certificate path for tools that need it (`curl --cacert`, `NODE_EXTRA_CA_CERTS`).
+- `ca trust` installs into the system store (`update-ca-certificates` / `update-ca-trust` on Linux, keychain on macOS, Root store on Windows) and, if `certutil` (libnss3-tools / nss-tools) is installed, into Chrome/Chromium and Firefox profiles, which do not read the system store on Linux. Restart the browser afterwards. macOS and Windows support is implemented but has not been exercised on real machines yet.
 
 ## Access Control
 

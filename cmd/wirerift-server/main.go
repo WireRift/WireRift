@@ -49,7 +49,7 @@ func normalizeArgs(args []string) []string {
 			flags = append(flags, a)
 			// "-flag=value" carries its own value and must not swallow the next arg.
 			if !strings.Contains(a, "=") && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-				isBool := a == "-v" || a == "-json" || a == "-auto-cert" || a == "-acme-staging" || a == "-version"
+				isBool := a == "-v" || a == "-json" || a == "-auto-cert" || a == "-acme-staging" || a == "-version" || a == "-dev"
 				if !isBool {
 					i++
 					flags = append(flags, args[i])
@@ -67,6 +67,11 @@ func normalizeArgs(args []string) []string {
 }
 
 func run(parentCtx context.Context, args []string) error {
+	// "wirerift-server ca ..." manages the local development CA.
+	if len(args) > 0 && args[0] == "ca" {
+		return runCA(args[1:], os.Stdout, tlspkg.DefaultTrust())
+	}
+
 	// Parse flags
 	fs := flag.NewFlagSet("wirerift-server", flag.ContinueOnError)
 
@@ -78,6 +83,10 @@ func run(parentCtx context.Context, args []string) error {
 	dashboardBind := fs.String("dashboard-bind", "127.0.0.1", "Dashboard bind address (use 0.0.0.0 to expose; the dashboard is plain HTTP)")
 	domain := fs.String("domain", "wirerift.com", "Base domain for tunnels")
 	tcpPortRange := fs.String("tcp-ports", "20000-29999", "TCP tunnel port range")
+
+	// Local development mode
+	devMode := fs.Bool("dev", false, "Local development: trusted HTTPS for *.localhost via a local CA (see 'wirerift-server ca trust')")
+	caDirFlag := fs.String("ca-dir", "", "Local CA directory for -dev (default: per-user config dir)")
 
 	// TLS options
 	autoCert := fs.Bool("auto-cert", false, "Auto-generate self-signed certificates")
@@ -156,6 +165,19 @@ Environment Variables:
 		*httpAddr = envHTTP
 	}
 
+	// -dev: loopback + unprivileged ports, trusted HTTPS from the local CA
+	var dev *devSetup
+	if *devMode {
+		var err error
+		dev, err = setupDev(devOptions{
+			Domain: domain, Control: controlAddr, HTTP: httpAddr, HTTPS: httpsAddr,
+			Explicit: explicitSettings(visitedFlags(fs)), CADir: *caDirFlag, ACMEEmail: *acmeEmail,
+		})
+		if err != nil {
+			return err
+		}
+	}
+
 	// Create auth manager (flag > env > random)
 	authMgr := auth.NewManager(*tokenFlag)
 	devToken := authMgr.DevToken()
@@ -179,6 +201,7 @@ Environment Variables:
 	}
 	fmt.Fprintf(os.Stderr, "  Dashboard: %s://localhost:%d\n", dashScheme, *dashboardAddr)
 	fmt.Fprintf(os.Stderr, "  Domain:    %s\n", *domain)
+	dev.printBanner(os.Stderr, *httpsAddr, *domain)
 	fmt.Fprintln(os.Stderr, "╠══════════════════════════════════════════════╣")
 	// Only an auto-generated token needs to be shown (it can't be known
 	// otherwise); a token the operator supplied must not land in logs.
@@ -235,22 +258,22 @@ Environment Variables:
 	srvConfig.TCPAddrRange = *tcpPortRange
 	srvConfig.AuthManager = authMgr
 
-	if (*dashCert == "") != (*dashKey == "") {
-		return fmt.Errorf("-dashboard-tls-cert and -dashboard-tls-key must be set together")
+	if err := checkCertPair("dashboard-tls", *dashCert, *dashKey); err != nil {
+		return err
 	}
-	if (*controlCert == "") != (*controlKey == "") {
-		return fmt.Errorf("-control-tls-cert and -control-tls-key must be set together")
+	controlTLS, err := loadControlTLS(*controlCert, *controlKey)
+	if err != nil {
+		return err
 	}
-	if *controlCert != "" {
-		pair, err := tls.LoadX509KeyPair(*controlCert, *controlKey)
-		if err != nil {
-			return fmt.Errorf("load control-plane TLS key pair: %v", err)
-		}
-		srvConfig.ControlTLSConfig = &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS12}
-	}
+	srvConfig.ControlTLSConfig = controlTLS
 	if tlsMgr != nil {
 		srvConfig.TLSConfig = tlsMgr.TLSConfig()
 		srvConfig.ACMEChallengeHandler = tlsMgr.ACMEChallengeHandler()
+	}
+	if dev != nil {
+		srvConfig.TLSConfig = dev.Provider.TLSConfig()
+		srvConfig.PublicScheme = "https"
+		srvConfig.PublicPort = dev.Port
 	}
 
 	// Create server
@@ -333,4 +356,27 @@ Environment Variables:
 
 	logger.Info("server stopped")
 	return nil
+}
+
+// checkCertPair requires -<name>-cert and -<name>-key to be set together.
+func checkCertPair(name, cert, key string) error {
+	if (cert == "") != (key == "") {
+		return fmt.Errorf("-%s-cert and -%s-key must be set together", name, name)
+	}
+	return nil
+}
+
+// loadControlTLS builds the control-plane TLS config (nil when not requested).
+func loadControlTLS(cert, key string) (*tls.Config, error) {
+	if err := checkCertPair("control-tls", cert, key); err != nil {
+		return nil, err
+	}
+	if cert == "" {
+		return nil, nil
+	}
+	pair, err := tls.LoadX509KeyPair(cert, key)
+	if err != nil {
+		return nil, fmt.Errorf("load control-plane TLS key pair: %v", err)
+	}
+	return &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS12}, nil
 }
