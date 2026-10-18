@@ -51,6 +51,8 @@ func run(args []string) error {
 		return doStart(context.Background(), args)
 	case "list":
 		return doList(args)
+	case "doctor":
+		return doDoctor(context.Background(), args)
 	case "config":
 		return doConfig(args)
 	case "version", "-version", "--version":
@@ -77,6 +79,7 @@ Commands:
   serve <directory>               Serve static files via HTTP tunnel
   start [config-file]             Start tunnels from config file
   list                            List active tunnels
+  doctor                          Check connectivity, TLS and login to a server
   config                          Show/edit configuration
   version                         Show version information
   version                         Show version (also --version)

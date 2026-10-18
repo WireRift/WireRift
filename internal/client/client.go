@@ -176,20 +176,34 @@ const TLSScheme = "tls://"
 // tls:// prefix or Config.TLSConfig is set. WIRERIFT_TLS_CA may name a PEM file
 // with an extra CA to trust (for servers using a private certificate).
 func (c *Client) dialServer() (net.Conn, error) {
-	addr := c.config.ServerAddr
-	useTLS := c.config.TLSConfig != nil
-	if strings.HasPrefix(addr, TLSScheme) {
-		addr = strings.TrimPrefix(addr, TLSScheme)
-		useTLS = true
-	}
+	addr, useTLS := SplitServerAddr(c.config.ServerAddr)
+	useTLS = useTLS || c.config.TLSConfig != nil
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
 	if !useTLS {
 		return dialer.Dial("tcp", addr)
 	}
+	cfg, err := ControlTLSConfig(c.config.TLSConfig)
+	if err != nil {
+		return nil, err
+	}
+	return (&tls.Dialer{NetDialer: dialer, Config: cfg}).Dial("tcp", addr)
+}
 
+// SplitServerAddr strips an optional tls:// scheme from a server address and
+// reports whether TLS was requested.
+func SplitServerAddr(addr string) (hostPort string, useTLS bool) {
+	if strings.HasPrefix(addr, TLSScheme) {
+		return strings.TrimPrefix(addr, TLSScheme), true
+	}
+	return addr, false
+}
+
+// ControlTLSConfig returns the TLS configuration used to reach a TLS control
+// plane: base (or secure defaults) plus the extra CA named by WIRERIFT_TLS_CA.
+func ControlTLSConfig(base *tls.Config) (*tls.Config, error) {
 	var cfg *tls.Config
-	if c.config.TLSConfig != nil {
-		cfg = c.config.TLSConfig.Clone()
+	if base != nil {
+		cfg = base.Clone()
 	} else {
 		cfg = &tls.Config{MinVersion: tls.VersionTLS12}
 	}
@@ -207,7 +221,7 @@ func (c *Client) dialServer() (net.Conn, error) {
 		}
 		cfg.RootCAs = pool
 	}
-	return (&tls.Dialer{NetDialer: dialer, Config: cfg}).Dial("tcp", addr)
+	return cfg, nil
 }
 
 // connect establishes the connection and authenticates.
