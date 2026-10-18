@@ -193,6 +193,7 @@ func doHTTP(parentCtx context.Context, args []string) error {
 	auth := fs.String("auth", "", "Basic auth in user:pass format (e.g., admin:secret)")
 	inspect := fs.Bool("inspect", false, "Enable traffic inspection")
 	header := fs.String("header", "", "Custom response headers, comma-separated Key:Value (e.g., X-Robots:noindex,Cache-Control:no-store)")
+	ttl := fs.Duration("ttl", 0, "Close the tunnel automatically after this long (e.g. 30m, 2h)")
 	verbose := fs.Bool("v", false, "Verbose output")
 
 	fs.Usage = func() {
@@ -204,6 +205,7 @@ func doHTTP(parentCtx context.Context, args []string) error {
 		fmt.Fprintf(os.Stderr, "  wirerift http 8080\n")
 		fmt.Fprintf(os.Stderr, "  wirerift http 8080 myapp\n")
 		fmt.Fprintf(os.Stderr, "  wirerift http -subdomain myapp 8080\n")
+		fmt.Fprintf(os.Stderr, "  wirerift http -ttl 30m 8080        # auto-close after 30 minutes\n")
 	}
 
 	if err := fs.Parse(normalizeArgs(args[2:])); err != nil {
@@ -216,6 +218,11 @@ func doHTTP(parentCtx context.Context, args []string) error {
 	}
 	if *token != "" {
 		opts.token = *token
+	}
+
+	ttlOpts, err := ttlOptions(*ttl)
+	if err != nil {
+		return err
 	}
 
 	fargs := fs.Args()
@@ -288,6 +295,7 @@ func doHTTP(parentCtx context.Context, args []string) error {
 		tunnelOpts = append(tunnelOpts, client.WithHeaders(headers))
 	}
 
+	tunnelOpts = append(tunnelOpts, ttlOpts...)
 	tunnel, err := c.HTTP(fmt.Sprintf("localhost:%d", localPort), tunnelOpts...)
 	if err != nil {
 		return fmt.Errorf("failed to create tunnel: %v", err)
@@ -313,8 +321,8 @@ func doHTTP(parentCtx context.Context, args []string) error {
 		fmt.Printf("Custom Headers: %s\n", *header)
 	}
 
-	// Wait for context
-	<-ctx.Done()
+	// Wait for context (or the tunnel's time limit)
+	waitUntilDone(ctx, tunnel)
 	c.Close()
 	return nil
 }
@@ -324,6 +332,7 @@ func doTCP(parentCtx context.Context, args []string) error {
 	fs := flag.NewFlagSet("tcp", flag.ContinueOnError)
 	server := fs.String("server", "", "Server address (default: localhost:4443)")
 	token := fs.String("token", "", "Authentication token")
+	ttl := fs.Duration("ttl", 0, "Close the tunnel automatically after this long (e.g. 30m, 2h)")
 	verbose := fs.Bool("v", false, "Verbose output")
 
 	fs.Usage = func() {
@@ -346,6 +355,11 @@ func doTCP(parentCtx context.Context, args []string) error {
 	}
 	if *token != "" {
 		opts.token = *token
+	}
+
+	ttlOpts, err := ttlOptions(*ttl)
+	if err != nil {
+		return err
 	}
 
 	fargs := fs.Args()
@@ -383,15 +397,15 @@ func doTCP(parentCtx context.Context, args []string) error {
 	}
 
 	// Create tunnel
-	tunnel, err := c.TCP(fmt.Sprintf("localhost:%d", localPort), 0)
+	tunnel, err := c.TCP(fmt.Sprintf("localhost:%d", localPort), 0, ttlOpts...)
 	if err != nil {
 		return fmt.Errorf("failed to create tunnel: %v", err)
 	}
 
 	fmt.Printf("TCP tunnel created: %s:%d -> localhost:%d\n", serverHost(opts.server), tunnel.Port, localPort)
 
-	// Wait for context
-	<-ctx.Done()
+	// Wait for context (or the tunnel's time limit)
+	waitUntilDone(ctx, tunnel)
 	c.Close()
 	return nil
 }
@@ -669,6 +683,7 @@ func doServe(parentCtx context.Context, args []string) error {
 	auth := fs.String("auth", "", "Basic auth in user:pass format (e.g., admin:secret)")
 	inspect := fs.Bool("inspect", false, "Enable traffic inspection")
 	header := fs.String("header", "", "Custom response headers, comma-separated Key:Value (e.g., X-Robots:noindex,Cache-Control:no-store)")
+	ttl := fs.Duration("ttl", 0, "Close the tunnel automatically after this long (e.g. 30m, 2h)")
 	verbose := fs.Bool("v", false, "Verbose output")
 
 	fs.Usage = func() {
@@ -682,6 +697,11 @@ func doServe(parentCtx context.Context, args []string) error {
 	}
 
 	if err := fs.Parse(normalizeArgs(args[2:])); err != nil {
+		return err
+	}
+
+	ttlOpts, err := ttlOptions(*ttl)
+	if err != nil {
 		return err
 	}
 
@@ -769,6 +789,7 @@ func doServe(parentCtx context.Context, args []string) error {
 		tunnelOpts = append(tunnelOpts, client.WithHeaders(parseHeaders(*header)))
 	}
 
+	tunnelOpts = append(tunnelOpts, ttlOpts...)
 	tunnel, err := c.HTTP(fmt.Sprintf("localhost:%d", localPort), tunnelOpts...)
 	if err != nil {
 		listener.Close()
@@ -777,7 +798,7 @@ func doServe(parentCtx context.Context, args []string) error {
 
 	fmt.Printf("Serving %s at %s\n", dir, tunnel.PublicURL)
 
-	<-ctx.Done()
+	waitUntilDone(ctx, tunnel)
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 	_ = fileSrv.Shutdown(shutdownCtx)
@@ -965,4 +986,33 @@ func serverHost(addr string) string {
 		return host
 	}
 	return strings.Trim(addr, "[]")
+}
+
+// ttlOptions validates -ttl and returns the matching tunnel option.
+func ttlOptions(ttl time.Duration) ([]client.HTTPOption, error) {
+	if ttl < 0 {
+		return nil, fmt.Errorf("invalid -ttl: must not be negative")
+	}
+	if ttl == 0 {
+		return nil, nil
+	}
+	return []client.HTTPOption{client.WithTTL(ttl)}, nil
+}
+
+// waitUntilDone blocks until ctx ends or, for a time-limited tunnel, until the
+// server closes it at its deadline.
+func waitUntilDone(ctx context.Context, tunnel *client.Tunnel) {
+	if tunnel.ExpiresAt.IsZero() {
+		<-ctx.Done()
+		return
+	}
+	remaining := time.Until(tunnel.ExpiresAt)
+	fmt.Printf("Expires: %s (in %s)\n", tunnel.ExpiresAt.Local().Format("15:04:05"), remaining.Round(time.Second))
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+		fmt.Println("Tunnel expired (ttl reached); closing")
+	}
 }

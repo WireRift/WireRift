@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wirerift/wirerift/internal/client"
 	"github.com/wirerift/wirerift/internal/proto"
 )
 
@@ -491,6 +492,10 @@ func handleMockClient(conn net.Conn) {
 				TunnelID:  "tun-test-123",
 				Type:      req.Type,
 				PublicURL: "https://test.wirerift.com",
+			}
+			if req.TTLSeconds > 0 {
+				exp := time.Now().Add(time.Duration(req.TTLSeconds) * time.Second)
+				resp.ExpiresAt = &exp
 			}
 			respFrame, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, 0, resp)
 			fw.Write(respFrame)
@@ -1734,4 +1739,62 @@ func TestServerHost(t *testing.T) {
 			t.Errorf("serverHost(%q) = %q, want %q", in, got, want)
 		}
 	}
+}
+
+func TestTTLOptions(t *testing.T) {
+	if opts, err := ttlOptions(0); err != nil || len(opts) != 0 {
+		t.Errorf("ttl 0: %v %v", opts, err)
+	}
+	if opts, err := ttlOptions(time.Minute); err != nil || len(opts) != 1 {
+		t.Errorf("ttl 1m: %v %v", opts, err)
+	}
+	if _, err := ttlOptions(-time.Second); err == nil {
+		t.Error("negative ttl accepted")
+	}
+}
+
+func TestWaitUntilDone(t *testing.T) {
+	// No deadline: waits for the context.
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { waitUntilDone(ctx, &client.Tunnel{}); close(done) }()
+	select {
+	case <-done:
+		t.Fatal("returned before the context ended")
+	case <-time.After(100 * time.Millisecond):
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("did not return after the context ended")
+	}
+
+	// Deadline: returns by itself when the tunnel expires.
+	start := time.Now()
+	waitUntilDone(context.Background(), &client.Tunnel{ExpiresAt: time.Now().Add(150 * time.Millisecond)})
+	if d := time.Since(start); d < 100*time.Millisecond || d > 2*time.Second {
+		t.Errorf("returned after %v", d)
+	}
+}
+
+func TestDoHTTPWithTTLExitsWhenTunnelExpires(t *testing.T) {
+	defer lockGOMAXPROCS()()
+	addr, cleanup := startMockTunnelServer(t)
+	defer cleanup()
+
+	start := time.Now()
+	err := doHTTP(context.Background(), []string{"wirerift", "http", "-server", addr, "-token", "t", "-ttl", "1s", "8080"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("CLI kept running %v after a 1s ttl", d)
+	}
+}
+
+func TestTCPAndServeRejectNegativeTTL(t *testing.T) {
+	assertErrContains(t, doHTTP(context.Background(), []string{"wirerift", "http", "-ttl", "-5s", "8080"}), "invalid -ttl")
+	assertErrContains(t, doTCP(context.Background(), []string{"wirerift", "tcp", "-ttl=-5s", "22"}), "invalid -ttl")
+	assertErrContains(t, doServe(context.Background(), []string{"wirerift", "serve", "-ttl=-5s", t.TempDir()}), "invalid -ttl")
 }

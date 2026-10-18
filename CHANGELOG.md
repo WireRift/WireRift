@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Local HTTPS development**: `wirerift-server -dev` serves trusted HTTPS for `*.localhost` / `.test` on loopback with a persistent local CA; `wirerift-server ca trust|untrust|status|path` manages it (system store, Chrome/Firefox NSS). The CA is restricted by X.509 name constraints to `.localhost`, `.test` and loopback IPs, so a leaked CA key cannot impersonate real sites.
+- **Tunnel time limits**: `wirerift http|tcp|serve -ttl 30m` (library: `client.WithTTL`). The server enforces the deadline, frees the subdomain/port, and reports `expires_at` in the tunnel API; reconnects keep the original deadline and never revive an expired tunnel
+- **Helpful error pages**: browsers get a clear HTML page when a tunnel does not exist, its client is gone, or the local app is not responding (the local port is never shown to visitors); API clients still receive plain-text bodies, plus an `X-WireRift-Error` header for local-app failures
 - `Config.PublicScheme` / `PublicPort`: tunnel URLs reflect the scheme and port clients must use (e.g. `https://app.localhost:8443`)
 
 ## [1.7.0] - 2026-10-16

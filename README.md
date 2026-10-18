@@ -276,6 +276,9 @@ Common Options (all commands):
   --token string      Auth token (or set WIRERIFT_TOKEN env var)
   --v                 Verbose output
 
+HTTP/TCP/Serve Options:
+  --ttl duration      Close the tunnel automatically after this long (e.g. 30m, 2h; max 1 year)
+
 HTTP/Serve Options:
   --subdomain string  Requested subdomain
   --auth string       Basic auth "user:password"
@@ -301,6 +304,9 @@ wirerift http 8080 myapp \
   --whitelist "10.0.0.0/8,192.168.1.0/24" \
   --header "X-Frame-Options:DENY,X-Robots-Tag:noindex" \
   --inspect
+
+# Temporary tunnel: the server closes it after 30 minutes (subdomain/port are freed)
+wirerift http 3000 --ttl 30m --token mytoken
 
 # TCP tunnel (database, game server, SSH, etc.)
 wirerift tcp 5432 --token mytoken
