@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.8.0] - 2026-10-18
 
 ### Added
 - **Local HTTPS development**: `wirerift-server -dev` serves trusted HTTPS for `*.localhost` / `.test` on loopback with a persistent local CA; `wirerift-server ca trust|untrust|status|path` manages it (system store, Chrome/Firefox NSS). The CA is restricted by X.509 name constraints to `.localhost`, `.test` and loopback IPs, so a leaked CA key cannot impersonate real sites.

@@ -13,6 +13,19 @@ interface ChangelogEntry {
 
 const changelog: ChangelogEntry[] = [
   {
+    version: '1.8.0',
+    date: '2026-10-18',
+    title: 'Local HTTPS Development, Tunnel Time Limits & Doctor',
+    changes: [
+      { type: 'added', description: 'wirerift-server -dev: trusted HTTPS for *.localhost / .test on loopback with a persistent local CA' },
+      { type: 'added', description: 'wirerift-server ca trust|untrust|status|path - system store plus Chrome/Firefox (NSS); the CA is name-constrained to .localhost, .test and loopback IPs' },
+      { type: 'added', description: 'Tunnel time limits: wirerift http|tcp|serve -ttl 30m, enforced by the server and kept across reconnects' },
+      { type: 'added', description: 'wirerift doctor: DNS, TCP, TLS and login checks with a fix hint for each failure' },
+      { type: 'added', description: 'Helpful HTML error pages for browsers when a tunnel or the local app is unavailable' },
+      { type: 'changed', description: 'Tunnel URLs reflect the scheme and port clients must use (e.g. https://app.localhost:8443)' },
+    ],
+  },
+  {
     version: '1.7.0',
     date: '2026-10-16',
     title: 'Security Hardening, Streaming & TLS Control Plane',

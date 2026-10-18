@@ -45,8 +45,8 @@ go build -o wirerift ./cmd/wirerift
 go build -o wirerift-server ./cmd/wirerift-server
 
 # Or build with version information
-go build -ldflags "-X main.version=1.7.0" -o wirerift ./cmd/wirerift
-go build -ldflags "-X main.version=1.7.0" -o wirerift-server ./cmd/wirerift-server`}
+go build -ldflags "-X main.version=1.8.0" -o wirerift ./cmd/wirerift
+go build -ldflags "-X main.version=1.8.0" -o wirerift-server ./cmd/wirerift-server`}
         language="bash"
         filename="build.sh"
       />
