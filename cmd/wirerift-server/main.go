@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -98,6 +99,9 @@ func run(parentCtx context.Context, args []string) error {
 	controlKey := fs.String("control-tls-key", "", "TLS private key (PEM) for the control plane")
 	acmeStaging := fs.Bool("acme-staging", false, "Use Let's Encrypt staging server")
 
+	// Custom domains
+	dnsServer := fs.String("dns-server", "", "DNS server (host[:port]) used to verify custom-domain TXT records (default: system resolver)")
+
 	// Auth
 	tokenFlag := fs.String("token", "", "Set a fixed auth token (default: auto-generated)")
 
@@ -183,12 +187,7 @@ Environment Variables:
 	devToken := authMgr.DevToken()
 
 	// Print connection info prominently
-	tokenSource := "random"
-	if *tokenFlag != "" {
-		tokenSource = "-token flag"
-	} else if os.Getenv("WIRERIFT_TOKEN") != "" {
-		tokenSource = "WIRERIFT_TOKEN env" //nolint:gosec // a label, not a credential
-	}
+	tokenSource := tokenSourceLabel(*tokenFlag)
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "╔══════════════════════════════════════════════╗")
 	fmt.Fprintln(os.Stderr, "║              WireRift Server                 ║")
@@ -203,18 +202,7 @@ Environment Variables:
 	fmt.Fprintf(os.Stderr, "  Domain:    %s\n", *domain)
 	dev.printBanner(os.Stderr, *httpsAddr, *domain)
 	fmt.Fprintln(os.Stderr, "╠══════════════════════════════════════════════╣")
-	// Only an auto-generated token needs to be shown (it can't be known
-	// otherwise); a token the operator supplied must not land in logs.
-	shownToken := devToken
-	if tokenSource != "random" {
-		shownToken = "<your token>"
-	}
-	fmt.Fprintf(os.Stderr, "  Token (%s):\n", tokenSource)
-	if tokenSource == "random" {
-		fmt.Fprintf(os.Stderr, "  %s\n", devToken)
-	} else {
-		fmt.Fprintln(os.Stderr, "  (hidden: supplied by you)")
-	}
+	shownToken := printToken(os.Stderr, tokenSource, devToken)
 	fmt.Fprintln(os.Stderr, "╠══════════════════════════════════════════════╣")
 	fmt.Fprintln(os.Stderr, "  Quick start:")
 	serverAddr := *controlAddr
@@ -274,10 +262,16 @@ Environment Variables:
 		srvConfig.TLSConfig = dev.Provider.TLSConfig()
 		srvConfig.PublicScheme = "https"
 		srvConfig.PublicPort = dev.Port
+	} else if err := configureCustomDomains(&srvConfig, tlsMgr, *certDir, *dnsServer, *httpsAddr); err != nil {
+		return err
 	}
 
 	// Create server
 	srv := server.New(srvConfig, logger)
+	if tlsMgr != nil {
+		// Certificates outside the base domain only for verified, live custom domains.
+		tlsMgr.SetHostAllower(srv.IsCustomDomainActive)
+	}
 
 	// Create dashboard
 	dash := dashboard.New(dashboard.Config{
@@ -379,4 +373,88 @@ func loadControlTLS(cert, key string) (*tls.Config, error) {
 		return nil, fmt.Errorf("load control-plane TLS key pair: %v", err)
 	}
 	return &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS12}, nil
+}
+
+// httpsPort extracts the port of an address like ":443"; the standard port
+// (and anything unparsable) yields 0, meaning "omit the port from URLs".
+func httpsPort(addr string) int {
+	_, p, err := net.SplitHostPort(addr)
+	if err != nil {
+		return 0
+	}
+	n, err := strconv.Atoi(p)
+	if err != nil || n == 443 {
+		return 0
+	}
+	return n
+}
+
+// txtResolverFor returns a TXT resolver that asks the given DNS server
+// (host or host:port, default port 53). An empty address means the system
+// resolver (nil).
+func txtResolverFor(addr string) (server.TXTResolver, error) {
+	if addr == "" {
+		return nil, nil
+	}
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		addr = net.JoinHostPort(strings.Trim(addr, "[]"), "53")
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil || host == "" {
+		return nil, fmt.Errorf("invalid -dns-server %q (want host or host:port)", addr)
+	}
+	r := &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, network, addr)
+		},
+	}
+	return r.LookupTXT, nil
+}
+
+// configureCustomDomains prepares everything custom domains need on a regular
+// (non-dev) server: the persisted proof secret, the DNS resolver for the TXT
+// check, and https URLs when trusted (ACME) certificates are available.
+func configureCustomDomains(cfg *server.Config, tlsMgr *tlspkg.Manager, certDir, dnsServer, httpsAddr string) error {
+	secret, err := loadOrCreateDomainSecret(certDir)
+	if err != nil {
+		return err
+	}
+	cfg.DomainSecret = secret
+
+	resolver, err := txtResolverFor(dnsServer)
+	if err != nil {
+		return err
+	}
+	cfg.TXTResolver = resolver
+
+	if tlsMgr != nil && tlsMgr.IsACMEEnabled() {
+		cfg.PublicScheme = "https"
+		cfg.PublicPort = httpsPort(httpsAddr)
+	}
+	return nil
+}
+
+// tokenSourceLabel says where the auth token came from.
+func tokenSourceLabel(tokenFlag string) string {
+	switch {
+	case tokenFlag != "":
+		return "-token flag"
+	case os.Getenv("WIRERIFT_TOKEN") != "":
+		return "WIRERIFT_TOKEN env" //nolint:gosec // a label, not a credential
+	}
+	return "random"
+}
+
+// printToken prints the token lines of the banner and returns the token to
+// show in the quick-start command. Only an auto-generated token is printed (it
+// cannot be known otherwise); a token the operator supplied must not land in logs.
+func printToken(w io.Writer, source, token string) string {
+	fmt.Fprintf(w, "  Token (%s):\n", source)
+	if source == "random" {
+		fmt.Fprintf(w, "  %s\n", token)
+		return token
+	}
+	fmt.Fprintln(w, "  (hidden: supplied by you)")
+	return "<your token>"
 }

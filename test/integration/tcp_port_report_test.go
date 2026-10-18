@@ -37,6 +37,7 @@ func TestTCPTunnelPortReportedToClient(t *testing.T) {
 
 	authMgr := auth.NewManager()
 	srvCfg := server.DefaultConfig()
+	srvCfg.TCPAddrRange = "33000-33050" // distinct range: packages run in parallel
 	srvCfg.ControlAddr = "127.0.0.1:0"
 	srvCfg.HTTPAddr = "127.0.0.1:0"
 	srvCfg.AuthManager = authMgr

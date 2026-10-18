@@ -121,6 +121,7 @@ func TestEndToEndTCPTunnel(t *testing.T) {
 	// 2. Start the tunnel server
 	authMgr := auth.NewManager()
 	srvCfg := server.DefaultConfig()
+	srvCfg.TCPAddrRange = "32000-32050" // distinct range: packages run in parallel
 	srvCfg.ControlAddr = "127.0.0.1:0"
 	srvCfg.HTTPAddr = "127.0.0.1:0"
 	srvCfg.AuthManager = authMgr

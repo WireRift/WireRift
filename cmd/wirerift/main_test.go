@@ -15,6 +15,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -456,6 +457,18 @@ func startMockTunnelServerWithTunnelError(t *testing.T) (string, func()) {
 	return listener.Addr().String(), cleanup
 }
 
+// mockTunnelHook, when set, observes every tunnel request the mock server gets.
+var mockTunnelHook atomic.Pointer[func(proto.TunnelRequest)]
+
+// startMockTunnelServerCapturing is startMockTunnelServer that also reports each
+// tunnel request to observe.
+func startMockTunnelServerCapturing(t *testing.T, observe func(proto.TunnelRequest)) (string, func()) {
+	t.Helper()
+	mockTunnelHook.Store(&observe)
+	addr, cleanup := startMockTunnelServer(t)
+	return addr, func() { cleanup(); mockTunnelHook.Store(nil) }
+}
+
 func handleMockClient(conn net.Conn) {
 	defer conn.Close()
 
@@ -487,6 +500,9 @@ func handleMockClient(conn net.Conn) {
 		case proto.FrameTunnelReq:
 			var req proto.TunnelRequest
 			proto.DecodeJSONPayload(frame, &req)
+			if hook := mockTunnelHook.Load(); hook != nil {
+				(*hook)(req)
+			}
 			resp := &proto.TunnelResponse{
 				OK:        true,
 				TunnelID:  "tun-test-123",
@@ -1797,4 +1813,35 @@ func TestTCPAndServeRejectNegativeTTL(t *testing.T) {
 	assertErrContains(t, doHTTP(context.Background(), []string{"wirerift", "http", "-ttl", "-5s", "8080"}), "invalid -ttl")
 	assertErrContains(t, doTCP(context.Background(), []string{"wirerift", "tcp", "-ttl=-5s", "22"}), "invalid -ttl")
 	assertErrContains(t, doServe(context.Background(), []string{"wirerift", "serve", "-ttl=-5s", t.TempDir()}), "invalid -ttl")
+}
+
+func TestStartConfigParsesDomain(t *testing.T) {
+	dir := t.TempDir()
+	_ = dir
+	cfg, err := loadYAMLConfig([]byte("server: localhost:4443\ntunnels:\n  - type: http\n    local_port: 8080\n    domain: app.example.com   # my domain\n"), &ConfigFile{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Tunnels) != 1 || cfg.Tunnels[0].Domain != "app.example.com" {
+		t.Errorf("tunnels = %+v", cfg.Tunnels)
+	}
+}
+
+func TestDomainFlagIsSentToTheServer(t *testing.T) {
+	defer lockGOMAXPROCS()()
+	got := make(chan string, 1)
+	addr, cleanup := startMockTunnelServerCapturing(t, func(req proto.TunnelRequest) { got <- req.CustomDomain })
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
+	defer cancel()
+	_ = doHTTP(ctx, []string{"wirerift", "http", "-server", addr, "-token", "t", "-domain", "app.example.com", "8080"})
+	select {
+	case d := <-got:
+		if d != "app.example.com" {
+			t.Errorf("server received custom_domain %q", d)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("tunnel request never reached the server")
+	}
 }

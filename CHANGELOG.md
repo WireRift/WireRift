@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Custom domains**: `wirerift http|serve -domain app.example.com` (or `domain:` in `wirerift start` files) also serves a tunnel on your own domain. Ownership is proven with a DNS TXT record (`_wirerift.<domain>` = `wirerift-verification=<HMAC code>`) that the error message spells out; the code is derived from a persisted server secret (`<cert-dir>/domain-secret`). One tunnel per domain; certificates (ACME) are only requested for domains a verified, live tunnel is serving. `wirerift-server -dns-server` picks the resolver used for the check.
+- ACME-enabled servers now hand out `https://` tunnel URLs.
+
+### Fixed
+- A TCP-tunnel request that asks for a custom domain is rejected instead of silently ignored
+- Integration tests use distinct TCP port ranges so packages can run in parallel without colliding
+
 ## [1.8.0] - 2026-10-18
 
 ### Added

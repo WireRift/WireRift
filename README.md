@@ -217,6 +217,7 @@ Options:
   --dashboard-bind str  Dashboard bind address (default: 127.0.0.1)
   --dashboard-tls-cert  PEM certificate for the dashboard (with --dashboard-tls-key serves HTTPS)
   --dashboard-tls-key   PEM private key for the dashboard
+  --dns-server string   DNS server for custom-domain TXT checks (default: system resolver)
   --dev                 Local development: loopback + trusted HTTPS for *.localhost (see "Local HTTPS development")
   --ca-dir str          Local CA directory for --dev (default: per-user config dir)
   --control-tls-cert    PEM certificate for the control plane (enables TLS on :4443)
@@ -297,6 +298,7 @@ HTTP/TCP/Serve Options:
 
 HTTP/Serve Options:
   --subdomain string  Requested subdomain
+  --domain string     Also serve on your own domain (needs a DNS TXT proof, see "Custom domains")
   --auth string       Basic auth "user:password"
   --pin string        PIN protection
   --whitelist string  IP whitelist "ip1,ip2,cidr"
@@ -455,6 +457,30 @@ wirerift-server -control-tls-cert cert.pem -control-tls-key key.pem ...
 wirerift http 8080 -server tls://tunnel.example.com:4443 -token TOKEN
 # Private/self-signed CA: export WIRERIFT_TLS_CA=/path/to/ca.pem
 ```
+
+## Custom domains
+
+Serve a tunnel on a domain you own (`app.example.com`) in addition to its `<name>.<your-domain>` address.
+
+```bash
+# 1. Point the domain at your server (CNAME to the server's base domain, or an A record)
+#    app.example.com.  CNAME  tunnel.mydomain.com.
+
+# 2. Ask for it. The first time, the server tells you which TXT record proves you own the domain:
+wirerift http 3000 -domain app.example.com
+#   custom domain not verified (no matching TXT record found): add a DNS TXT record
+#   _wirerift.app.example.com with the value wirerift-verification=3cf2f6d... 
+
+# 3. Add that TXT record, wait for DNS, run the same command again:
+wirerift http 3000 -domain app.example.com
+# HTTP tunnel created: https://app.example.com -> http://localhost:3000
+```
+
+How it stays safe:
+- **Ownership is proven in DNS.** The expected value is `HMAC(server secret, account|domain)`: only the domain's DNS owner can publish it and only your server can compute it, so nobody can claim a domain they do not control. The secret lives in `<cert-dir>/domain-secret` (mode 0600), so published records stay valid across restarts; back it up with your certificates.
+- **One tunnel per domain.** While a tunnel serves a domain, no other client can take it over.
+- **HTTPS only for live, verified domains.** With `-acme-email`, the certificate is requested on the first HTTPS visit (HTTP-01, so port 80 must reach the server) and only for a domain a verified tunnel is serving right now, so random SNI names cannot burn your Let's Encrypt quota.
+- HTTP tunnels only; wildcards, IP addresses and names under the server's own domain are rejected. `-dns-server 1.1.1.1:53` makes the server verify against a specific resolver instead of the system one. In `wirerift start` files use `domain: app.example.com`.
 
 ## Local HTTPS development
 

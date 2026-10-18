@@ -196,6 +196,7 @@ func doHTTP(parentCtx context.Context, args []string) error {
 	auth := fs.String("auth", "", "Basic auth in user:pass format (e.g., admin:secret)")
 	inspect := fs.Bool("inspect", false, "Enable traffic inspection")
 	header := fs.String("header", "", "Custom response headers, comma-separated Key:Value (e.g., X-Robots:noindex,Cache-Control:no-store)")
+	domain := fs.String("domain", "", "Also serve the tunnel on your own domain (e.g. app.example.com; requires a DNS TXT record)")
 	ttl := fs.Duration("ttl", 0, "Close the tunnel automatically after this long (e.g. 30m, 2h)")
 	verbose := fs.Bool("v", false, "Verbose output")
 
@@ -209,6 +210,7 @@ func doHTTP(parentCtx context.Context, args []string) error {
 		fmt.Fprintf(os.Stderr, "  wirerift http 8080 myapp\n")
 		fmt.Fprintf(os.Stderr, "  wirerift http -subdomain myapp 8080\n")
 		fmt.Fprintf(os.Stderr, "  wirerift http -ttl 30m 8080        # auto-close after 30 minutes\n")
+		fmt.Fprintf(os.Stderr, "  wirerift http -domain app.example.com 8080   # your own domain (DNS TXT proof)\n")
 	}
 
 	if err := fs.Parse(normalizeArgs(args[2:])); err != nil {
@@ -272,6 +274,9 @@ func doHTTP(parentCtx context.Context, args []string) error {
 	var tunnelOpts []client.HTTPOption
 	if reqSubdomain != "" {
 		tunnelOpts = append(tunnelOpts, client.WithSubdomain(reqSubdomain))
+	}
+	if *domain != "" {
+		tunnelOpts = append(tunnelOpts, client.WithCustomDomain(*domain))
 	}
 	if *whitelist != "" {
 		ips := strings.Split(*whitelist, ",")
@@ -483,6 +488,9 @@ func doStart(parentCtx context.Context, args []string) error {
 			if t.Subdomain != "" {
 				opts = append(opts, client.WithSubdomain(t.Subdomain))
 			}
+			if t.Domain != "" {
+				opts = append(opts, client.WithCustomDomain(t.Domain))
+			}
 			if t.Whitelist != "" {
 				ips := strings.Split(t.Whitelist, ",")
 				for i := range ips {
@@ -547,6 +555,7 @@ type TunnelConfig struct {
 	Type      string `json:"type" yaml:"type"`
 	LocalPort int    `json:"local_port" yaml:"local_port"`
 	Subdomain string `json:"subdomain,omitempty" yaml:"subdomain"`
+	Domain    string `json:"domain,omitempty" yaml:"domain"`
 	Whitelist string `json:"whitelist,omitempty" yaml:"whitelist"`
 	PIN       string `json:"pin,omitempty" yaml:"pin"`
 	Auth      string `json:"auth,omitempty" yaml:"auth"`
@@ -638,6 +647,8 @@ func loadYAMLConfig(data []byte, cfg *ConfigFile) (*ConfigFile, error) {
 				cfg.Tunnels[tunnelIdx].LocalPort = port
 			case "subdomain":
 				cfg.Tunnels[tunnelIdx].Subdomain = value
+			case "domain":
+				cfg.Tunnels[tunnelIdx].Domain = value
 			case "whitelist":
 				cfg.Tunnels[tunnelIdx].Whitelist = value
 			case "pin":
@@ -686,6 +697,7 @@ func doServe(parentCtx context.Context, args []string) error {
 	auth := fs.String("auth", "", "Basic auth in user:pass format (e.g., admin:secret)")
 	inspect := fs.Bool("inspect", false, "Enable traffic inspection")
 	header := fs.String("header", "", "Custom response headers, comma-separated Key:Value (e.g., X-Robots:noindex,Cache-Control:no-store)")
+	domain := fs.String("domain", "", "Also serve the tunnel on your own domain (e.g. app.example.com; requires a DNS TXT record)")
 	ttl := fs.Duration("ttl", 0, "Close the tunnel automatically after this long (e.g. 30m, 2h)")
 	verbose := fs.Bool("v", false, "Verbose output")
 
@@ -766,6 +778,9 @@ func doServe(parentCtx context.Context, args []string) error {
 	var tunnelOpts []client.HTTPOption
 	if *subdomain != "" {
 		tunnelOpts = append(tunnelOpts, client.WithSubdomain(*subdomain))
+	}
+	if *domain != "" {
+		tunnelOpts = append(tunnelOpts, client.WithCustomDomain(*domain))
 	}
 	if *whitelist != "" {
 		ips := strings.Split(*whitelist, ",")
