@@ -99,6 +99,7 @@ type Tunnel struct {
 	LocalAddr string
 	Subdomain string
 	Port      int
+	ExpiresAt time.Time // zero when the tunnel has no time limit
 	client    *Client
 	request   *proto.TunnelRequest // original creation request for reconnect
 }
@@ -321,7 +322,7 @@ func (c *Client) HTTP(localAddr string, opts ...HTTPOption) (*Tunnel, error) {
 }
 
 // TCP opens a TCP tunnel.
-func (c *Client) TCP(localAddr string, port int) (*Tunnel, error) {
+func (c *Client) TCP(localAddr string, port int, opts ...TCPOption) (*Tunnel, error) {
 	if !c.connected.Load() {
 		return nil, ErrNotConnected
 	}
@@ -330,6 +331,9 @@ func (c *Client) TCP(localAddr string, port int) (*Tunnel, error) {
 		Type:       proto.TunnelTypeTCP,
 		LocalAddr:  localAddr,
 		RemotePort: port,
+	}
+	for _, opt := range opts {
+		opt(req)
 	}
 
 	return c.openTunnel(req)
@@ -382,6 +386,9 @@ func (c *Client) openTunnel(req *proto.TunnelRequest) (*Tunnel, error) {
 		request:   req,
 	}
 
+	if res.ExpiresAt != nil {
+		tunnel.ExpiresAt = *res.ExpiresAt
+	}
 	c.tunnels.Store(res.TunnelID, tunnel)
 
 	c.logger.Info("tunnel opened", "id", res.TunnelID, "url", res.PublicURL)
@@ -582,12 +589,23 @@ func (c *Client) recreateTunnels() {
 		if t.request == nil {
 			continue
 		}
+		// A time-limited tunnel keeps its original deadline across reconnects
+		// (it must not get a fresh TTL), and is not revived once expired.
+		request := *t.request
+		if !t.ExpiresAt.IsZero() {
+			remaining := time.Until(t.ExpiresAt)
+			if remaining < time.Second {
+				c.logger.Info("tunnel expired, not re-creating", "id", t.ID)
+				continue
+			}
+			request.TTLSeconds = int((remaining + time.Second - 1) / time.Second)
+		}
 		// The server may still hold the previous session (and its subdomain or
 		// port) for a moment, so retry with backoff before giving up.
 		var newTunnel *Tunnel
 		var err error
 		for attempt, delay := 0, tunnelRetryBase; attempt < 5; attempt, delay = attempt+1, delay*2 {
-			if newTunnel, err = c.openTunnel(t.request); err == nil {
+			if newTunnel, err = c.openTunnel(&request); err == nil {
 				break
 			}
 			c.logger.Warn("failed to re-create tunnel, will retry", "id", t.ID, "attempt", attempt+1, "error", err)
@@ -607,6 +625,21 @@ func (c *Client) recreateTunnels() {
 
 // HTTPOption is an option for HTTP tunnels.
 type HTTPOption func(*proto.TunnelRequest)
+
+// TCPOption is an option for TCP tunnels.
+type TCPOption = HTTPOption
+
+// WithTTL makes the server close the tunnel automatically after d (rounded up
+// to whole seconds). It works for both HTTP and TCP tunnels.
+func WithTTL(d time.Duration) HTTPOption {
+	return func(req *proto.TunnelRequest) {
+		if d < 0 {
+			req.TTLSeconds = -1 // rejected by the server; never "no limit"
+			return
+		}
+		req.TTLSeconds = int((d + time.Second - 1) / time.Second)
+	}
+}
 
 // WithSubdomain sets the subdomain.
 func WithSubdomain(subdomain string) HTTPOption {

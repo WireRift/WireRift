@@ -165,9 +165,22 @@ type Tunnel struct {
 	CreatedAt  time.Time
 	mu         sync.RWMutex
 
+	// ExpiresAt is when the server closes the tunnel on its own (zero = never).
+	ExpiresAt time.Time
+	expiry    *time.Timer
+
 	listener net.Listener // public TCP listener (TCP tunnels), closed on shutdown
 	stop     chan struct{}
 	stopOnce sync.Once
+}
+
+// cancelExpiry stops the tunnel's expiry timer, if any.
+func (t *Tunnel) cancelExpiry() {
+	t.mu.Lock()
+	if t.expiry != nil {
+		t.expiry.Stop()
+	}
+	t.mu.Unlock()
 }
 
 // shutdown stops the tunnel's public TCP listener, if any. It is idempotent
@@ -545,6 +558,9 @@ func (s *Server) handleTunnelRequests(m *mux.Mux, session *Session) {
 	}
 }
 
+// maxTunnelTTLSeconds caps a requested tunnel lifetime (one year).
+const maxTunnelTTLSeconds = 365 * 24 * 3600
+
 // handleTunnelRequest processes a tunnel creation request.
 // sendTunnelError sends a tunnel error response.
 func sendTunnelError(m *mux.Mux, msg string) {
@@ -572,6 +588,11 @@ func (s *Server) handleTunnelRequest(m *mux.Mux, session *Session, frame *proto.
 		return
 	}
 	session.mu.Unlock()
+
+	if req.TTLSeconds < 0 || req.TTLSeconds > maxTunnelTTLSeconds {
+		sendTunnelError(m, "invalid ttl")
+		return
+	}
 
 	tunnelID := "tun_" + generateSubdomain()
 
@@ -614,6 +635,7 @@ func (s *Server) createHTTPTunnel(m *mux.Mux, session *Session, req *proto.Tunne
 		Headers:    req.Headers,
 		Inspect:    req.Inspect,
 		CreatedAt:  time.Now(),
+		ExpiresAt:  expiryFor(req.TTLSeconds),
 	}
 
 	if _, loaded := s.tunnels.LoadOrStore(subdomain, tunnel); loaded {
@@ -626,12 +648,14 @@ func (s *Server) createHTTPTunnel(m *mux.Mux, session *Session, req *proto.Tunne
 		sendTunnelError(m, "session closed")
 		return
 	}
+	s.armExpiry(session, tunnel)
 
 	resp := &proto.TunnelResponse{
 		OK:        true,
 		TunnelID:  tunnelID,
 		Type:      proto.TunnelTypeHTTP,
 		PublicURL: tunnel.PublicURL,
+		ExpiresAt: expiresAtPtr(tunnel.ExpiresAt),
 	}
 	respFrame, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, 0, resp)
 	_ = m.GetFrameWriter().Write(respFrame)
@@ -656,6 +680,7 @@ func (s *Server) createTCPTunnel(m *mux.Mux, session *Session, req *proto.Tunnel
 		LocalAddr:  req.LocalAddr,
 		AllowedIPs: req.AllowedIPs,
 		CreatedAt:  time.Now(),
+		ExpiresAt:  expiryFor(req.TTLSeconds),
 	}
 
 	// Bind before announcing success so a listen failure is reported.
@@ -686,11 +711,14 @@ func (s *Server) createTCPTunnel(m *mux.Mux, session *Session, req *proto.Tunnel
 		s.serveTCPTunnelListener(listener, tunnel, session)
 	}()
 
+	s.armExpiry(session, tunnel)
+
 	resp := &proto.TunnelResponse{
 		OK:        true,
 		TunnelID:  tunnelID,
 		Type:      proto.TunnelTypeTCP,
 		PublicURL: tunnel.PublicURL,
+		ExpiresAt: expiresAtPtr(tunnel.ExpiresAt),
 	}
 	respFrame, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, 0, resp)
 	_ = m.GetFrameWriter().Write(respFrame)
@@ -704,34 +732,73 @@ func (s *Server) handleTunnelClose(session *Session, frame *proto.Frame) {
 	if err := proto.DecodeJSONPayload(frame, &req); err != nil {
 		return
 	}
+	s.closeTunnel(session, req.TunnelID, "closed")
+}
 
+// closeTunnel removes one tunnel from its session and from the public
+// registries, stopping its listener and expiry timer. It reports whether the
+// tunnel existed. It is the single teardown path for client close requests,
+// time-limited tunnels that expire, and (via teardownTunnel) session removal.
+func (s *Server) closeTunnel(session *Session, tunnelID, reason string) bool {
 	session.mu.Lock()
 	if session.Tunnels == nil {
 		session.mu.Unlock()
-		return
+		return false
 	}
-	tunnel, ok := session.Tunnels[req.TunnelID]
+	tunnel, ok := session.Tunnels[tunnelID]
 	if ok {
-		delete(session.Tunnels, req.TunnelID)
+		delete(session.Tunnels, tunnelID)
 	}
 	session.mu.Unlock()
-
-	if tunnel == nil {
-		return
+	if !ok {
+		return false
 	}
 
-	// Remove from global tunnels map
+	s.teardownTunnel(tunnel)
+	s.logger.Info("tunnel "+reason, "id", tunnelID)
+	return true
+}
+
+// teardownTunnel releases everything a tunnel holds.
+func (s *Server) teardownTunnel(tunnel *Tunnel) {
+	tunnel.cancelExpiry()
 	switch tunnel.Type {
 	case proto.TunnelTypeHTTP:
 		s.tunnels.Delete(tunnel.Subdomain)
 	case proto.TunnelTypeTCP:
-		portKey := "tcp:" + strconv.Itoa(tunnel.Port)
-		s.tunnels.Delete(portKey)
+		s.tunnels.Delete("tcp:" + strconv.Itoa(tunnel.Port))
 		tunnel.shutdown()
 		s.releasePort(tunnel.Port)
 	}
+}
 
-	s.logger.Info("tunnel closed", "id", req.TunnelID)
+// expiryFor returns the expiry time for a TTL in seconds (zero = no expiry).
+func expiryFor(ttlSeconds int) time.Time {
+	if ttlSeconds <= 0 {
+		return time.Time{}
+	}
+	return time.Now().Add(time.Duration(ttlSeconds) * time.Second)
+}
+
+func expiresAtPtr(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
+}
+
+// armExpiry schedules the automatic close of a time-limited tunnel.
+func (s *Server) armExpiry(session *Session, tunnel *Tunnel) {
+	if tunnel.ExpiresAt.IsZero() {
+		return
+	}
+	id := tunnel.ID
+	timer := time.AfterFunc(time.Until(tunnel.ExpiresAt), func() {
+		s.closeTunnel(session, id, "expired")
+	})
+	tunnel.mu.Lock()
+	tunnel.expiry = timer
+	tunnel.mu.Unlock()
 }
 
 // removeSession removes a session and cleans up all its tunnels.
@@ -752,15 +819,7 @@ func (s *Server) removeSession(sessionID string) {
 
 	// Clean up all tunnels
 	for _, tunnel := range tunnels {
-		switch tunnel.Type {
-		case proto.TunnelTypeHTTP:
-			s.tunnels.Delete(tunnel.Subdomain)
-		case proto.TunnelTypeTCP:
-			portKey := "tcp:" + strconv.Itoa(tunnel.Port)
-			s.tunnels.Delete(portKey)
-			tunnel.shutdown()
-			s.releasePort(tunnel.Port)
-		}
+		s.teardownTunnel(tunnel)
 	}
 }
 
@@ -981,18 +1040,19 @@ func (s *Server) HTTPAddr() string {
 
 // TunnelInfo represents tunnel information for API responses.
 type TunnelInfo struct {
-	ID         string    `json:"id"`
-	Type       string    `json:"type"`
-	URL        string    `json:"url,omitempty"`
-	Port       int       `json:"port,omitempty"`
-	Target     string    `json:"target"`
-	LocalPort  int       `json:"local_port,omitempty"`
-	Status     string    `json:"status"`
-	AllowedIPs []string  `json:"allowed_ips,omitempty"`
-	HasPIN     bool      `json:"has_pin,omitempty"`
-	HasAuth    bool      `json:"has_auth,omitempty"`
-	Inspect    bool      `json:"inspect,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID         string     `json:"id"`
+	Type       string     `json:"type"`
+	URL        string     `json:"url,omitempty"`
+	Port       int        `json:"port,omitempty"`
+	Target     string     `json:"target"`
+	LocalPort  int        `json:"local_port,omitempty"`
+	Status     string     `json:"status"`
+	AllowedIPs []string   `json:"allowed_ips,omitempty"`
+	HasPIN     bool       `json:"has_pin,omitempty"`
+	HasAuth    bool       `json:"has_auth,omitempty"`
+	Inspect    bool       `json:"inspect,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
 }
 
 // SessionInfo represents session information for API responses.
@@ -1025,6 +1085,7 @@ func (s *Server) ListTunnels() []TunnelInfo {
 				HasAuth:    t.Auth != nil,
 				Inspect:    t.Inspect,
 				CreatedAt:  t.CreatedAt,
+				ExpiresAt:  expiresAtPtr(t.ExpiresAt),
 			}
 			t.mu.RUnlock()
 			tunnels = append(tunnels, info)

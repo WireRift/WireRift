@@ -52,6 +52,10 @@ type TunnelRequest struct {
 	Headers    map[string]string `json:"headers,omitempty"`
 	AllowedIPs []string          `json:"allowed_ips,omitempty"`
 	PIN        string            `json:"pin,omitempty"`
+
+	// TTLSeconds asks the server to close the tunnel automatically after this
+	// many seconds (0 = no limit).
+	TTLSeconds int `json:"ttl_seconds,omitempty"`
 }
 
 // TunnelResponse is sent by the server after tunnel allocation.
@@ -61,6 +65,9 @@ type TunnelResponse struct {
 	Type      TunnelType `json:"type,omitempty"`
 	PublicURL string     `json:"public_url,omitempty"`
 	Error     string     `json:"error,omitempty"`
+
+	// ExpiresAt is set when the tunnel has a time limit.
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
 
 // TunnelClose is sent to close a tunnel.

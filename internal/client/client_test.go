@@ -2408,6 +2408,7 @@ func TestLocalUnreachableResponseIsValidHTTP(t *testing.T) {
 			t.Fatalf("html=%v: %v", html, err)
 		}
 		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
 		if resp.StatusCode != 502 || resp.Header.Get("X-WireRift-Error") != "local-service-unreachable" {
 			t.Errorf("html=%v: status %d headers %v", html, resp.StatusCode, resp.Header)
 		}
@@ -2419,4 +2420,77 @@ func TestLocalUnreachableResponseIsValidHTTP(t *testing.T) {
 			t.Errorf("html=%v but Content-Type %q", html, resp.Header.Get("Content-Type"))
 		}
 	}
+}
+
+func TestWithTTLRounding(t *testing.T) {
+	cases := map[time.Duration]int{
+		0:                       0,
+		time.Second:             1,
+		1500 * time.Millisecond: 2, // rounds up so the tunnel never dies early
+		30 * time.Minute:        1800,
+		-time.Second:            -1, // invalid: the server rejects it, it is never "no limit"
+	}
+	for d, want := range cases {
+		req := &proto.TunnelRequest{}
+		WithTTL(d)(req)
+		if req.TTLSeconds != want {
+			t.Errorf("WithTTL(%v) = %d, want %d", d, req.TTLSeconds, want)
+		}
+	}
+}
+
+// After a reconnect a time-limited tunnel keeps its ORIGINAL deadline (it is
+// not given a fresh TTL), and an already expired tunnel is not revived.
+func TestRecreateTunnelsKeepsDeadlineAndSkipsExpired(t *testing.T) {
+	client, serverMux := makeConnectedClient(t)
+
+	gotTTL := make(chan int, 4)
+	go func() {
+		for {
+			select {
+			case frame := <-serverMux.ControlFrame():
+				if frame.Type != proto.FrameTunnelReq {
+					continue
+				}
+				var req proto.TunnelRequest
+				_ = proto.DecodeJSONPayload(frame, &req)
+				gotTTL <- req.TTLSeconds
+				exp := time.Now().Add(time.Duration(req.TTLSeconds) * time.Second)
+				resp, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, proto.ControlStreamID, &proto.TunnelResponse{
+					OK: true, TunnelID: "new", Type: proto.TunnelTypeHTTP, PublicURL: "http://x", ExpiresAt: &exp,
+				})
+				_ = serverMux.GetFrameWriter().Write(resp)
+			case <-serverMux.Done():
+				return
+			}
+		}
+	}()
+
+	client.tunnels.Store("live", &Tunnel{
+		ID: "live", Type: proto.TunnelTypeHTTP, client: client,
+		ExpiresAt: time.Now().Add(100 * time.Second),
+		request:   &proto.TunnelRequest{Type: proto.TunnelTypeHTTP, LocalAddr: "localhost:1", TTLSeconds: 3600},
+	})
+	client.tunnels.Store("dead", &Tunnel{
+		ID: "dead", Type: proto.TunnelTypeHTTP, client: client,
+		ExpiresAt: time.Now().Add(-time.Minute),
+		request:   &proto.TunnelRequest{Type: proto.TunnelTypeHTTP, LocalAddr: "localhost:2", TTLSeconds: 60},
+	})
+
+	client.recreateTunnels()
+
+	select {
+	case ttl := <-gotTTL:
+		if ttl < 95 || ttl > 101 {
+			t.Errorf("re-created with TTL %ds, want about the remaining 100s (not the original 3600s)", ttl)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("live tunnel was not re-created")
+	}
+	select {
+	case ttl := <-gotTTL:
+		t.Errorf("expired tunnel was re-created (TTL %d)", ttl)
+	case <-time.After(300 * time.Millisecond):
+	}
+	client.conn.Close()
 }
