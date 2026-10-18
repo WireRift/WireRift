@@ -66,6 +66,27 @@ type Manager struct {
 
 	// ACME (Let's Encrypt)
 	acme *ACMEManager
+
+	// allowHost, when set, admits host names outside the base domain (custom
+	// domains) so certificates are only requested for names the server vouches for.
+	allowMu   sync.RWMutex
+	allowHost func(host string) bool
+}
+
+// SetHostAllower sets the callback that decides whether a host outside the base
+// domain may get a certificate. Without it, only the base domain and its
+// subdomains are served.
+func (m *Manager) SetHostAllower(allow func(host string) bool) {
+	m.allowMu.Lock()
+	m.allowHost = allow
+	m.allowMu.Unlock()
+}
+
+func (m *Manager) hostAllowed(host string) bool {
+	m.allowMu.RLock()
+	allow := m.allowHost
+	m.allowMu.RUnlock()
+	return allow != nil && allow(host)
 }
 
 // issueCall tracks one in-flight certificate issuance for a host. Waiters
@@ -237,7 +258,9 @@ func (m *Manager) normalizeHost(name string) (string, error) {
 		}
 	}
 	if base := strings.ToLower(m.config.Domain); base != "" && host != base && !strings.HasSuffix(host, "."+base) {
-		return "", ErrDomainNotConfigured
+		if !m.hostAllowed(host) {
+			return "", ErrDomainNotConfigured
+		}
 	}
 	return host, nil
 }

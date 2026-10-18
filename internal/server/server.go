@@ -70,6 +70,15 @@ type Config struct {
 	// AuthManager is the authentication manager.
 	AuthManager *auth.Manager
 
+	// DomainSecret keys the DNS ownership proofs for custom domains. Persist it
+	// (the server binary stores it in the cert dir) so the TXT records users
+	// publish stay valid across restarts; nil means a random per-process secret.
+	DomainSecret []byte
+
+	// TXTResolver looks up TXT records for custom-domain verification
+	// (default: the system resolver).
+	TXTResolver TXTResolver
+
 	// ACMEChallengeHandler serves ACME HTTP-01 challenges on /.well-known/acme-challenge/
 	ACMEChallengeHandler http.HandlerFunc
 }
@@ -106,6 +115,8 @@ type Server struct {
 	// PIN HMAC secret (generated at startup)
 	pinGuard  pinGuard
 	pinSecret []byte
+
+	domainSecret []byte // keys custom-domain ownership proofs
 
 	// State
 	sessions sync.Map // map[string]*Session
@@ -150,20 +161,21 @@ type Session struct {
 
 // Tunnel represents an active tunnel.
 type Tunnel struct {
-	ID         string
-	Type       proto.TunnelType
-	SessionID  string
-	Subdomain  string // for HTTP tunnels
-	Port       int    // for TCP tunnels
-	PublicURL  string
-	LocalAddr  string
-	AllowedIPs []string          // IP whitelist (empty = allow all)
-	PIN        string            // PIN protection (empty = no PIN)
-	Auth       *proto.TunnelAuth // Basic auth (nil = no auth)
-	Headers    map[string]string // Custom response headers
-	Inspect    bool              // Traffic inspection enabled
-	CreatedAt  time.Time
-	mu         sync.RWMutex
+	ID           string
+	Type         proto.TunnelType
+	SessionID    string
+	Subdomain    string // for HTTP tunnels
+	CustomDomain string // optional extra host the tunnel is served on
+	Port         int    // for TCP tunnels
+	PublicURL    string
+	LocalAddr    string
+	AllowedIPs   []string          // IP whitelist (empty = allow all)
+	PIN          string            // PIN protection (empty = no PIN)
+	Auth         *proto.TunnelAuth // Basic auth (nil = no auth)
+	Headers      map[string]string // Custom response headers
+	Inspect      bool              // Traffic inspection enabled
+	CreatedAt    time.Time
+	mu           sync.RWMutex
 
 	// ExpiresAt is when the server closes the tunnel on its own (zero = never).
 	ExpiresAt time.Time
@@ -256,7 +268,13 @@ func New(config Config, logger *slog.Logger) *Server {
 		panic("crypto/rand.Read failed: " + err.Error())
 	}
 
+	domainSecret := config.DomainSecret
+	if len(domainSecret) == 0 {
+		domainSecret = NewDomainSecret()
+	}
+
 	s := &Server{
+		domainSecret: domainSecret,
 		config:       config,
 		logger:       logger,
 		ctx:          ctx,
@@ -594,6 +612,11 @@ func (s *Server) handleTunnelRequest(m *mux.Mux, session *Session, frame *proto.
 		return
 	}
 
+	if req.CustomDomain != "" && req.Type != proto.TunnelTypeHTTP {
+		sendTunnelError(m, "custom domains are only supported for HTTP tunnels")
+		return
+	}
+
 	tunnelID := "tun_" + generateSubdomain()
 
 	switch req.Type {
@@ -620,31 +643,52 @@ func (s *Server) createHTTPTunnel(m *mux.Mux, session *Session, req *proto.Tunne
 		return
 	}
 
+	customDomain, err := s.prepareCustomDomain(session, req.CustomDomain)
+	if err != nil {
+		sendTunnelError(m, err.Error())
+		return
+	}
+
 	// Build the full tunnel before storing to avoid a race where another
 	// goroutine reads an empty placeholder between LoadOrStore and Store.
 	tunnel := &Tunnel{
-		ID:         tunnelID,
-		Type:       proto.TunnelTypeHTTP,
-		SessionID:  session.ID,
-		Subdomain:  subdomain,
-		PublicURL:  s.publicHTTPURL(subdomain),
-		LocalAddr:  req.LocalAddr,
-		AllowedIPs: req.AllowedIPs,
-		PIN:        req.PIN,
-		Auth:       req.Auth,
-		Headers:    req.Headers,
-		Inspect:    req.Inspect,
-		CreatedAt:  time.Now(),
-		ExpiresAt:  expiryFor(req.TTLSeconds),
+		ID:           tunnelID,
+		Type:         proto.TunnelTypeHTTP,
+		SessionID:    session.ID,
+		Subdomain:    subdomain,
+		CustomDomain: customDomain,
+		PublicURL:    s.publicHTTPURL(subdomain),
+		LocalAddr:    req.LocalAddr,
+		AllowedIPs:   req.AllowedIPs,
+		PIN:          req.PIN,
+		Auth:         req.Auth,
+		Headers:      req.Headers,
+		Inspect:      req.Inspect,
+		CreatedAt:    time.Now(),
+		ExpiresAt:    expiryFor(req.TTLSeconds),
+	}
+
+	if customDomain != "" {
+		tunnel.PublicURL = s.publicURLForHost(customDomain)
 	}
 
 	if _, loaded := s.tunnels.LoadOrStore(subdomain, tunnel); loaded {
 		sendTunnelError(m, "subdomain already taken")
 		return
 	}
+	if customDomain != "" {
+		if _, loaded := s.tunnels.LoadOrStore(customKeyPrefix+customDomain, tunnel); loaded {
+			s.tunnels.Delete(subdomain)
+			sendTunnelError(m, "custom domain already in use by another tunnel")
+			return
+		}
+	}
 
 	if !session.addTunnel(tunnel, s.config.MaxTunnelsPerSession) {
 		s.tunnels.Delete(subdomain)
+		if customDomain != "" {
+			s.tunnels.Delete(customKeyPrefix + customDomain)
+		}
 		sendTunnelError(m, "session closed")
 		return
 	}
@@ -660,7 +704,7 @@ func (s *Server) createHTTPTunnel(m *mux.Mux, session *Session, req *proto.Tunne
 	respFrame, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, 0, resp)
 	_ = m.GetFrameWriter().Write(respFrame)
 
-	s.logger.Info("tunnel created", "id", tunnelID, "type", "http", "subdomain", subdomain)
+	s.logger.Info("tunnel created", "id", tunnelID, "type", "http", "subdomain", subdomain, "custom_domain", customDomain)
 }
 
 // createTCPTunnel handles TCP tunnel creation.
@@ -765,6 +809,10 @@ func (s *Server) teardownTunnel(tunnel *Tunnel) {
 	switch tunnel.Type {
 	case proto.TunnelTypeHTTP:
 		s.tunnels.Delete(tunnel.Subdomain)
+		if tunnel.CustomDomain != "" {
+			// Only release the name if it still points at this tunnel.
+			s.tunnels.CompareAndDelete(customKeyPrefix+tunnel.CustomDomain, tunnel)
+		}
 	case proto.TunnelTypeTCP:
 		s.tunnels.Delete("tcp:" + strconv.Itoa(tunnel.Port))
 		tunnel.shutdown()
@@ -1030,6 +1078,14 @@ func (s *Server) ControlAddr() string {
 	return s.config.ControlAddr
 }
 
+// HTTPSAddr returns the HTTPS listener address (useful when using port 0).
+func (s *Server) HTTPSAddr() string {
+	if s.httpsListener != nil {
+		return s.httpsListener.Addr().String()
+	}
+	return s.config.HTTPSAddr
+}
+
 // HTTPAddr returns the HTTP listener address (useful when using port 0).
 func (s *Server) HTTPAddr() string {
 	if s.httpListener != nil {
@@ -1040,19 +1096,20 @@ func (s *Server) HTTPAddr() string {
 
 // TunnelInfo represents tunnel information for API responses.
 type TunnelInfo struct {
-	ID         string     `json:"id"`
-	Type       string     `json:"type"`
-	URL        string     `json:"url,omitempty"`
-	Port       int        `json:"port,omitempty"`
-	Target     string     `json:"target"`
-	LocalPort  int        `json:"local_port,omitempty"`
-	Status     string     `json:"status"`
-	AllowedIPs []string   `json:"allowed_ips,omitempty"`
-	HasPIN     bool       `json:"has_pin,omitempty"`
-	HasAuth    bool       `json:"has_auth,omitempty"`
-	Inspect    bool       `json:"inspect,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
-	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
+	ID           string     `json:"id"`
+	Type         string     `json:"type"`
+	URL          string     `json:"url,omitempty"`
+	CustomDomain string     `json:"custom_domain,omitempty"`
+	Port         int        `json:"port,omitempty"`
+	Target       string     `json:"target"`
+	LocalPort    int        `json:"local_port,omitempty"`
+	Status       string     `json:"status"`
+	AllowedIPs   []string   `json:"allowed_ips,omitempty"`
+	HasPIN       bool       `json:"has_pin,omitempty"`
+	HasAuth      bool       `json:"has_auth,omitempty"`
+	Inspect      bool       `json:"inspect,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
 }
 
 // SessionInfo represents session information for API responses.
@@ -1071,21 +1128,25 @@ type SessionInfo struct {
 func (s *Server) ListTunnels() []TunnelInfo {
 	var tunnels []TunnelInfo
 	s.tunnels.Range(func(key, value any) bool {
+		if isAliasKey(key) {
+			return true // a custom-domain alias of a tunnel that is listed under its own key
+		}
 		if t, ok := value.(*Tunnel); ok {
 			t.mu.RLock()
 			info := TunnelInfo{
-				ID:         t.ID,
-				Type:       string(t.Type),
-				URL:        t.PublicURL,
-				Port:       t.Port,
-				Target:     t.LocalAddr,
-				Status:     "active",
-				AllowedIPs: t.AllowedIPs,
-				HasPIN:     t.PIN != "",
-				HasAuth:    t.Auth != nil,
-				Inspect:    t.Inspect,
-				CreatedAt:  t.CreatedAt,
-				ExpiresAt:  expiresAtPtr(t.ExpiresAt),
+				ID:           t.ID,
+				Type:         string(t.Type),
+				URL:          t.PublicURL,
+				Port:         t.Port,
+				CustomDomain: t.CustomDomain,
+				Target:       t.LocalAddr,
+				Status:       "active",
+				AllowedIPs:   t.AllowedIPs,
+				HasPIN:       t.PIN != "",
+				HasAuth:      t.Auth != nil,
+				Inspect:      t.Inspect,
+				CreatedAt:    t.CreatedAt,
+				ExpiresAt:    expiresAtPtr(t.ExpiresAt),
 			}
 			t.mu.RUnlock()
 			tunnels = append(tunnels, info)
@@ -1128,7 +1189,9 @@ func (s *Server) Stats() map[string]interface{} {
 	var tunnelCount, sessionCount int
 
 	s.tunnels.Range(func(key, value any) bool {
-		tunnelCount++
+		if !isAliasKey(key) {
+			tunnelCount++
+		}
 		return true
 	})
 
@@ -1203,14 +1266,39 @@ func (s *Server) cleanupInactiveSessions() {
 
 // publicHTTPURL builds the public URL of an HTTP tunnel.
 func (s *Server) publicHTTPURL(subdomain string) string {
+	return s.publicURLForHost(subdomain + "." + s.config.Domain)
+}
+
+// publicURLForHost builds a tunnel URL for an arbitrary public host name.
+func (s *Server) publicURLForHost(host string) string {
 	scheme := s.config.PublicScheme
 	if scheme == "" {
 		scheme = "http"
 	}
-	host := subdomain + "." + s.config.Domain
 	port := s.config.PublicPort
 	if port == 0 || (scheme == "http" && port == 80) || (scheme == "https" && port == 443) {
 		return scheme + "://" + host
 	}
 	return scheme + "://" + net.JoinHostPort(host, strconv.Itoa(port))
+}
+
+// prepareCustomDomain validates a requested custom domain, makes sure nobody
+// else is serving it, and verifies the DNS ownership proof. It returns "" when
+// no custom domain was requested.
+func (s *Server) prepareCustomDomain(session *Session, requested string) (string, error) {
+	if requested == "" {
+		return "", nil
+	}
+	domain, err := normalizeCustomDomain(requested, s.config.Domain)
+	if err != nil {
+		return "", err
+	}
+	// Cheap check first: don't spend a DNS lookup on a name that is taken.
+	if _, taken := s.tunnels.Load(customKeyPrefix + domain); taken {
+		return "", errors.New("custom domain already in use by another tunnel")
+	}
+	if err := s.verifyCustomDomain(s.ctx, session.AccountID, domain); err != nil {
+		return "", err
+	}
+	return domain, nil
 }

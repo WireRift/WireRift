@@ -53,6 +53,10 @@ type TunnelRequest struct {
 	AllowedIPs []string          `json:"allowed_ips,omitempty"`
 	PIN        string            `json:"pin,omitempty"`
 
+	// CustomDomain asks the server to also serve the tunnel on this domain.
+	// The owner proves control with a DNS TXT record (see the server docs).
+	CustomDomain string `json:"custom_domain,omitempty"`
+
 	// TTLSeconds asks the server to close the tunnel automatically after this
 	// many seconds (0 = no limit).
 	TTLSeconds int `json:"ttl_seconds,omitempty"`

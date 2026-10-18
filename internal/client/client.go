@@ -662,6 +662,15 @@ func WithSubdomain(subdomain string) HTTPOption {
 	}
 }
 
+// WithCustomDomain also serves the tunnel on a domain you own (e.g.
+// app.example.com). The server verifies ownership through a DNS TXT record and
+// reports the exact record to create when it is missing.
+func WithCustomDomain(domain string) HTTPOption {
+	return func(req *proto.TunnelRequest) {
+		req.CustomDomain = domain
+	}
+}
+
 // WithInspect enables traffic inspection.
 func WithInspect() HTTPOption {
 	return func(req *proto.TunnelRequest) {

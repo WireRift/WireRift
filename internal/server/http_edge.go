@@ -19,7 +19,7 @@ import (
 func (s *Server) hostHasTunnel(host string) bool {
 	sub := extractSubdomain(host, s.config.Domain)
 	if sub == "" {
-		return false
+		return s.IsCustomDomainActive(host)
 	}
 	_, ok := s.getTunnelBySubdomain(sub)
 	return ok
@@ -62,14 +62,17 @@ func (s *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
 	// Extract subdomain from Host header
 	host := r.Host
 	subdomain := extractSubdomain(host, s.config.Domain)
-	if subdomain == "" {
-		writeEdgeError(w, r, http.StatusBadRequest, "Invalid host")
-		return
-	}
 
-	// Look up tunnel
-	tunnel, ok := s.getTunnelBySubdomain(subdomain)
-	if !ok {
+	// Look up the tunnel: <sub>.<base domain>, or a verified custom domain.
+	var tunnel *Tunnel
+	var ok bool
+	if subdomain == "" {
+		if tunnel, ok = s.getTunnelByCustomHost(host); !ok {
+			writeEdgeError(w, r, http.StatusBadRequest, "Invalid host")
+			return
+		}
+		subdomain = tunnel.Subdomain
+	} else if tunnel, ok = s.getTunnelBySubdomain(subdomain); !ok {
 		writeEdgeError(w, r, http.StatusBadGateway, "Tunnel not found")
 		return
 	}

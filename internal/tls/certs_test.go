@@ -1852,3 +1852,38 @@ func TestNewManager_ACMEFullInit(t *testing.T) {
 		t.Error("ACME should be enabled after successful Initialize")
 	}
 }
+
+// Hosts outside the base domain get a certificate only when the allower
+// vouches for them (custom domains bound to a live, verified tunnel).
+func TestGetCertificateCustomDomainsRequireAllower(t *testing.T) {
+	m, err := NewManager(Config{Domain: "example.com", CertDir: t.TempDir(), AutoCert: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hello := func(name string) *tls.ClientHelloInfo { return &tls.ClientHelloInfo{ServerName: name} }
+
+	if _, err := m.GetCertificate(hello("app.customer.io")); err != ErrDomainNotConfigured {
+		t.Fatalf("before an allower is set: err = %v, want ErrDomainNotConfigured", err)
+	}
+
+	active := map[string]bool{"app.customer.io": true}
+	m.SetHostAllower(func(h string) bool { return active[h] })
+
+	cert, err := m.GetCertificate(hello("App.Customer.io"))
+	if err != nil || cert == nil {
+		t.Fatalf("allowed custom domain: %v", err)
+	}
+	if err := cert.Leaf.VerifyHostname("app.customer.io"); err != nil && len(cert.Leaf.DNSNames) == 0 {
+		t.Errorf("certificate does not cover the host: %v", err)
+	}
+	for _, name := range []string{"other.customer.io", "../../evil.customer.io", "bad_name.io"} {
+		if _, err := m.GetCertificate(hello(name)); err != ErrDomainNotConfigured {
+			t.Errorf("%q: err = %v, want ErrDomainNotConfigured", name, err)
+		}
+	}
+
+	// The base domain keeps working without consulting the allower.
+	if _, err := m.GetCertificate(hello("x.example.com")); err != nil {
+		t.Errorf("base domain: %v", err)
+	}
+}
