@@ -2,6 +2,7 @@ package client
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -2396,5 +2397,26 @@ func TestHeartbeatLoopClosesMuxWhenPeerSilent(t *testing.T) {
 	case <-m.Done():
 	case <-time.After(3 * time.Second):
 		t.Fatal("mux not closed despite missing heartbeat acks")
+	}
+}
+
+func TestLocalUnreachableResponseIsValidHTTP(t *testing.T) {
+	for _, html := range []bool{false, true} {
+		raw := localUnreachableResponse(html)
+		resp, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(raw)), nil)
+		if err != nil {
+			t.Fatalf("html=%v: %v", html, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != 502 || resp.Header.Get("X-WireRift-Error") != "local-service-unreachable" {
+			t.Errorf("html=%v: status %d headers %v", html, resp.StatusCode, resp.Header)
+		}
+		if int(resp.ContentLength) != len(body) {
+			t.Errorf("html=%v: Content-Length %d != body %d", html, resp.ContentLength, len(body))
+		}
+		isHTML := strings.HasPrefix(resp.Header.Get("Content-Type"), "text/html")
+		if isHTML != html {
+			t.Errorf("html=%v but Content-Type %q", html, resp.Header.Get("Content-Type"))
+		}
 	}
 }

@@ -55,7 +55,7 @@ func (s *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
 		clientIP = host
 	}
 	if !s.rateLimiter.Allow(clientIP) {
-		http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
+		writeEdgeError(w, r, http.StatusTooManyRequests, "Rate limit exceeded")
 		return
 	}
 
@@ -63,14 +63,14 @@ func (s *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
 	host := r.Host
 	subdomain := extractSubdomain(host, s.config.Domain)
 	if subdomain == "" {
-		http.Error(w, "Invalid host", http.StatusBadRequest)
+		writeEdgeError(w, r, http.StatusBadRequest, "Invalid host")
 		return
 	}
 
 	// Look up tunnel
 	tunnel, ok := s.getTunnelBySubdomain(subdomain)
 	if !ok {
-		http.Error(w, "Tunnel not found", http.StatusBadGateway)
+		writeEdgeError(w, r, http.StatusBadGateway, "Tunnel not found")
 		return
 	}
 
@@ -85,7 +85,7 @@ func (s *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
 
 	if len(allowedIPs) > 0 {
 		if !s.isIPAllowed(clientIP, allowedIPs) {
-			http.Error(w, "Forbidden: your IP is not whitelisted", http.StatusForbidden)
+			writeEdgeError(w, r, http.StatusForbidden, "Forbidden: your IP is not whitelisted")
 			return
 		}
 	}
@@ -107,7 +107,7 @@ func (s *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
 	// Get session
 	session, ok := s.getSession(tunnel.SessionID)
 	if !ok {
-		http.Error(w, "Session not found", http.StatusBadGateway)
+		writeEdgeError(w, r, http.StatusBadGateway, "Session not found")
 		return
 	}
 
@@ -143,7 +143,7 @@ func (s *Server) forwardHTTPRequest(w http.ResponseWriter, r *http.Request, sess
 	// 1. Open a new mux stream
 	stream, err := session.Mux.OpenStream()
 	if err != nil {
-		http.Error(w, "Failed to open stream", http.StatusBadGateway)
+		writeEdgeError(w, r, http.StatusBadGateway, "Failed to open stream")
 		return
 	}
 	defer stream.Close()
@@ -151,7 +151,7 @@ func (s *Server) forwardHTTPRequest(w http.ResponseWriter, r *http.Request, sess
 	// 2. Send STREAM_OPEN frame with metadata
 	openFrame, _ := StreamOpenForHTTP(tunnel.ID, stream.ID(), r.RemoteAddr)
 	if err := session.Mux.GetFrameWriter().Write(openFrame); err != nil {
-		http.Error(w, "Failed to send stream open", http.StatusBadGateway)
+		writeEdgeError(w, r, http.StatusBadGateway, "Failed to send stream open")
 		return
 	}
 
@@ -159,14 +159,14 @@ func (s *Server) forwardHTTPRequest(w http.ResponseWriter, r *http.Request, sess
 	reqData, err := SerializeRequest(r)
 	if err != nil {
 		if errors.Is(err, ErrRequestTooLarge) {
-			http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
+			writeEdgeError(w, r, http.StatusRequestEntityTooLarge, "Request body too large")
 			return
 		}
-		http.Error(w, "Failed to serialize request", http.StatusInternalServerError)
+		writeEdgeError(w, r, http.StatusInternalServerError, "Failed to serialize request")
 		return
 	}
 	if _, err := stream.Write(reqData); err != nil {
-		http.Error(w, "Failed to write request to stream", http.StatusBadGateway)
+		writeEdgeError(w, r, http.StatusBadGateway, "Failed to write request to stream")
 		return
 	}
 
@@ -193,10 +193,10 @@ func (s *Server) forwardHTTPRequest(w http.ResponseWriter, r *http.Request, sess
 	headTimer.Stop()
 	if err != nil {
 		if cr.err != nil && cr.err != io.EOF {
-			http.Error(w, "Failed to read response from stream", http.StatusBadGateway)
+			writeEdgeError(w, r, http.StatusBadGateway, "Failed to read response from stream")
 			return
 		}
-		http.Error(w, "Failed to deserialize response", http.StatusBadGateway)
+		writeEdgeError(w, r, http.StatusBadGateway, "Failed to deserialize response")
 		return
 	}
 	defer resp.Body.Close()
@@ -234,14 +234,14 @@ func (s *Server) forwardWebSocket(w http.ResponseWriter, r *http.Request, sessio
 	// Hijack the HTTP connection to get raw TCP access
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
-		http.Error(w, "WebSocket not supported", http.StatusInternalServerError)
+		writeEdgeError(w, r, http.StatusInternalServerError, "WebSocket not supported")
 		return
 	}
 
 	// Open a mux stream
 	stream, err := session.Mux.OpenStream()
 	if err != nil {
-		http.Error(w, "Failed to open stream", http.StatusBadGateway)
+		writeEdgeError(w, r, http.StatusBadGateway, "Failed to open stream")
 		return
 	}
 	defer stream.Close()
@@ -249,7 +249,7 @@ func (s *Server) forwardWebSocket(w http.ResponseWriter, r *http.Request, sessio
 	// Send STREAM_OPEN
 	openFrame, _ := StreamOpenForHTTP(tunnel.ID, stream.ID(), r.RemoteAddr)
 	if err := session.Mux.GetFrameWriter().Write(openFrame); err != nil {
-		http.Error(w, "Failed to send stream open", http.StatusBadGateway)
+		writeEdgeError(w, r, http.StatusBadGateway, "Failed to send stream open")
 		return
 	}
 
@@ -257,14 +257,14 @@ func (s *Server) forwardWebSocket(w http.ResponseWriter, r *http.Request, sessio
 	reqData, err := SerializeRequest(r)
 	if err != nil {
 		if errors.Is(err, ErrRequestTooLarge) {
-			http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
+			writeEdgeError(w, r, http.StatusRequestEntityTooLarge, "Request body too large")
 			return
 		}
-		http.Error(w, "Failed to serialize request", http.StatusInternalServerError)
+		writeEdgeError(w, r, http.StatusInternalServerError, "Failed to serialize request")
 		return
 	}
 	if _, err := stream.Write(reqData); err != nil {
-		http.Error(w, "Failed to write request", http.StatusBadGateway)
+		writeEdgeError(w, r, http.StatusBadGateway, "Failed to write request")
 		return
 	}
 

@@ -728,9 +728,9 @@ func (c *Client) handleHTTPStream(stream *mux.Stream) {
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		// Send 502 response
-		errResp := "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n"
-		_, _ = stream.Write([]byte(errResp))
+		// The local app did not answer. The port is deliberately not shown:
+		// the visitor is on the public internet.
+		_, _ = stream.Write(localUnreachableResponse(strings.Contains(req.Header.Get("Accept"), "text/html") && req.Method != http.MethodHead))
 		return
 	}
 	defer resp.Body.Close()
@@ -815,4 +815,28 @@ func (c *Client) findTunnelForStream(stream *mux.Stream) *Tunnel {
 		return v.(*Tunnel)
 	}
 	return nil
+}
+
+const unreachableText = "Local service unreachable: the tunnel is up, but nothing answered on the local port."
+
+const unreachableHTML = `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>502 Bad Gateway - WireRift</title>
+<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#0f172a;color:#e2e8f0;display:flex;align-items:center;justify-content:center;min-height:100vh}.card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:40px;max-width:480px;width:90%}.code{font-size:14px;color:#818cf8;font-weight:600;margin-bottom:8px}h1{font-size:22px;margin-bottom:12px;color:#fff}p{color:#94a3b8;font-size:15px;line-height:1.5}.brand{margin-top:24px;font-size:12px;color:#64748b}</style></head>
+<body><div class="card"><div class="code">502 Bad Gateway</div><h1>The local app is not responding</h1>
+<p>The tunnel is working, but nothing answered on the local port. Start your app (or check that it listens on the port you exposed), then refresh this page.</p>
+<div class="brand">WireRift</div></div></body></html>`
+
+// localUnreachableResponse builds the raw HTTP 502 sent through the tunnel when
+// the local service cannot be reached.
+func localUnreachableResponse(html bool) []byte {
+	body, ctype := unreachableText+"\n", "text/plain; charset=utf-8"
+	if html {
+		body, ctype = unreachableHTML, "text/html; charset=utf-8"
+	}
+	return []byte("HTTP/1.1 502 Bad Gateway\r\n" +
+		"Content-Type: " + ctype + "\r\n" +
+		"Content-Length: " + strconv.Itoa(len(body)) + "\r\n" +
+		"Cache-Control: no-store\r\n" +
+		"X-WireRift-Error: local-service-unreachable\r\n\r\n" + body)
 }
