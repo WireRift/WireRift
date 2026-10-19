@@ -217,6 +217,10 @@ func (s *Stream) Close() error {
 func (s *Stream) Reset() error {
 	s.state.Store(streamStateReset)
 
+	// Wake local readers and writers blocked on this stream: they must see the
+	// reset now, not whenever the peer happens to send something.
+	s.wake()
+
 	// Send reset frame (non-blocking, ignore error if mux is closed)
 	select {
 	case <-s.mux.done:
@@ -296,12 +300,8 @@ func (s *Stream) onCloseFrame() {
 	}
 }
 
-// onResetFrame handles reset frame from remote.
-func (s *Stream) onResetFrame() {
-	s.state.Store(streamStateReset)
-	defer s.cleanup()
-
-	// Signal to readers/writers
+// wake signals blocked readers and writers to re-check the stream state.
+func (s *Stream) wake() {
 	select {
 	case s.readCh <- struct{}{}:
 	default:
@@ -310,6 +310,13 @@ func (s *Stream) onResetFrame() {
 	case s.windowCh <- struct{}{}:
 	default:
 	}
+}
+
+// onResetFrame handles reset frame from remote.
+func (s *Stream) onResetFrame() {
+	s.state.Store(streamStateReset)
+	defer s.cleanup()
+	s.wake()
 }
 
 // IsClosed returns true if the stream is fully closed.

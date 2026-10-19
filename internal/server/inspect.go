@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -38,6 +39,9 @@ func (w *inspectResponseWriter) Write(b []byte) (int, error) {
 	}
 	return w.ResponseWriter.Write(b)
 }
+
+// Unwrap lets http.NewResponseController reach the real connection (deadlines, flush).
+func (w *inspectResponseWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 // Flush implements http.Flusher for streaming response support.
 func (w *inspectResponseWriter) Flush() {
@@ -81,6 +85,7 @@ func (s *Server) logRequest(tunnel *Tunnel, r *http.Request, w *inspectResponseW
 		Method:     r.Method,
 		Path:       r.URL.Path,
 		Query:      r.URL.RawQuery,
+		Host:       r.Host,
 		StatusCode: w.statusCode,
 		Duration:   time.Since(start),
 		ReqHeaders: reqHeaders,
@@ -149,15 +154,20 @@ func (s *Server) ReplayRequest(logID string) (*RequestLog, error) {
 
 	// Create a new HTTP request from the log, restoring the query string so
 	// the replay reaches the local app exactly as the original did.
-	target := original.Path
-	if original.Query != "" {
-		target += "?" + original.Query
+	// The logged Path is the decoded one, so re-escape it: a path with "%3F" or
+	// "%zz" must not turn into a query split or an unparsable URL.
+	target := (&url.URL{Path: original.Path, RawQuery: original.Query}).String()
+	req, err := http.NewRequestWithContext(context.Background(), original.Method, target, nil)
+	if err != nil {
+		return nil, fmt.Errorf("replay: cannot rebuild the request: %w", err)
 	}
-	req, _ := http.NewRequestWithContext(context.Background(), original.Method, target, nil)
 	for k, v := range original.ReqHeaders {
 		req.Header.Set(k, v)
 	}
-	req.Host = tunnel.Subdomain + "." + s.config.Domain
+	req.Host = original.Host
+	if req.Host == "" {
+		req.Host = tunnel.Subdomain + "." + s.config.Domain
+	}
 
 	// Open stream and forward
 	stream, err := session.Mux.OpenStream()
@@ -199,6 +209,8 @@ func (s *Server) ReplayRequest(logID string) (*RequestLog, error) {
 		TunnelID:   original.TunnelID,
 		Method:     original.Method,
 		Path:       original.Path,
+		Query:      original.Query,
+		Host:       original.Host,
 		StatusCode: resp.StatusCode,
 		Duration:   0,
 		ReqHeaders: original.ReqHeaders,

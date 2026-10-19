@@ -2481,8 +2481,8 @@ func TestRecreateTunnelsKeepsDeadlineAndSkipsExpired(t *testing.T) {
 
 	select {
 	case ttl := <-gotTTL:
-		if ttl < 95 || ttl > 101 {
-			t.Errorf("re-created with TTL %ds, want about the remaining 100s (not the original 3600s)", ttl)
+		if ttl < 95 || ttl > 100 {
+			t.Errorf("re-created with TTL %ds, want about the remaining 100s, never more (not the original 3600s)", ttl)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("live tunnel was not re-created")
@@ -2491,6 +2491,52 @@ func TestRecreateTunnelsKeepsDeadlineAndSkipsExpired(t *testing.T) {
 	case ttl := <-gotTTL:
 		t.Errorf("expired tunnel was re-created (TTL %d)", ttl)
 	case <-time.After(300 * time.Millisecond):
+	}
+	client.conn.Close()
+}
+
+// Every retry recomputes the remaining time, so the sleeps between attempts
+// cannot push the deadline later.
+func TestRecreateTTLShrinksAcrossRetries(t *testing.T) {
+	old := tunnelRetryBase
+	tunnelRetryBase = 1100 * time.Millisecond
+	defer func() { tunnelRetryBase = old }()
+	client, serverMux := makeConnectedClient(t)
+
+	ttls := make(chan int, 4)
+	go func() {
+		attempt := 0
+		for {
+			select {
+			case frame := <-serverMux.ControlFrame():
+				if frame.Type != proto.FrameTunnelReq {
+					continue
+				}
+				var req proto.TunnelRequest
+				_ = proto.DecodeJSONPayload(frame, &req)
+				ttls <- req.TTLSeconds
+				attempt++
+				res := &proto.TunnelResponse{OK: attempt > 1, TunnelID: "n", Type: proto.TunnelTypeHTTP, PublicURL: "http://x", Error: "in use"}
+				resp, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, proto.ControlStreamID, res)
+				_ = serverMux.GetFrameWriter().Write(resp)
+			case <-serverMux.Done():
+				return
+			}
+		}
+	}()
+
+	client.tunnels.Store("t", &Tunnel{
+		ID: "t", Type: proto.TunnelTypeHTTP, client: client,
+		ExpiresAt: time.Now().Add(10 * time.Second),
+		request:   &proto.TunnelRequest{Type: proto.TunnelTypeHTTP, LocalAddr: "localhost:1", TTLSeconds: 60},
+	})
+	client.recreateTunnels()
+	first, second := <-ttls, <-ttls
+	if second >= first {
+		t.Errorf("TTL did not shrink across the retry (first %ds, second %ds): reconnects would extend the deadline", first, second)
+	}
+	if first > 10 {
+		t.Errorf("first attempt asked for %ds but only 10s remained", first)
 	}
 	client.conn.Close()
 }

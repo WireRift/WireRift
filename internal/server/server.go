@@ -42,6 +42,11 @@ type Config struct {
 	// HTTPSAddr is the address for HTTPS edge listener.
 	HTTPSAddr string
 
+	// EdgeIdleTimeout bounds how long one read or write on a visitor connection
+	// may stall (each successful operation restarts it), so streams of any
+	// length work while stuck or trickling peers are dropped. Default 60s.
+	EdgeIdleTimeout time.Duration
+
 	// TCPBindHost is the interface TCP tunnel ports listen on ("" = all
 	// interfaces). -dev sets it to loopback so nothing is reachable remotely.
 	TCPBindHost string
@@ -185,9 +190,40 @@ type Tunnel struct {
 	ExpiresAt time.Time
 	expiry    *time.Timer
 
+	// closed is closed when the tunnel is torn down (explicit close, expiry,
+	// session end). Established connections watch it so that closing a tunnel
+	// also cuts the visitors already connected to it.
+	closed     chan struct{}
+	closedOnce sync.Once
+
 	listener net.Listener // public TCP listener (TCP tunnels), closed on shutdown
 	stop     chan struct{}
 	stopOnce sync.Once
+}
+
+// markClosed signals every established connection of this tunnel to stop.
+func (t *Tunnel) markClosed() {
+	t.closedOnce.Do(func() {
+		if t.closed != nil {
+			close(t.closed)
+		}
+	})
+}
+
+// watch runs the given close functions when the tunnel is torn down. Call the
+// returned stop function when the connection ends on its own.
+func (t *Tunnel) watch(closers ...func()) (stop func()) {
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-t.closed: // nil channel (tunnel built without one) never fires
+			for _, c := range closers {
+				c()
+			}
+		case <-done:
+		}
+	}()
+	return func() { close(done) }
 }
 
 // cancelExpiry stops the tunnel's expiry timer, if any.
@@ -235,6 +271,7 @@ type RequestLog struct {
 	Method     string            `json:"method"`
 	Path       string            `json:"path"`
 	Query      string            `json:"query,omitempty"`
+	Host       string            `json:"host,omitempty"` // Host header the visitor used (custom domains replay on it)
 	StatusCode int               `json:"status_code"`
 	Duration   time.Duration     `json:"duration_ms"`
 	ReqHeaders map[string]string `json:"req_headers"`
@@ -271,6 +308,10 @@ func New(config Config, logger *slog.Logger) *Server {
 	if _, err := rand.Read(pinSecret); err != nil {
 		// crypto/rand.Read never fails on supported platforms, but handle defensively
 		panic("crypto/rand.Read failed: " + err.Error())
+	}
+
+	if config.EdgeIdleTimeout <= 0 {
+		config.EdgeIdleTimeout = 60 * time.Second
 	}
 
 	domainSecret := config.DomainSecret
@@ -671,6 +712,7 @@ func (s *Server) createHTTPTunnel(m *mux.Mux, session *Session, req *proto.Tunne
 		Inspect:      req.Inspect,
 		CreatedAt:    time.Now(),
 		ExpiresAt:    expiryFor(req.TTLSeconds),
+		closed:       make(chan struct{}),
 	}
 
 	if customDomain != "" {
@@ -730,6 +772,7 @@ func (s *Server) createTCPTunnel(m *mux.Mux, session *Session, req *proto.Tunnel
 		AllowedIPs: req.AllowedIPs,
 		CreatedAt:  time.Now(),
 		ExpiresAt:  expiryFor(req.TTLSeconds),
+		closed:     make(chan struct{}),
 	}
 
 	// Bind before announcing success so a listen failure is reported.
@@ -811,6 +854,7 @@ func (s *Server) closeTunnel(session *Session, tunnelID, reason string) bool {
 // teardownTunnel releases everything a tunnel holds.
 func (s *Server) teardownTunnel(tunnel *Tunnel) {
 	tunnel.cancelExpiry()
+	tunnel.markClosed()
 	switch tunnel.Type {
 	case proto.TunnelTypeHTTP:
 		s.tunnels.Delete(tunnel.Subdomain)
@@ -852,6 +896,15 @@ func (s *Server) armExpiry(session *Session, tunnel *Tunnel) {
 	tunnel.mu.Lock()
 	tunnel.expiry = timer
 	tunnel.mu.Unlock()
+
+	// If the session was torn down between registration and here, its cleanup
+	// found no timer to stop: don't let this one pin the session for the whole TTL.
+	session.mu.RLock()
+	_, alive := session.Tunnels[id]
+	session.mu.RUnlock()
+	if !alive {
+		timer.Stop()
+	}
 }
 
 // removeSession removes a session and cleans up all its tunnels.
@@ -955,6 +1008,11 @@ func (s *Server) proxyTCPConnection(conn net.Conn, tunnel *Tunnel, session *Sess
 		return
 	}
 
+	// Closing the tunnel (explicit close, TTL expiry, session end) must also cut
+	// connections that are already established.
+	stopWatch := tunnel.watch(func() { conn.Close() }, func() { _ = stream.Reset() })
+	defer stopWatch()
+
 	// Bidirectional copy with bytes tracking
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -984,10 +1042,11 @@ func (s *Server) startHTTPListener() error {
 	s.httpServer = &http.Server{
 		Handler:           http.HandlerFunc(s.handleHTTPRequest),
 		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      60 * time.Second,
-		IdleTimeout:       120 * time.Second,
-		MaxHeaderBytes:    1 << 20,
+		// No absolute Read/WriteTimeout: they would cut any response or upload
+		// longer than the limit (SSE, large downloads). Progress is bounded by a
+		// per-operation idle deadline instead (see Config.EdgeIdleTimeout).
+		IdleTimeout:    120 * time.Second,
+		MaxHeaderBytes: 1 << 20,
 	}
 
 	s.wg.Add(1)
@@ -1013,10 +1072,11 @@ func (s *Server) startHTTPSListener() error {
 	s.httpsServer = &http.Server{
 		Handler:           http.HandlerFunc(s.handleHTTPRequest),
 		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      60 * time.Second,
-		IdleTimeout:       120 * time.Second,
-		MaxHeaderBytes:    1 << 20,
+		// No absolute Read/WriteTimeout: they would cut any response or upload
+		// longer than the limit (SSE, large downloads). Progress is bounded by a
+		// per-operation idle deadline instead (see Config.EdgeIdleTimeout).
+		IdleTimeout:    120 * time.Second,
+		MaxHeaderBytes: 1 << 20,
 	}
 
 	s.wg.Add(1)
@@ -1297,12 +1357,14 @@ func (s *Server) prepareCustomDomain(session *Session, requested string) (string
 	if err != nil {
 		return "", err
 	}
-	// Cheap check first: don't spend a DNS lookup on a name that is taken.
-	if _, taken := s.tunnels.Load(customKeyPrefix + domain); taken {
-		return "", errors.New("custom domain already in use by another tunnel")
-	}
+	// Prove ownership first: only the owner may learn whether the domain is
+	// currently in use (otherwise any client could probe which custom domains
+	// are live).
 	if err := s.verifyCustomDomain(s.ctx, session.AccountID, domain); err != nil {
 		return "", err
+	}
+	if _, taken := s.tunnels.Load(customKeyPrefix + domain); taken {
+		return "", errors.New("custom domain already in use by another tunnel")
 	}
 	return domain, nil
 }

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // maxRequestBodySize bounds the request body buffered for tunneling.
@@ -136,6 +137,15 @@ func DeserializeResponseFor(data []byte, req *http.Request) (*http.Response, err
 
 // WriteResponse writes an HTTP response to the client.
 func WriteResponse(w http.ResponseWriter, resp *http.Response) error {
+	return writeResponseIdle(w, resp, 0)
+}
+
+// writeResponseIdle is WriteResponse with an idle write deadline (0 = none).
+func writeResponseIdle(w http.ResponseWriter, resp *http.Response, idle time.Duration) error {
+	if idle > 0 {
+		w = newDeadlineWriter(w, idle)
+	}
+
 	// Copy headers
 	for key, values := range resp.Header {
 		for _, value := range values {
@@ -192,4 +202,47 @@ func IsWebSocketRequest(r *http.Request) bool {
 		}
 	}
 	return false
+}
+
+// deadlineWriter restarts the connection's write deadline before every write
+// and flush, turning the server's absolute WriteTimeout into an idle timeout:
+// a response may take as long as it likes as long as the visitor keeps reading.
+type deadlineWriter struct {
+	http.ResponseWriter
+	rc   *http.ResponseController
+	idle time.Duration
+}
+
+func newDeadlineWriter(w http.ResponseWriter, idle time.Duration) *deadlineWriter {
+	return &deadlineWriter{ResponseWriter: w, rc: http.NewResponseController(w), idle: idle}
+}
+
+func (d *deadlineWriter) extend() {
+	if d.idle > 0 {
+		_ = d.rc.SetWriteDeadline(time.Now().Add(d.idle)) // ErrNotSupported (recorders, h2) is fine
+	}
+}
+
+func (d *deadlineWriter) WriteHeader(code int) { d.extend(); d.ResponseWriter.WriteHeader(code) }
+
+func (d *deadlineWriter) Write(p []byte) (int, error) { d.extend(); return d.ResponseWriter.Write(p) }
+
+func (d *deadlineWriter) Flush() { d.extend(); _ = d.rc.Flush() }
+
+// Unwrap exposes the underlying writer to http.ResponseController.
+func (d *deadlineWriter) Unwrap() http.ResponseWriter { return d.ResponseWriter }
+
+// idleBody restarts the connection's read deadline before every read of a
+// request body, so uploads of any size work while a stalled uploader is dropped.
+type idleBody struct {
+	io.ReadCloser
+	rc   *http.ResponseController
+	idle time.Duration
+}
+
+func (b *idleBody) Read(p []byte) (int, error) {
+	if b.idle > 0 {
+		_ = b.rc.SetReadDeadline(time.Now().Add(b.idle))
+	}
+	return b.ReadCloser.Read(p)
 }

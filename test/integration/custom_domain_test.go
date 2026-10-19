@@ -192,6 +192,13 @@ func TestCustomDomainCannotBeHijackedWhileInUse(t *testing.T) {
 	if _, err := other.HTTP("localhost:2", client.WithCustomDomain("shop.customer.org")); err == nil || !strings.Contains(err.Error(), "already in use") {
 		t.Errorf("hijack attempt err = %v, want 'already in use'", err)
 	}
+
+	// Without a valid DNS proof a client must not even learn that the domain is
+	// live: the proof is checked first, so this is "not verified", never "in use".
+	dns.set(m[1]) // the TXT record disappears
+	if _, err := other.HTTP("localhost:3", client.WithCustomDomain("shop.customer.org")); err == nil || strings.Contains(err.Error(), "in use") || !strings.Contains(err.Error(), "not verified") {
+		t.Errorf("unproven probe err = %v, want 'not verified' without revealing the domain is live", err)
+	}
 }
 
 func TestCustomDomainValidation(t *testing.T) {

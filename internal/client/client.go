@@ -603,22 +603,25 @@ func (c *Client) recreateTunnels() {
 		if t.request == nil {
 			continue
 		}
-		// A time-limited tunnel keeps its original deadline across reconnects
-		// (it must not get a fresh TTL), and is not revived once expired.
 		request := *t.request
-		if !t.ExpiresAt.IsZero() {
-			remaining := time.Until(t.ExpiresAt)
-			if remaining < time.Second {
-				c.logger.Info("tunnel expired, not re-creating", "id", t.ID)
-				continue
-			}
-			request.TTLSeconds = int((remaining + time.Second - 1) / time.Second)
-		}
 		// The server may still hold the previous session (and its subdomain or
 		// port) for a moment, so retry with backoff before giving up.
 		var newTunnel *Tunnel
 		var err error
+		expired := false
 		for attempt, delay := 0, tunnelRetryBase; attempt < 5; attempt, delay = attempt+1, delay*2 {
+			// A time-limited tunnel keeps its ORIGINAL deadline across reconnects.
+			// The remaining time is recomputed on every attempt (the retry sleeps
+			// eat into it) and rounded DOWN, so no reconnect can extend the
+			// deadline; once it has passed the tunnel is not revived.
+			if !t.ExpiresAt.IsZero() {
+				remaining := time.Until(t.ExpiresAt)
+				if remaining < time.Second {
+					expired = true
+					break
+				}
+				request.TTLSeconds = int(remaining / time.Second)
+			}
 			if newTunnel, err = c.openTunnel(&request); err == nil {
 				break
 			}
@@ -628,6 +631,10 @@ func (c *Client) recreateTunnels() {
 			case <-c.ctx.Done():
 				return
 			}
+		}
+		if expired {
+			c.logger.Info("tunnel expired, not re-creating", "id", t.ID)
+			continue
 		}
 		if err != nil {
 			c.logger.Error("giving up re-creating tunnel", "id", t.ID, "error", err)

@@ -1983,3 +1983,59 @@ func TestDuplicateStreamOpenRejected(t *testing.T) {
 		t.Error("live stream was replaced by a duplicate STREAM_OPEN")
 	}
 }
+
+// A local Reset must wake a Read (and a flow-control-blocked Write) that is
+// already waiting; it used to leave them blocked until the peer sent something.
+func TestLocalResetWakesBlockedReadAndWrite(t *testing.T) {
+	client, server := newTestPipe(t)
+	go client.Run()
+	go server.Run()
+	defer client.Close()
+	defer server.Close()
+
+	cs, err := client.OpenStream()
+	if err != nil {
+		t.Fatal(err)
+	}
+	openFrame, _ := proto.EncodeJSONPayload(proto.FrameStreamOpen, cs.ID(), &proto.StreamOpen{Protocol: "tcp"})
+	if err := client.GetFrameWriter().Write(openFrame); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.AcceptStream(); err != nil {
+		t.Fatal(err)
+	}
+
+	readErr := make(chan error, 1)
+	go func() { _, err := cs.Read(make([]byte, 8)); readErr <- err }()
+	time.Sleep(100 * time.Millisecond) // let the Read block on the empty stream
+	cs.Reset()
+	select {
+	case err := <-readErr:
+		if err != ErrStreamReset {
+			t.Errorf("Read err = %v, want ErrStreamReset", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a blocked Read was not woken by a local Reset")
+	}
+
+	// A Write blocked on an exhausted window is released too.
+	cs2, _ := client.OpenStream()
+	of2, _ := proto.EncodeJSONPayload(proto.FrameStreamOpen, cs2.ID(), &proto.StreamOpen{Protocol: "tcp"})
+	_ = client.GetFrameWriter().Write(of2)
+	if _, err := server.AcceptStream(); err != nil {
+		t.Fatal(err)
+	}
+	cs2.window.Store(0)
+	writeErr := make(chan error, 1)
+	go func() { _, err := cs2.Write([]byte("blocked")); writeErr <- err }()
+	time.Sleep(100 * time.Millisecond)
+	cs2.Reset()
+	select {
+	case err := <-writeErr:
+		if err != ErrStreamReset {
+			t.Errorf("Write err = %v, want ErrStreamReset", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a window-blocked Write was not woken by a local Reset")
+	}
+}

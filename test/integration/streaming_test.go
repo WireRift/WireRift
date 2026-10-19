@@ -19,6 +19,12 @@ import (
 // returning the edge address and Host header to use.
 func startTunnel(t *testing.T, local http.Handler, subdomain string) (edgeAddr, host string) {
 	t.Helper()
+	return startTunnelIdle(t, local, subdomain, 0)
+}
+
+// startTunnelIdle is startTunnel with a custom edge idle timeout (0 = default).
+func startTunnelIdle(t *testing.T, local http.Handler, subdomain string, idle time.Duration) (edgeAddr, host string) {
+	t.Helper()
 	svc := httptest.NewServer(local)
 	t.Cleanup(svc.Close)
 
@@ -27,6 +33,7 @@ func startTunnel(t *testing.T, local http.Handler, subdomain string) (edgeAddr, 
 	cfg.ControlAddr = "127.0.0.1:0"
 	cfg.HTTPAddr = "127.0.0.1:0"
 	cfg.AuthManager = authMgr
+	cfg.EdgeIdleTimeout = idle
 	srv := server.New(cfg, nil)
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)

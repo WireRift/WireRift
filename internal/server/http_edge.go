@@ -120,13 +120,15 @@ func (s *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
 		statusCode:     200,
 	}
 
+	// Log the request for inspection even when forwarding aborts the response
+	// (a panic(http.ErrAbortHandler) unwinds through here): truncated or cut
+	// requests are exactly the ones you want to find in the inspector.
+	if inspect {
+		defer s.logRequest(tunnel, r, wrapped, clientIP, reqStart)
+	}
+
 	// Forward request through tunnel
 	s.forwardHTTPRequest(wrapped, r, session, tunnel)
-
-	// Log request for inspection
-	if inspect {
-		s.logRequest(tunnel, r, wrapped, clientIP, reqStart)
-	}
 }
 
 // forwardHTTPRequest forwards an HTTP request through the tunnel.
@@ -151,7 +153,11 @@ func (s *Server) forwardHTTPRequest(w http.ResponseWriter, r *http.Request, sess
 		return
 	}
 
-	// 3. Serialize the HTTP request and write through the stream
+	// 3. Serialize the HTTP request and write through the stream. The upload may
+	// take as long as it likes while data keeps arriving.
+	if r.Body != nil && r.Body != http.NoBody {
+		r.Body = &idleBody{ReadCloser: r.Body, rc: http.NewResponseController(w), idle: s.config.EdgeIdleTimeout}
+	}
 	reqData, err := SerializeRequest(r)
 	if err != nil {
 		if errors.Is(err, ErrRequestTooLarge) {
@@ -172,6 +178,8 @@ func (s *Server) forwardHTTPRequest(w http.ResponseWriter, r *http.Request, sess
 	// cannot pin this goroutine and its stream.
 	done := make(chan struct{})
 	defer close(done)
+	stopWatch := tunnel.watch(func() { _ = stream.Reset() }) // tunnel closed / expired mid-response
+	defer stopWatch()
 	go func() {
 		select {
 		case <-r.Context().Done():
@@ -198,7 +206,7 @@ func (s *Server) forwardHTTPRequest(w http.ResponseWriter, r *http.Request, sess
 	defer resp.Body.Close()
 
 	// 6. Write the response back to the edge HTTP client
-	if err := WriteResponse(w, resp); err != nil && resp.ContentLength < 0 {
+	if err := writeResponseIdle(w, resp, s.config.EdgeIdleTimeout); err != nil && resp.ContentLength < 0 {
 		// The length is not declared, so a silent early end would look like a
 		// complete chunked/close-delimited body. Abort the connection instead.
 		panic(http.ErrAbortHandler)
@@ -270,6 +278,10 @@ func (s *Server) forwardWebSocket(w http.ResponseWriter, r *http.Request, sessio
 		return
 	}
 	defer conn.Close()
+
+	// Cut established WebSockets when the tunnel is closed or expires.
+	stopWatch := tunnel.watch(func() { conn.Close() }, func() { _ = stream.Reset() })
+	defer stopWatch()
 
 	// Bidirectional copy between hijacked conn and stream
 	var wg sync.WaitGroup

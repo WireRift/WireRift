@@ -83,6 +83,7 @@ func TestDeserializeResponseForHEAD(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer resp.Body.Close()
 	w := httptest.NewRecorder()
 	if err := WriteResponse(w, resp); err != nil {
 		t.Errorf("HEAD response body copy failed: %v", err)

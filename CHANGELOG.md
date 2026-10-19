@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+- TLS certificates (and ACME orders) are issued only for the base domain or names a live tunnel serves; random SNI names can no longer burn Let's Encrypt quota or grow the cache. Failed ACME hosts back off for 5 minutes and the self-signed stop-gap is no longer cached for a year
+- The local dev CA is now restricted to TLS server authentication and to `.localhost`/`.test` for e-mail and URI identities too (a leaked key could previously mint S/MIME, client-auth and code-signing certificates); constraints are validated strictly on load, CAs created by older versions keep working but are flagged by `ca status` and `doctor`
+- Closing or expiring a tunnel now also cuts visitors that are already connected (TCP, WebSocket, streamed responses); before, only new connections were refused
+- `-dev` binds TCP tunnel ports to loopback as well
+- Custom-domain probing: the DNS proof is checked before a client learns that a domain is in use
+
+### Fixed
+- Streams of any length work: the absolute 60s `WriteTimeout`/30s `ReadTimeout` that cut long SSE streams, downloads and uploads are replaced by a per-operation idle timeout (`Config.EdgeIdleTimeout`, default 60s)
+- A local `Stream.Reset()` now wakes a blocked reader/writer (a visitor disconnecting used to leave the edge handler blocked until the local app finished)
+- Concurrent first runs could produce a mismatched local CA key/certificate pair; the CA is now created under a lock
+- `ca untrust -purge` deletes only the CA's own files, not the whole `-ca-dir`
+- The `domain-secret` file is created atomically (no partial file, racing starts agree; an empty leftover is healed)
+- Replaying a request whose path is not a valid URL path no longer panics; replay keeps the query string and the custom-domain Host
+- Aborted responses are now recorded by the inspector
+- Reconnecting never extends a tunnel's `-ttl` deadline (the remaining time is recomputed per attempt and rounded down)
+- `wirerift-server doctor` accepts every server flag (including `-dev`)
+
 ## [1.10.0] - 2026-10-19
 
 ### Added

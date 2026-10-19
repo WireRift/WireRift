@@ -1,10 +1,17 @@
 package server
 
 import (
+	"bufio"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/wirerift/wirerift/internal/mux"
+	"github.com/wirerift/wirerift/internal/proto"
 )
 
 func TestWriteEdgeErrorNegotiatesBrowsersAndClients(t *testing.T) {
@@ -75,5 +82,100 @@ func TestDefaultHintCoversCommonErrors(t *testing.T) {
 	}
 	if defaultHint(418, "teapot") != "" {
 		t.Error("unknown status should have no hint")
+	}
+}
+
+// A visitor-controlled path such as /%zz must not crash the replay (the
+// logged Path is decoded, so rebuilding the URL from it used to fail and the
+// nil request was dereferenced), and encoded characters must survive.
+func TestReplayRebuildsPoisonedPathsSafely(t *testing.T) {
+	for _, path := range []string{"/%zz", "/a b", "/x?y", "/%00", "/ünï"} {
+		u := (&url.URL{Path: path, RawQuery: "k=v"}).String()
+		req, err := http.NewRequest("GET", u, nil)
+		if err != nil {
+			t.Errorf("path %q produced an unparsable replay URL %q: %v", path, u, err)
+			continue
+		}
+		if req.URL.Path != path || req.URL.RawQuery != "k=v" {
+			t.Errorf("path %q: round trip gave %q ? %q", path, req.URL.Path, req.URL.RawQuery)
+		}
+	}
+}
+
+// End to end: replaying a logged request whose (decoded) path is not a valid
+// URL path must work, reach the local app escaped correctly, keep the query
+// and the custom-domain Host, and carry both into the replay's own log.
+func TestReplayRequestWithPoisonedPathHostAndQuery(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+	c1, c2 := net.Pipe()
+	m := mux.New(c1, mux.DefaultConfig())
+	go m.Run()
+	clientMux := mux.New(c2, mux.DefaultConfig())
+	go clientMux.Run()
+
+	tunnel := &Tunnel{ID: "tun-p", Type: proto.TunnelTypeHTTP, SessionID: "sess-p", Subdomain: "p"}
+	s.tunnels.Store("p", tunnel)
+	s.sessions.Store("sess-p", &Session{ID: "sess-p", Mux: m, Tunnels: map[string]*Tunnel{"tun-p": tunnel}, CreatedAt: time.Now(), LastSeen: time.Now()})
+	s.logMu.Lock()
+	s.requestLogs = append(s.requestLogs, RequestLog{ID: "req_p", TunnelID: "tun-p", Method: "GET",
+		Path: "/%zz", Query: "a=1&b=2", Host: "app.customer.org", ReqHeaders: map[string]string{}, ClientIP: "10.0.0.1"})
+	s.logMu.Unlock()
+
+	got := make(chan *http.Request, 1)
+	go func() {
+		stream, err := clientMux.AcceptStream()
+		if err != nil {
+			return
+		}
+		defer stream.Close()
+		req, err := http.ReadRequest(bufio.NewReader(stream))
+		if err != nil {
+			return
+		}
+		got <- req
+		stream.Write([]byte("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK"))
+	}()
+
+	replay, err := s.ReplayRequest("req_p") // used to panic: nil request
+	if err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if replay.Query != "a=1&b=2" || replay.Host != "app.customer.org" {
+		t.Errorf("the replay's own log lost query/host: %+v", replay)
+	}
+	select {
+	case req := <-got:
+		if req.URL.Path != "/%zz" || req.URL.RawQuery != "a=1&b=2" || req.Host != "app.customer.org" {
+			t.Errorf("local app received path %q query %q host %q", req.URL.Path, req.URL.RawQuery, req.Host)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the replay never reached the local app")
+	}
+}
+
+// If the session is torn down between registering a tunnel and arming its
+// expiry, the timer must not stay armed (it would pin the session for the TTL).
+func TestArmExpiryDoesNotLeakAfterSessionRemoval(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+	tunnel := &Tunnel{ID: "tun-x", Type: proto.TunnelTypeHTTP, ExpiresAt: time.Now().Add(time.Hour), closed: make(chan struct{})}
+	gone := &Session{ID: "s", Tunnels: nil} // removeSession already ran: Tunnels == nil
+	s.armExpiry(gone, tunnel)
+	tunnel.mu.RLock()
+	timer := tunnel.expiry
+	tunnel.mu.RUnlock()
+	if timer == nil {
+		t.Fatal("no timer was created")
+	}
+	if timer.Stop() {
+		t.Error("the expiry timer is still armed for a tunnel whose session is gone")
+	}
+
+	// A live registration keeps its timer.
+	live := &Session{ID: "s2", Tunnels: map[string]*Tunnel{}}
+	t2 := &Tunnel{ID: "tun-y", Type: proto.TunnelTypeHTTP, ExpiresAt: time.Now().Add(time.Hour), closed: make(chan struct{})}
+	live.Tunnels[t2.ID] = t2
+	s.armExpiry(live, t2)
+	if !t2.expiry.Stop() {
+		t.Error("a live tunnel lost its expiry timer")
 	}
 }
