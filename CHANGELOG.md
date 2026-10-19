@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.9.0] - 2026-10-19
 
 ### Added
 - **Custom domains**: `wirerift http|serve -domain app.example.com` (or `domain:` in `wirerift start` files) also serves a tunnel on your own domain. Ownership is proven with a DNS TXT record (`_wirerift.<domain>` = `wirerift-verification=<HMAC code>`) that the error message spells out; the code is derived from a persisted server secret (`<cert-dir>/domain-secret`). One tunnel per domain; certificates (ACME) are only requested for domains a verified, live tunnel is serving. `wirerift-server -dns-server` picks the resolver used for the check.
