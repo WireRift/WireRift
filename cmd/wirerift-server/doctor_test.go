@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -358,5 +359,25 @@ func TestDoctorFlagsWinOverEnvironment(t *testing.T) {
 		"-dashboard-port", "0", "-tcp-ports", "47400-47410", "-cert-dir", filepath.Join(t.TempDir(), "c"), "-ca-dir", filepath.Join(t.TempDir(), "ca")}, &out)
 	if !strings.Contains(out.String(), "domain flag.localhost") || strings.Contains(out.String(), "env.localhost") {
 		t.Errorf("the flag must win over WIRERIFT_DOMAIN:\n%s", out.String())
+	}
+}
+
+// Windows reports Winsock error numbers rather than Go's portable errno values;
+// both spellings must be classified the same way.
+func TestBindErrorClassification(t *testing.T) {
+	wrap := func(e syscall.Errno) error { return &net.OpError{Op: "listen", Err: os.NewSyscallError("bind", e)} }
+	for name, tc := range map[string]struct {
+		err        error
+		inUse, den bool
+	}{
+		"portable EADDRINUSE": {wrap(syscall.EADDRINUSE), true, false},
+		"WSAEADDRINUSE":       {wrap(wsaeAddrUse), true, false},
+		"portable EACCES":     {wrap(syscall.EACCES), false, true},
+		"WSAEACCES":           {wrap(wsaeAccess), false, true},
+		"something else":      {errors.New("boom"), false, false},
+	} {
+		if isAddrInUse(tc.err) != tc.inUse || isBindDenied(tc.err) != tc.den {
+			t.Errorf("%s: inUse=%v denied=%v, want %v/%v", name, isAddrInUse(tc.err), isBindDenied(tc.err), tc.inUse, tc.den)
+		}
 	}
 }

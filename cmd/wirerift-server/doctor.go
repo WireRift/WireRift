@@ -117,10 +117,10 @@ func checkPort(r *diag.Report, name, addr, purpose string) {
 		return
 	}
 	switch {
-	case errors.Is(err, syscall.EADDRINUSE):
+	case isAddrInUse(err):
 		r.Add(diag.Fail, name, fmt.Sprintf("%s is already in use; needed for %s", addr, purpose),
 			"stop the other program, or choose another address with the matching flag")
-	case errors.Is(err, os.ErrPermission):
+	case isBindDenied(err):
 		hint := "use a port above 1023 (for example -http :8080), or run with -dev for local work"
 		if runtime.GOOS == "linux" {
 			hint = "ports below 1024 need root or: sudo setcap 'cap_net_bind_service=+ep' wirerift-server " +
@@ -316,4 +316,22 @@ func checkLocalCA(r *diag.Report, dir string) {
 	default:
 		r.Add(diag.OK, "Local dev CA", "trusted by this system", "")
 	}
+}
+
+// Winsock error numbers. On Windows the real bind errors are these, not the
+// syscall.EADDRINUSE / EACCES values Go defines for portability.
+const (
+	wsaeAccess  = syscall.Errno(10013) // WSAEACCES
+	wsaeAddrUse = syscall.Errno(10048) // WSAEADDRINUSE
+)
+
+// isAddrInUse reports whether a listen error means the address is taken.
+func isAddrInUse(err error) bool {
+	return errors.Is(err, syscall.EADDRINUSE) || errors.Is(err, wsaeAddrUse)
+}
+
+// isBindDenied reports whether a listen error is a permission problem
+// (privileged port, or a Windows exclusive-address reservation).
+func isBindDenied(err error) bool {
+	return errors.Is(err, os.ErrPermission) || errors.Is(err, syscall.EACCES) || errors.Is(err, wsaeAccess)
 }
