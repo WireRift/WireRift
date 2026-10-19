@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Custom domains**: `wirerift http|serve -domain app.example.com` (or `domain:` in `wirerift start` files) also serves a tunnel on your own domain. Ownership is proven with a DNS TXT record (`_wirerift.<domain>` = `wirerift-verification=<HMAC code>`) that the error message spells out; the code is derived from a persisted server secret (`<cert-dir>/domain-secret`). One tunnel per domain; certificates (ACME) are only requested for domains a verified, live tunnel is serving. `wirerift-server -dns-server` picks the resolver used for the check.
 - ACME-enabled servers now hand out `https://` tunnel URLs.
 
+### Removed
+- The dashboard's `/api/domains*` endpoints and the `internal/config` package behind them. They were never connected to tunnels (custom domains now work through `-domain`), registered domains from an `account_id` in the request body, and their "verify" step only became real recently. Unknown `/api/...` paths now return 404 JSON instead of the web UI page.
+
 ### Fixed
 - A TCP-tunnel request that asks for a custom domain is rejected instead of silently ignored
 - Integration tests use distinct TCP port ranges so packages can run in parallel without colliding

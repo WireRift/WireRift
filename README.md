@@ -608,10 +608,6 @@ All endpoints require `Authorization: Bearer TOKEN` header.
 | `/api/sessions` | GET | List connected sessions |
 | `/api/requests` | GET | List captured requests |
 | `/api/requests/{id}/replay` | POST | Replay a captured request |
-| `/api/domains` | GET/POST | List/add custom domains |
-| `/api/domains/{domain}` | GET/DELETE | Get/remove domain |
-| `/api/domains/{domain}/dns` | GET | DNS records for verification |
-| `/api/domains/{domain}/verify` | POST | Verify ownership: succeeds only if TXT `_wirerift.{domain}` contains `wirerift-verification=<code>` (see `/dns`); 422 otherwise |
 
 ### Response Headers
 
@@ -740,7 +736,6 @@ go run ./test/benchmark/         # Benchmark suite
 |---------|----------|
 | internal/auth | 100% |
 | internal/client | 100% |
-| internal/config | 100% |
 | internal/mux | 100% |
 | internal/proto | 100% |
 | internal/ratelimit | 100% |

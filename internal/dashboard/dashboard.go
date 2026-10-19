@@ -1,12 +1,10 @@
 package dashboard
 
 import (
-	"context"
 	"crypto/rand"
 	"embed"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io/fs"
 	"net"
@@ -17,7 +15,6 @@ import (
 	"time"
 
 	"github.com/wirerift/wirerift/internal/auth"
-	"github.com/wirerift/wirerift/internal/config"
 	"github.com/wirerift/wirerift/internal/server"
 )
 
@@ -28,7 +25,6 @@ var staticFS embed.FS
 type Dashboard struct {
 	server       *server.Server
 	authManager  *auth.Manager
-	domainMgr    *config.DomainManager
 	port         int
 	httpsEnabled bool
 	guard        authGuard
@@ -38,7 +34,6 @@ type Dashboard struct {
 type Config struct {
 	Server       *server.Server
 	AuthManager  *auth.Manager
-	DomainMgr    *config.DomainManager
 	Port         int
 	HTTPSEnabled bool
 }
@@ -51,7 +46,6 @@ func New(cfg Config) *Dashboard {
 	return &Dashboard{
 		server:       cfg.Server,
 		authManager:  cfg.AuthManager,
-		domainMgr:    cfg.DomainMgr,
 		port:         cfg.Port,
 		httpsEnabled: cfg.HTTPSEnabled,
 	}
@@ -65,10 +59,12 @@ func (d *Dashboard) Handler() http.Handler {
 	mux.HandleFunc("/api/tunnels", d.authMiddleware(d.handleTunnels))
 	mux.HandleFunc("/api/sessions", d.authMiddleware(d.handleSessions))
 	mux.HandleFunc("/api/stats", d.authMiddleware(d.handleStats))
-	mux.HandleFunc("/api/domains", d.authMiddleware(d.handleDomains))
-	mux.HandleFunc("/api/domains/", d.authMiddleware(d.handleDomainActions))
 	mux.HandleFunc("/api/requests", d.authMiddleware(d.handleRequests))
 	mux.HandleFunc("/api/requests/", d.authMiddleware(d.handleRequestActions))
+	// Unknown API paths are errors, not the web UI page the "/" catch-all would serve.
+	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+		d.jsonError(w, "Not found", http.StatusNotFound)
+	})
 
 	// Static files - fs.Sub on embedded FS always succeeds
 	staticContent, _ := fs.Sub(staticFS, "static")
@@ -260,111 +256,6 @@ func (d *Dashboard) handleStats(w http.ResponseWriter, r *http.Request) {
 	stats["dashboard_port"] = d.port
 	stats["https_enabled"] = d.httpsEnabled
 	d.jsonResponse(w, stats)
-}
-
-// handleDomains handles GET/POST /api/domains
-func (d *Dashboard) handleDomains(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		// List domains - for now return empty list if no domain manager
-		if d.domainMgr == nil {
-			d.jsonResponse(w, []interface{}{})
-			return
-		}
-		domains := d.domainMgr.ListAll()
-		d.jsonResponse(w, domains)
-
-	case http.MethodPost:
-		// Limit request body to 1 MB to prevent abuse
-		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-		var req struct {
-			Domain    string `json:"domain"`
-			AccountID string `json:"account_id"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			d.jsonError(w, "Invalid request", http.StatusBadRequest)
-			return
-		}
-
-		if d.domainMgr == nil {
-			d.jsonError(w, "Domain management not available", http.StatusServiceUnavailable)
-			return
-		}
-
-		domain, err := d.domainMgr.AddDomain(req.Domain, req.AccountID)
-		if err != nil {
-			d.jsonError(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		d.jsonResponse(w, domain)
-
-	default:
-		d.jsonError(w, "Method not allowed", http.StatusMethodNotAllowed)
-	}
-}
-
-// handleDomainActions handles domain-specific actions
-func (d *Dashboard) handleDomainActions(w http.ResponseWriter, r *http.Request) {
-	// Extract domain from path (strings.Split always returns at least 1 element)
-	path := strings.TrimPrefix(r.URL.Path, "/api/domains/")
-	parts := strings.Split(path, "/")
-	domain := parts[0]
-
-	if d.domainMgr == nil {
-		d.jsonError(w, "Domain management not available", http.StatusServiceUnavailable)
-		return
-	}
-
-	switch r.Method {
-	case http.MethodGet:
-		// Get domain details
-		customDomain, err := d.domainMgr.GetDomain(domain)
-		if err != nil {
-			d.jsonError(w, err.Error(), http.StatusNotFound)
-			return
-		}
-		d.jsonResponse(w, customDomain)
-
-	case http.MethodDelete:
-		// Remove domain (RemoveDomain always returns nil)
-		_ = d.domainMgr.RemoveDomain(domain)
-		w.WriteHeader(http.StatusNoContent)
-
-	default:
-		// Check for action in path
-		if len(parts) > 1 {
-			action := parts[1]
-			switch action {
-			case "dns":
-				// Get DNS records
-				// GetDNSRecords always returns nil error
-				records, _ := d.domainMgr.GetDNSRecords(domain)
-				d.jsonResponse(w, records)
-
-			case "verify":
-				// Verify domain
-				ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-				err := d.domainMgr.CheckDNS(ctx, domain)
-				cancel()
-				if errors.Is(err, config.ErrDomainNotFound) {
-					d.jsonError(w, err.Error(), http.StatusNotFound)
-					return
-				}
-				if err != nil {
-					d.jsonError(w, "DNS verification failed: TXT record _wirerift."+domain+" not found or does not match (see /dns)", http.StatusUnprocessableEntity)
-					return
-				}
-				d.jsonResponse(w, map[string]string{"status": "verified"})
-
-			default:
-				d.jsonError(w, "Unknown action", http.StatusBadRequest)
-			}
-			return
-		}
-
-		d.jsonError(w, "Method not allowed", http.StatusMethodNotAllowed)
-	}
 }
 
 // handleRequests handles GET /api/requests

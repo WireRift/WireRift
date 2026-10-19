@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/wirerift/wirerift/internal/auth"
-	"github.com/wirerift/wirerift/internal/config"
 	"github.com/wirerift/wirerift/internal/dashboard"
 	"github.com/wirerift/wirerift/internal/server"
 	tlspkg "github.com/wirerift/wirerift/internal/tls"
@@ -215,9 +214,6 @@ Environment Variables:
 	fmt.Fprintf(os.Stderr, "  wirerift http 8080 -server %s -token %s\n", serverAddr, shownToken)
 	fmt.Fprintln(os.Stderr, "╚══════════════════════════════════════════════╝")
 
-	// Create domain manager
-	domainMgr := config.NewDomainManager(*domain)
-
 	// Create TLS manager
 	var tlsMgr *tlspkg.Manager
 	var tlsErr error
@@ -277,7 +273,6 @@ Environment Variables:
 	dash := dashboard.New(dashboard.Config{
 		Server:       srv,
 		AuthManager:  authMgr,
-		DomainMgr:    domainMgr,
 		Port:         *dashboardAddr,
 		HTTPSEnabled: tlsMgr != nil,
 	})

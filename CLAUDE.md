@@ -61,6 +61,8 @@ Carries multiple streams over a single TCP connection. Flow control via window-b
 - `tcp_proxy.go` — Raw TCP bidirectional copy between stream and client
 - `pin.go` — PIN protection with HMAC cookies
 - `inspect.go` — Traffic capture for the inspector/replay feature
+- `customdomain.go` — Custom domains: stateless DNS TXT ownership proof (HMAC), validation, alias registry keys (`domain:<name>`)
+- `errorpage.go` — HTML error pages for browsers, plain text for API clients
 
 ### Client (`internal/client/`)
 
@@ -69,7 +71,6 @@ Connects to server, performs magic+auth handshake, creates tunnels. Auto-reconne
 ### Supporting Packages
 
 - `internal/auth/` — Token validation with constant-time comparison
-- `internal/config/` — Custom domain management with DNS verification, YAML/JSON config parsing
 - `internal/dashboard/` — Embedded web UI (`embed.FS` for static files), REST API, CSP nonce-based security
 - `internal/tls/` — ACME (Let's Encrypt) certificate management, self-signed cert generation, and the persistent name-constrained local dev CA (`localca.go`) with trust-store install/removal (`trust.go`) used by `wirerift-server -dev` / `ca` subcommands
 - `internal/ratelimit/` — Token bucket (per-IP) and sliding window (per-session) rate limiters

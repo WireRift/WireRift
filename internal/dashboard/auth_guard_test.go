@@ -3,6 +3,7 @@ package dashboard
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/wirerift/wirerift/internal/auth"
@@ -48,5 +49,30 @@ func TestAuthMissingCredentialsDoNotCountAsFailures(t *testing.T) {
 		if w.Code != http.StatusUnauthorized {
 			t.Fatalf("code = %d, want 401 (never 429 without credentials)", w.Code)
 		}
+	}
+}
+
+// Unknown API paths (including endpoints that were removed, like /api/domains)
+// answer 404 JSON instead of the web UI page.
+func TestUnknownAPIPathsReturn404JSON(t *testing.T) {
+	d := New(Config{AuthManager: auth.NewManager()})
+	h := d.Handler()
+	for _, path := range []string{"/api/domains", "/api/domains/x.example.com/verify", "/api/nonexistent"} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+		if w.Code != http.StatusNotFound || !strings.HasPrefix(w.Header().Get("Content-Type"), "application/json") {
+			t.Errorf("%s: %d %q, want 404 JSON", path, w.Code, w.Header().Get("Content-Type"))
+		}
+	}
+	// The UI itself and the real API are unaffected.
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "<html") {
+		t.Errorf("/ : %d", w.Code)
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/api/tunnels", nil))
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("/api/tunnels without credentials: %d, want 401", w.Code)
 	}
 }
