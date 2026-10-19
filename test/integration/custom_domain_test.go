@@ -295,7 +295,7 @@ func TestCustomDomainCertificatesOnlyForLiveVerifiedDomains(t *testing.T) {
 	cfg.TXTResolver = dns.lookup
 	cfg.TLSConfig = mgr.TLSConfig()
 	srv := server.New(cfg, nil)
-	mgr.SetHostAllower(srv.IsCustomDomainActive) // what cmd/wirerift-server does
+	mgr.SetHostAllower(srv.IsHostServed) // what cmd/wirerift-server does
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -316,8 +316,13 @@ func TestCustomDomainCertificatesOnlyForLiveVerifiedDomains(t *testing.T) {
 			t.Errorf("a certificate was issued for %q without a verified tunnel", sni)
 		}
 	}
-	if err := handshake("x.tunnel.test"); err != nil {
+	// The base domain itself is always served; a subdomain only once a tunnel
+	// registered it (nobody can force issuance for arbitrary subdomains).
+	if err := handshake("tunnel.test"); err != nil {
 		t.Errorf("base-domain handshake: %v", err)
+	}
+	if err := handshake("random123.tunnel.test"); err == nil {
+		t.Error("a certificate was issued for a subdomain without a tunnel")
 	}
 
 	// Bind it (after a verified DNS proof): now the handshake succeeds.
@@ -340,6 +345,13 @@ func TestCustomDomainCertificatesOnlyForLiveVerifiedDomains(t *testing.T) {
 	}
 	if err := handshake("app.customer.org"); err != nil {
 		t.Errorf("verified, live custom domain gets no certificate: %v", err)
+	}
+	// A regular subdomain gets a certificate once its tunnel exists.
+	if _, err := c.HTTP("localhost:1", client.WithSubdomain("live")); err != nil {
+		t.Fatal(err)
+	}
+	if err := handshake("live.tunnel.test"); err != nil {
+		t.Errorf("subdomain with a live tunnel gets no certificate: %v", err)
 	}
 	if err := handshake("other.customer.org"); err == nil {
 		t.Error("another name under the same parent domain got a certificate")

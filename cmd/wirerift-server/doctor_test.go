@@ -381,3 +381,26 @@ func TestBindErrorClassification(t *testing.T) {
 		}
 	}
 }
+
+// The command line used to start the server can be pasted after "doctor".
+func TestDoctorAcceptsServerFlagsAndDevDefaults(t *testing.T) {
+	t.Setenv("WIRERIFT_DOMAIN", "")
+	var out bytes.Buffer
+	args := []string{"-dev", "-token", "secret", "-dns-server", "1.1.1.1", "-v", "-json", "-auto-cert", "-acme-staging",
+		"-dashboard-tls-cert", "c.pem", "-dashboard-tls-key", "k.pem", "-control-tls-cert", "c.pem", "-control-tls-key", "k.pem",
+		"-dashboard-port", "0", "-tcp-ports", "47700-47710",
+		"-cert-dir", filepath.Join(t.TempDir(), "c"), "-ca-dir", filepath.Join(t.TempDir(), "ca")}
+	_ = runServerDoctor(args, &out)
+	got := out.String()
+	if strings.Contains(got, "flag provided but not defined") {
+		t.Fatalf("a server flag was rejected:\n%s", got)
+	}
+	for _, want := range []string{"domain localhost", "127.0.0.1:8080", "127.0.0.1:4443", "127.0.0.1:8443"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("-dev default %q missing:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, ":80 ") && !strings.Contains(got, "127.0.0.1:80") {
+		t.Errorf("-dev still checks the privileged ports:\n%s", got)
+	}
+}

@@ -264,6 +264,7 @@ Environment Variables:
 		srvConfig.TLSConfig = dev.Provider.TLSConfig()
 		srvConfig.PublicScheme = "https"
 		srvConfig.PublicPort = dev.Port
+		srvConfig.TCPBindHost = "127.0.0.1" // -dev must not expose anything to the network
 	} else if err := configureCustomDomains(&srvConfig, tlsMgr, *certDir, *dnsServer, *httpsAddr); err != nil {
 		return err
 	}
@@ -271,8 +272,9 @@ Environment Variables:
 	// Create server
 	srv := server.New(srvConfig, logger)
 	if tlsMgr != nil {
-		// Certificates outside the base domain only for verified, live custom domains.
-		tlsMgr.SetHostAllower(srv.IsCustomDomainActive)
+		// Certificates only for names a live tunnel serves (subdomains and
+		// verified custom domains), so random SNI cannot trigger issuance.
+		tlsMgr.SetHostAllower(srv.IsHostServed)
 	}
 
 	// Create dashboard

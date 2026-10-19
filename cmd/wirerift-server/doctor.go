@@ -59,6 +59,16 @@ func runServerDoctor(args []string, out io.Writer) error {
 	fs.StringVar(&o.CADir, "ca-dir", "", "")
 	fs.StringVar(&o.ACMEEmail, "acme-email", "", "")
 	dashCert := fs.String("dashboard-tls-cert", "", "")
+	dev := fs.Bool("dev", false, "")
+	// Accepted so the exact command line you start the server with can be
+	// pasted after "doctor"; they do not change what is checked here.
+	for _, name := range []string{"dns-server", "token", "dashboard-tls-key", "control-tls-cert", "control-tls-key"} {
+		fs.String(name, "", "")
+	}
+	fs.Bool("auto-cert", false, "")
+	fs.Bool("acme-staging", false, "")
+	fs.Bool("v", false, "")
+	fs.Bool("json", false, "")
 	if err := fs.Parse(normalizeArgs(args)); err != nil {
 		return fmt.Errorf("doctor: %v\n\nusage: wirerift-server doctor [-control A] [-http A] [-https A] [-dashboard-port N] [-domain D] [-tcp-ports A-B] [-cert-dir DIR] [-acme-email E]", err)
 	}
@@ -66,6 +76,18 @@ func runServerDoctor(args []string, out io.Writer) error {
 
 	// The same environment fallbacks the server applies.
 	given := visitedFlags(fs) // command-line flags win over the environment
+	if *dev {
+		// Same defaults -dev gives the server: local-only name, loopback and
+		// unprivileged ports.
+		if !given["domain"] && os.Getenv("WIRERIFT_DOMAIN") == "" {
+			o.Domain = devDomain
+		}
+		for flagName, target := range map[string]*string{"control": &o.Control, "http": &o.HTTP, "https": &o.HTTPS} {
+			if !given[flagName] {
+				*target = map[string]string{"control": devControlAddr, "http": devHTTPAddr, "https": devHTTPSAddr}[flagName]
+			}
+		}
+	}
 	if v := os.Getenv("WIRERIFT_DOMAIN"); v != "" && !given["domain"] {
 		o.Domain = v
 	}
@@ -311,6 +333,9 @@ func checkLocalCA(r *diag.Report, dir string) {
 		r.Add(diag.Fail, "Local dev CA", err.Error(), "delete "+dir+" and run `wirerift-server ca trust` again")
 	case time.Until(ca.Cert.NotAfter) < 30*24*time.Hour:
 		r.Add(diag.Warn, "Local dev CA", "expires in less than 30 days", "recreate it: wirerift-server ca untrust -purge, then ca trust")
+	case len(ca.Legacy()) > 0:
+		r.Add(diag.Warn, "Local dev CA", "created by an older version: "+strings.Join(ca.Legacy(), "; "),
+			"recreate it: wirerift-server ca untrust -purge, then ca trust")
 	case !tlspkg.IsTrustedBySystem(ca):
 		r.Add(diag.Warn, "Local dev CA", "exists but this system does not trust it", "run: wirerift-server ca trust (only needed for -dev)")
 	default:

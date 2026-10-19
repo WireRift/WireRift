@@ -364,3 +364,62 @@ func TestDevBannerLines(t *testing.T) {
 		}
 	}
 }
+
+// -ca-dir is user supplied: purging must delete the CA's own files only.
+func TestPurgeOnlyDeletesCAFiles(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "projects")
+	var out bytes.Buffer
+	if err := runCA([]string{"path", "-ca-dir", dir}, &out, nil); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("precious"), 0o600)
+	os.MkdirAll(filepath.Join(dir, "src"), 0o755)
+	os.WriteFile(filepath.Join(dir, ".create.lock"), nil, 0o600)
+
+	tr := &tlspkg.Trust{GOOS: "linux", EUID: 0,
+		Run:       func(bool, string, ...string) error { return nil },
+		Look:      func(n string) bool { return n == "update-ca-certificates" },
+		DirExists: func(string) bool { return false }}
+	if err := runCA([]string{"untrust", "-purge", "-ca-dir", dir}, &out, tr); err != nil {
+		t.Fatal(err)
+	}
+	for _, gone := range []string{"rootCA.pem", "rootCA-key.pem", ".create.lock"} {
+		if _, err := os.Stat(filepath.Join(dir, gone)); err == nil {
+			t.Errorf("%s was not deleted", gone)
+		}
+	}
+	for _, kept := range []string{"notes.txt", "src"} {
+		if _, err := os.Stat(filepath.Join(dir, kept)); err != nil {
+			t.Errorf("-purge deleted unrelated %s: it must only remove the CA's files", kept)
+		}
+	}
+
+	// A directory that held only the CA is removed afterwards.
+	only := filepath.Join(root, "only-ca")
+	if err := runCA([]string{"path", "-ca-dir", only}, &out, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := runCA([]string{"untrust", "-purge", "-ca-dir", only}, &out, tr); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(only); err == nil {
+		t.Error("an emptied CA directory was left behind")
+	}
+}
+
+func TestCAStatusWarnsAboutLegacyCA(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "ca")
+	ca, err := tlspkg.LoadOrCreateLocalCA(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := runCA([]string{"status", "-ca-dir", dir}, &out, nil); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "Warning:") {
+		t.Errorf("a current CA was flagged:\n%s", out.String())
+	}
+	_ = ca
+}

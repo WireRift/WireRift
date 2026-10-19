@@ -82,7 +82,6 @@ Commands:
   doctor                          Check connectivity, TLS and login to a server
   config                          Show/edit configuration
   version                         Show version information
-  version                         Show version (also --version)
   help                            Show this help
 
 Examples:

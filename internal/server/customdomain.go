@@ -149,3 +149,16 @@ func (s *Server) IsCustomDomainActive(host string) bool {
 	_, ok := s.getTunnelByCustomHost(host)
 	return ok
 }
+
+// IsHostServed reports whether host currently has a live tunnel behind it: a
+// subdomain of the base domain with a registered tunnel, or a bound custom
+// domain. The TLS layer uses it so certificates (and ACME orders) are only
+// created for names that are actually served.
+func (s *Server) IsHostServed(host string) bool {
+	host = normalizeHostHeader(host)
+	if sub := extractSubdomain(host, s.config.Domain); sub != "" {
+		_, ok := s.getTunnelBySubdomain(sub)
+		return ok
+	}
+	return s.IsCustomDomainActive(host)
+}

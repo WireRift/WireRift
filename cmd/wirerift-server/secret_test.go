@@ -40,7 +40,7 @@ func TestLoadOrCreateDomainSecret(t *testing.T) {
 func TestLoadDomainSecretRefusesCorruptFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, domainSecretFile)
-	for _, content := range []string{"not hex at all", "abcd", ""} {
+	for _, content := range []string{"not hex at all", "abcd"} {
 		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -170,5 +170,51 @@ func TestTokenBanner(t *testing.T) {
 	out.Reset()
 	if shown := printToken(&out, "-token flag", "operator-secret"); shown != "<your token>" || strings.Contains(out.String(), "operator-secret") {
 		t.Errorf("operator token leaked into the banner: %q / %q", shown, out.String())
+	}
+}
+
+// Racing first starts must agree on one secret, and no partial file may ever
+// be observable (a reader used to be able to see an empty file and refuse to start).
+func TestDomainSecretCreationIsAtomicAndRaceSafe(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		dir := filepath.Join(t.TempDir(), "certs")
+		const workers = 6
+		secrets := make([][]byte, workers)
+		errs := make([]error, workers)
+		done := make(chan struct{})
+		for w := 0; w < workers; w++ {
+			go func(w int) {
+				secrets[w], errs[w] = loadOrCreateDomainSecret(dir)
+				done <- struct{}{}
+			}(w)
+		}
+		for w := 0; w < workers; w++ {
+			<-done
+		}
+		for w := 0; w < workers; w++ {
+			if errs[w] != nil {
+				t.Fatalf("iteration %d worker %d: %v", i, w, errs[w])
+			}
+			if string(secrets[w]) != string(secrets[0]) {
+				t.Fatalf("iteration %d: processes disagree about the secret", i)
+			}
+		}
+		entries, _ := os.ReadDir(dir)
+		if len(entries) != 1 {
+			t.Fatalf("iteration %d: leftover files: %v", i, entries)
+		}
+	}
+}
+
+func TestEmptySecretFileLeftByACrashIsHealed(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, domainSecretFile)
+	os.WriteFile(path, nil, 0o600) // what an interrupted older version left behind
+	secret, err := loadOrCreateDomainSecret(dir)
+	if err != nil || len(secret) < 32 {
+		t.Fatalf("empty file not healed: %v", err)
+	}
+	if again, _ := loadOrCreateDomainSecret(dir); string(again) != string(secret) {
+		t.Error("the healed secret is not stable")
 	}
 }

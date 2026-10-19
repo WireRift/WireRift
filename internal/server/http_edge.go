@@ -16,14 +16,7 @@ import (
 )
 
 // hostHasTunnel reports whether host maps to a registered HTTP tunnel.
-func (s *Server) hostHasTunnel(host string) bool {
-	sub := extractSubdomain(host, s.config.Domain)
-	if sub == "" {
-		return s.IsCustomDomainActive(host)
-	}
-	_, ok := s.getTunnelBySubdomain(sub)
-	return ok
-}
+func (s *Server) hostHasTunnel(host string) bool { return s.IsHostServed(host) }
 
 // handleHTTPRequest handles incoming HTTP requests.
 func (s *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {

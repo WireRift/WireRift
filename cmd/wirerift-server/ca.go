@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	tlspkg "github.com/wirerift/wirerift/internal/tls"
 )
@@ -56,6 +57,10 @@ func runCA(args []string, out io.Writer, trust *tlspkg.Trust) error {
 		return caStatus(dir, out)
 
 	case "trust":
+		if os.Geteuid() == 0 && os.Getenv("SUDO_USER") != "" && *caDirFlag == "" {
+			fmt.Fprintf(out, "Note: running as root through sudo, so the CA is stored in root's config directory and\n"+
+				"your browsers' certificate databases are not touched. Run it without sudo (it asks for sudo itself).\n\n")
+		}
 		ca, err := tlspkg.LoadOrCreateLocalCA(dir)
 		if err != nil {
 			return err
@@ -81,10 +86,10 @@ func runCA(args []string, out io.Writer, trust *tlspkg.Trust) error {
 		printSteps(out, steps)
 		failed := len(steps) > 0 && steps[0].Err != nil
 		if *purge && !failed {
-			if err := os.RemoveAll(dir); err != nil {
-				return fmt.Errorf("delete %s: %v", dir, err)
+			if err := purgeCAFiles(dir); err != nil {
+				return fmt.Errorf("delete the CA files in %s: %v", dir, err)
 			}
-			fmt.Fprintf(out, "Deleted %s\n", dir)
+			fmt.Fprintf(out, "Deleted the CA files in %s\n", dir)
 		}
 		if failed {
 			return errors.New("could not remove the CA from the system trust store")
@@ -119,6 +124,9 @@ func caStatus(dir string, out io.Writer) error {
 	fmt.Fprintf(out, "Expires:     %s\n", ca.Cert.NotAfter.Format("2006-01-02"))
 	fmt.Fprintf(out, "SHA-256:     %s\n", ca.Fingerprint())
 	fmt.Fprintf(out, "Names:       %s (+ loopback IPs only)\n", permittedNames())
+	for _, w := range ca.Legacy() {
+		fmt.Fprintf(out, "Warning:     created by an older version, %s; recreate it with `ca untrust -purge` then `ca trust`\n", w)
+	}
 	if tlspkg.IsTrustedBySystem(ca) {
 		fmt.Fprintln(out, "System:      trusted")
 	} else {
@@ -141,4 +149,22 @@ func printSteps(out io.Writer, steps []tlspkg.TrustStep) {
 	if len(steps) == 0 {
 		fmt.Fprintln(out, "  (nothing to do)")
 	}
+}
+
+// purgeCAFiles deletes only the files the CA itself created (never the whole
+// directory: -ca-dir is user supplied and may hold anything), then removes the
+// directory if that left it empty.
+func purgeCAFiles(dir string) error {
+	for _, name := range []string{"rootCA.pem", "rootCA-key.pem", ".create.lock"} {
+		if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	if leftovers, _ := filepath.Glob(filepath.Join(dir, ".tmp-*")); len(leftovers) > 0 {
+		for _, p := range leftovers {
+			_ = os.Remove(p)
+		}
+	}
+	_ = os.Remove(dir) // only succeeds when empty
+	return nil
 }

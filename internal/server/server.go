@@ -42,6 +42,10 @@ type Config struct {
 	// HTTPSAddr is the address for HTTPS edge listener.
 	HTTPSAddr string
 
+	// TCPBindHost is the interface TCP tunnel ports listen on ("" = all
+	// interfaces). -dev sets it to loopback so nothing is reachable remotely.
+	TCPBindHost string
+
 	// PublicScheme ("http" or "https") and PublicPort shape the public URLs
 	// handed to clients. Defaults: "http" and the scheme's standard port,
 	// which is omitted from the URL.
@@ -729,7 +733,7 @@ func (s *Server) createTCPTunnel(m *mux.Mux, session *Session, req *proto.Tunnel
 	}
 
 	// Bind before announcing success so a listen failure is reported.
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	listener, err := net.Listen("tcp", s.tcpListenAddr(port))
 	if err != nil {
 		s.releasePort(port)
 		s.logger.Error("failed to start TCP tunnel listener", "port", port, "error", err)
@@ -874,8 +878,7 @@ func (s *Server) removeSession(sessionID string) {
 
 // startTCPTunnelListener starts a TCP listener for a tunnel.
 func (s *Server) startTCPTunnelListener(port int, tunnel *Tunnel, session *Session) {
-	addr := fmt.Sprintf(":%d", port)
-	listener, err := net.Listen("tcp", addr)
+	listener, err := net.Listen("tcp", s.tcpListenAddr(port))
 	if err != nil {
 		s.logger.Error("failed to start TCP tunnel listener", "port", port, "error", err)
 		return
@@ -1302,4 +1305,9 @@ func (s *Server) prepareCustomDomain(session *Session, requested string) (string
 		return "", err
 	}
 	return domain, nil
+}
+
+// tcpListenAddr is the listen address of a TCP tunnel's public port.
+func (s *Server) tcpListenAddr(port int) string {
+	return net.JoinHostPort(s.config.TCPBindHost, strconv.Itoa(port))
 }
