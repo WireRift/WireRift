@@ -1,17 +1,23 @@
 package tls
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"math/big"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -369,5 +375,184 @@ func TestCreateLocalCAFailsInReadOnlyLocation(t *testing.T) {
 func TestIssueLeafRequiresNames(t *testing.T) {
 	if _, err := newTestCA(t).IssueLeaf(nil); err == nil {
 		t.Error("IssueLeaf(nil) accepted")
+	}
+}
+
+// leafWith signs an arbitrary leaf with the CA key, bypassing IssueLeaf, to
+// prove the CA certificate itself (not our code) limits what is accepted.
+func leafWith(t *testing.T, ca *LocalCA, mutate func(*x509.Certificate)) *x509.Certificate {
+	t.Helper()
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(42), Subject: pkix.Name{CommonName: "x"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	mutate(tmpl)
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca.Cert, &key.PublicKey, ca.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _ := x509.ParseCertificate(der)
+	return c
+}
+
+func TestStolenCAKeyCannotMintOtherIdentities(t *testing.T) {
+	ca := newTestCA(t)
+	verify := func(c *x509.Certificate, usage x509.ExtKeyUsage) error {
+		_, err := c.Verify(x509.VerifyOptions{Roots: ca.Pool(), KeyUsages: []x509.ExtKeyUsage{usage}})
+		return err
+	}
+
+	// An e-mail identity at a real company is outside the permitted namespace.
+	mail := leafWith(t, ca, func(c *x509.Certificate) {
+		c.EmailAddresses = []string{"ceo@bank.com"}
+		c.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageEmailProtection}
+	})
+	if err := verify(mail, x509.ExtKeyUsageEmailProtection); err == nil {
+		t.Error("an S/MIME certificate for ceo@bank.com verified against the local CA")
+	}
+	// A URI identity likewise.
+	uri := leafWith(t, ca, func(c *x509.Certificate) {
+		u, _ := url.Parse("https://bank.example.com/")
+		c.URIs = []*url.URL{u}
+	})
+	if err := verify(uri, x509.ExtKeyUsageServerAuth); err == nil {
+		t.Error("a certificate with a bank URI SAN verified against the local CA")
+	}
+	// Client auth and code signing are not what this CA is for, even for a local name.
+	for name, usage := range map[string]x509.ExtKeyUsage{
+		"clientAuth": x509.ExtKeyUsageClientAuth, "codeSigning": x509.ExtKeyUsageCodeSigning, "emailProtection": x509.ExtKeyUsageEmailProtection,
+	} {
+		c := leafWith(t, ca, func(c *x509.Certificate) {
+			c.DNSNames = []string{"app.localhost"}
+			c.ExtKeyUsage = []x509.ExtKeyUsage{usage}
+		})
+		if err := verify(c, usage); err == nil {
+			t.Errorf("%s certificate verified against the local CA", name)
+		}
+	}
+	// The one intended use still works.
+	ok := leafWith(t, ca, func(c *x509.Certificate) { c.DNSNames = []string{"app.localhost"} })
+	if err := verify(ok, x509.ExtKeyUsageServerAuth); err != nil {
+		t.Errorf("server certificate for app.localhost: %v", err)
+	}
+	if w := ca.Legacy(); len(w) != 0 {
+		t.Errorf("a freshly created CA reports legacy weaknesses: %v", w)
+	}
+}
+
+// Writing a CA with the given template mutation into a fresh directory.
+func writeCAFrom(t *testing.T, mutate func(*x509.Certificate)) string {
+	t.Helper()
+	ca := newTestCA(t)
+	tmpl := *ca.Cert
+	tmpl.Raw, tmpl.RawTBSCertificate = nil, nil
+	mutate(&tmpl)
+	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &ca.Key.PublicKey, ca.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ca.CertPath(), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return ca.Dir
+}
+
+func TestLoadLocalCARefusesTamperedConstraints(t *testing.T) {
+	for name, mutate := range map[string]func(*x509.Certificate){
+		"permits com": func(c *x509.Certificate) { c.PermittedDNSDomains = []string{"com"} },
+		"permits extra": func(c *x509.Certificate) {
+			c.PermittedDNSDomains = append([]string{"example.org"}, c.PermittedDNSDomains...)
+		},
+		"any IP": func(c *x509.Certificate) {
+			_, n, _ := net.ParseCIDR("0.0.0.0/0")
+			c.PermittedIPRanges = []*net.IPNet{n}
+		},
+		"no IP constraint": func(c *x509.Certificate) { c.PermittedIPRanges = nil },
+		"not critical":     func(c *x509.Certificate) { c.PermittedDNSDomainsCritical = false },
+		"deeper path":      func(c *x509.Certificate) { c.MaxPathLen, c.MaxPathLenZero = 3, false },
+	} {
+		dir := writeCAFrom(t, mutate)
+		if _, err := LoadLocalCA(dir); err == nil {
+			t.Errorf("%s: a CA with weakened constraints was accepted (it would be trusted system-wide)", name)
+		}
+	}
+}
+
+// CAs created by v1.8/v1.9 lack the EKU and e-mail/URI constraints: they keep
+// working but are flagged so users can recreate them.
+func TestLegacyCAIsAcceptedButFlagged(t *testing.T) {
+	dir := writeCAFrom(t, func(c *x509.Certificate) {
+		c.ExtKeyUsage = nil
+		c.PermittedEmailAddresses = nil
+		c.PermittedURIDomains = nil
+	})
+	ca, err := LoadLocalCA(dir)
+	if err != nil {
+		t.Fatalf("legacy CA refused: %v", err)
+	}
+	if w := ca.Legacy(); len(w) != 2 {
+		t.Errorf("Legacy() = %v, want both weaknesses", w)
+	}
+}
+
+// Two processes creating the CA at the same time must end up with one valid,
+// matching key/certificate pair (they used to interleave into a broken pair).
+func TestConcurrentCreationYieldsOneConsistentCA(t *testing.T) {
+	for i := 0; i < 150; i++ {
+		dir := filepath.Join(t.TempDir(), "ca")
+		const workers = 4
+		certs := make([]*LocalCA, workers)
+		errs := make([]error, workers)
+		var wg sync.WaitGroup
+		for w := 0; w < workers; w++ {
+			wg.Add(1)
+			go func(w int) {
+				defer wg.Done()
+				certs[w], errs[w] = LoadOrCreateLocalCA(dir)
+			}(w)
+		}
+		wg.Wait()
+		for w := 0; w < workers; w++ {
+			if errs[w] != nil {
+				t.Fatalf("iteration %d worker %d: %v", i, w, errs[w])
+			}
+			if !certs[w].Cert.Equal(certs[0].Cert) {
+				t.Fatalf("iteration %d: workers ended up with different CAs", i)
+			}
+		}
+		if _, err := LoadLocalCA(dir); err != nil {
+			t.Fatalf("iteration %d: the CA on disk is broken: %v", i, err)
+		}
+		if fileExists(filepath.Join(dir, createLockFile)) {
+			t.Fatalf("iteration %d: the lock file was left behind", i)
+		}
+	}
+}
+
+func TestStaleCreateLockIsBroken(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "ca")
+	os.MkdirAll(dir, 0o700)
+	lock := filepath.Join(dir, createLockFile)
+	os.WriteFile(lock, nil, 0o600)
+	old := time.Now().Add(-2 * createLockStale)
+	os.Chtimes(lock, old, old)
+	if _, err := LoadOrCreateLocalCA(dir); err != nil {
+		t.Fatalf("a lock left by a crashed process blocked creation: %v", err)
+	}
+}
+
+func TestLeafProviderDoesNotChurnWhenCapturedByCAExpiry(t *testing.T) {
+	ca := newTestCA(t)
+	ca.Cert.NotAfter = time.Now().Add(10 * 24 * time.Hour).Truncate(time.Second) // CA about to expire: every leaf is capped to it (certificates have second precision)
+	p, err := ca.NewLeafProvider("localhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, _ := p.GetCertificate(&tlsClientHello{ServerName: "a.localhost"})
+	b, _ := p.GetCertificate(&tlsClientHello{ServerName: "a.localhost"})
+	if a != b {
+		t.Error("a leaf capped at the CA expiry is re-issued on every handshake")
 	}
 }

@@ -92,6 +92,16 @@ func (ca *LocalCA) Pool() *x509.CertPool {
 // existing but unreadable/invalid CA is an error: a CA that users already
 // trust must never be silently replaced.
 func LoadOrCreateLocalCA(dir string) (*LocalCA, error) {
+	if ca, err := loadExistingOrExplain(dir); ca != nil || !errors.Is(err, os.ErrNotExist) {
+		return ca, err
+	}
+	return createLocalCALocked(dir)
+}
+
+// loadExistingOrExplain returns the CA when it loads. A missing CA yields an
+// error wrapping os.ErrNotExist ("first use"); every other problem is a hard
+// error that must never lead to the CA being recreated.
+func loadExistingOrExplain(dir string) (*LocalCA, error) {
 	ca, err := LoadLocalCA(dir)
 	if err == nil {
 		return ca, nil
@@ -106,6 +116,52 @@ func LoadOrCreateLocalCA(dir string) (*LocalCA, error) {
 		// Not wrapping ErrNotExist: callers must not read this state as
 		// "nothing there yet, go ahead and create".
 		return nil, fmt.Errorf("local CA is incomplete: %v; restore the missing file in %s, or delete both files to create and trust a new CA", err, dir)
+	}
+	return nil, err
+}
+
+const (
+	createLockFile  = ".create.lock"
+	createLockStale = 30 * time.Second
+	createLockWait  = 10 * time.Second
+)
+
+// createLocalCALocked creates the CA while holding an exclusive lock file, so
+// two processes starting at once (`ca trust` and `-dev`, say) cannot interleave
+// their key and certificate writes into a mismatched pair.
+func createLocalCALocked(dir string) (*LocalCA, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("create local CA dir: %w", err)
+	}
+	lock := filepath.Join(dir, createLockFile)
+	deadline := time.Now().Add(createLockWait)
+	for {
+		f, err := os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			f.Close()
+			defer os.Remove(lock)
+			break
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return nil, fmt.Errorf("lock local CA dir: %w", err)
+		}
+		// Someone else is creating it: use their result once it is complete.
+		if ca, lerr := LoadLocalCA(dir); lerr == nil {
+			return ca, nil
+		}
+		if st, serr := os.Stat(lock); serr == nil && time.Since(st.ModTime()) > createLockStale {
+			_ = os.Remove(lock) // left behind by a crashed process
+			continue
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("timed out waiting for another process to create the local CA in %s", dir)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	// Re-check under the lock: another process may have finished meanwhile.
+	if ca, err := loadExistingOrExplain(dir); ca != nil || !errors.Is(err, os.ErrNotExist) {
+		return ca, err
 	}
 	return createLocalCA(dir)
 }
@@ -147,9 +203,8 @@ func LoadLocalCA(dir string) (*LocalCA, error) {
 	if pub, ok := cert.PublicKey.(*ecdsa.PublicKey); !ok || !pub.Equal(&key.PublicKey) {
 		return nil, errors.New("local CA key does not match its certificate")
 	}
-	if !cert.IsCA || len(cert.PermittedDNSDomains) == 0 {
-		// Refuse an unconstrained CA: it would be a system-wide MITM key.
-		return nil, errors.New("local CA certificate lacks name constraints; delete it and let WireRift create a new one")
+	if err := validateCAConstraints(cert); err != nil {
+		return nil, err
 	}
 	if time.Now().After(cert.NotAfter) {
 		return nil, errors.New("local CA certificate has expired; delete it, create a new one and trust it again")
@@ -187,9 +242,16 @@ func createLocalCA(dir string) (*LocalCA, error) {
 		MaxPathLen:            0,
 		MaxPathLenZero:        true,
 
+		// Only TLS server certificates, and nothing for e-mail or URIs outside
+		// the local namespace: a leaked key cannot mint S/MIME, client-auth or
+		// code-signing identities for real people or sites either.
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+
 		PermittedDNSDomainsCritical: true,
 		PermittedDNSDomains:         localCAPermittedDomains,
 		PermittedIPRanges:           ipRanges,
+		PermittedEmailAddresses:     localCAPermittedDomains,
+		PermittedURIDomains:         localCAPermittedDomains,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
 	if err != nil {
@@ -383,8 +445,12 @@ func validHostName(s string) bool {
 func (p *LeafProvider) certFor(host string) (*tls.Certificate, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if c, ok := p.certs[host]; ok && time.Until(c.Leaf.NotAfter) > localLeafRenewal {
-		return c, nil
+	if c, ok := p.certs[host]; ok {
+		// A leaf capped at the CA's own expiry cannot be renewed into anything
+		// longer, so only renew while a longer-lived one is possible.
+		if time.Until(c.Leaf.NotAfter) > localLeafRenewal || !c.Leaf.NotAfter.Before(p.ca.Cert.NotAfter) {
+			return c, nil
+		}
 	}
 	names := []string{host}
 	if host == p.base {
@@ -431,4 +497,56 @@ func LocalNamePermitted(name string) bool { return namePermitted(name) }
 func (ca *LocalCA) Fingerprint() string {
 	sum := sha256.Sum256(ca.Cert.Raw)
 	return strings.ToUpper(hex.EncodeToString(sum[:]))
+}
+
+// validateCAConstraints refuses a CA whose constraints are not the ones this
+// version issues (a swapped-in or tampered CA would be trusted system-wide
+// when installed).
+func validateCAConstraints(cert *x509.Certificate) error {
+	bad := func(what string) error {
+		return fmt.Errorf("local CA certificate %s; delete it and let WireRift create a new one", what)
+	}
+	if !cert.IsCA || !cert.BasicConstraintsValid || !cert.MaxPathLenZero {
+		return bad("is not a path-length-0 CA")
+	}
+	if !cert.PermittedDNSDomainsCritical || len(cert.PermittedDNSDomains) == 0 {
+		return bad("lacks critical DNS name constraints")
+	}
+	for _, d := range cert.PermittedDNSDomains {
+		if !containsString(localCAPermittedDomains, d) {
+			return bad(fmt.Sprintf("permits the DNS name %q, which this CA must never issue for", d))
+		}
+	}
+	if len(cert.PermittedIPRanges) == 0 {
+		return bad("lacks IP name constraints")
+	}
+	for _, n := range cert.PermittedIPRanges {
+		if !containsString(localCAPermittedIPs, n.String()) {
+			return bad(fmt.Sprintf("permits the IP range %s, which this CA must never issue for", n))
+		}
+	}
+	return nil
+}
+
+func containsString(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+// Legacy lists weaknesses of a CA created by an older version: it still works
+// (and is still name-constrained for DNS names and IPs) but could sign
+// certificates for other uses. Recreating the CA fixes it.
+func (ca *LocalCA) Legacy() []string {
+	var w []string
+	if len(ca.Cert.ExtKeyUsage) != 1 || ca.Cert.ExtKeyUsage[0] != x509.ExtKeyUsageServerAuth {
+		w = append(w, "not restricted to TLS server authentication")
+	}
+	if len(ca.Cert.PermittedEmailAddresses) == 0 || len(ca.Cert.PermittedURIDomains) == 0 {
+		w = append(w, "no e-mail/URI name constraints")
+	}
+	return w
 }

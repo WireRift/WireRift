@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -50,8 +51,16 @@ type Config struct {
 type Manager struct {
 	config Config
 
-	// Certificate cache
-	certs sync.Map // map[string]*tls.Certificate
+	// Certificate cache (bounded by maxCachedCerts)
+	certs     sync.Map // map[string]*tls.Certificate
+	certCount atomic.Int64
+
+	// retryAfter holds, per host, the earliest time ACME may be tried again
+	// after a failure. While it is in the future the host is served a
+	// short-lived self-signed fallback (AutoCert) or refused, instead of
+	// repeating a failing ACME order per handshake and instead of caching a
+	// fallback for a year.
+	retryAfter sync.Map // map[string]time.Time
 
 	// Per-host coalescing of concurrent issuances: parallel handshakes for
 	// the same uncached host (a browser opens ~6 connections at once) must
@@ -67,10 +76,43 @@ type Manager struct {
 	// ACME (Let's Encrypt)
 	acme *ACMEManager
 
-	// allowHost, when set, admits host names outside the base domain (custom
-	// domains) so certificates are only requested for names the server vouches for.
+	// allowHost, when set, decides which host names may get a certificate:
+	// every name except the base domain itself must pass it (custom domains
+	// and subdomains with a live tunnel), so nobody can trigger issuance for
+	// arbitrary names. Unset: any subdomain of the base domain is served.
 	allowMu   sync.RWMutex
 	allowHost func(host string) bool
+}
+
+const (
+	// maxCachedCerts bounds the in-memory certificate cache.
+	maxCachedCerts = 4096
+	// acmeRetryDelay is how long a failed ACME host waits before the next order.
+	acmeRetryDelay = 5 * time.Minute
+	// acmeOrderTimeout bounds one ACME order (shared by coalesced waiters).
+	acmeOrderTimeout = 2 * time.Minute
+)
+
+// storeCert caches a certificate, keeping the cache bounded.
+func (m *Manager) storeCert(host string, cert *tls.Certificate) {
+	if _, existed := m.certs.Swap(host, cert); !existed && m.certCount.Add(1) > maxCachedCerts {
+		// Over the limit: drop about half of the entries (arbitrary ones).
+		var n int
+		m.certs.Range(func(k, _ any) bool {
+			if k != host {
+				m.certs.Delete(k)
+				m.certCount.Add(-1)
+				n++
+			}
+			return n < maxCachedCerts/2
+		})
+	}
+}
+
+func (m *Manager) dropCert(host string) {
+	if _, loaded := m.certs.LoadAndDelete(host); loaded {
+		m.certCount.Add(-1)
+	}
 }
 
 // SetHostAllower sets the callback that decides whether a host outside the base
@@ -80,6 +122,12 @@ func (m *Manager) SetHostAllower(allow func(host string) bool) {
 	m.allowMu.Lock()
 	m.allowHost = allow
 	m.allowMu.Unlock()
+}
+
+func (m *Manager) allowerSet() bool {
+	m.allowMu.RLock()
+	defer m.allowMu.RUnlock()
+	return m.allowHost != nil
 }
 
 func (m *Manager) hostAllowed(host string) bool {
@@ -139,12 +187,14 @@ func (m *Manager) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, 
 		return nil, err
 	}
 
-	// Check cache first (dropping entries that are expired or about to be)
+	// Check cache first (dropping entries that are expired or about to be, and
+	// short-lived fallbacks whose retry time has come)
 	if cached, ok := m.certs.Load(host); ok {
-		if c := cached.(*tls.Certificate); certUsable(c) {
+		c := cached.(*tls.Certificate)
+		if certUsable(c) && !m.fallbackExpired(host) {
 			return c, nil
 		}
-		m.certs.Delete(host)
+		m.dropCert(host)
 	}
 
 	// Coalesce concurrent issuances for the same host: parallel handshakes
@@ -166,50 +216,76 @@ func (m *Manager) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, 
 	m.inflight[host] = call
 	m.issueMu.Unlock()
 
-	cert, err := m.issueCertificate(hello.Context(), host)
+	// Always release the waiters, even if issuing panics (they would block
+	// forever otherwise and the host could never be issued again).
+	call.err = errors.New("certificate issuance aborted")
+	defer func() {
+		close(call.done)
+		m.issueMu.Lock()
+		delete(m.inflight, host)
+		m.issueMu.Unlock()
+	}()
 
+	// The order is shared by every coalesced waiter, so it must not die with
+	// the first client's connection: detach from that client's cancellation.
+	parent := hello.Context()
+	if parent == nil {
+		parent = context.Background() // a hand-built ClientHelloInfo has no context
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), acmeOrderTimeout)
+	defer cancel()
+	cert, err := m.issueCertificate(ctx, host)
 	call.cert, call.err = cert, err
-	close(call.done)
-
-	m.issueMu.Lock()
-	delete(m.inflight, host)
-	m.issueMu.Unlock()
-
 	return cert, err
 }
 
-// issueCertificate runs the full issuance path for a host: disk cache,
-// then ACME, then the self-signed development fallback. The caller must
-// have registered itself as the leader for this host.
+// fallbackExpired reports (and clears) a finished retry window for a host that
+// is currently served a temporary fallback certificate.
+func (m *Manager) fallbackExpired(host string) bool {
+	if until, ok := m.retryAfter.Load(host); ok && time.Now().After(until.(time.Time)) {
+		m.retryAfter.Delete(host)
+		return true
+	}
+	return false
+}
+
+// issueCertificate obtains a certificate for host: disk, then ACME, then (with
+// AutoCert) a self-signed fallback.
 func (m *Manager) issueCertificate(ctx context.Context, host string) (*tls.Certificate, error) {
 	// Try to load from disk
 	cert, err := m.loadCertificate(host)
 	if err == nil && certUsable(cert) {
-		m.certs.Store(host, cert)
+		m.storeCert(host, cert)
 		return cert, nil
 	}
 
-	// Try ACME (Let's Encrypt) first
+	// Try ACME (Let's Encrypt) first, unless it failed recently.
 	if m.acme != nil {
-		bundle, err := m.acme.ObtainCertificate(ctx, []string{host})
-		if err == nil {
-			tlsCert, err := bundle.TLSCertificate()
+		if until, ok := m.retryAfter.Load(host); !ok || time.Now().After(until.(time.Time)) {
+			bundle, err := m.acme.ObtainCertificate(ctx, []string{host})
 			if err == nil {
-				m.certs.Store(host, tlsCert)
-				slog.Info("ACME certificate obtained", "host", host)
-				return tlsCert, nil
+				tlsCert, terr := bundle.TLSCertificate()
+				if terr == nil {
+					m.retryAfter.Delete(host)
+					m.storeCert(host, tlsCert)
+					slog.Info("ACME certificate obtained", "host", host)
+					return tlsCert, nil
+				}
+				err = terr
 			}
+			slog.Warn("ACME failed, falling back", "host", host, "error", err)
+			m.retryAfter.Store(host, time.Now().Add(acmeRetryDelay))
 		}
-		slog.Warn("ACME failed, falling back", "host", host, "error", err)
 	}
 
-	// Fallback: generate self-signed for development
+	// Fallback: generate self-signed for development. When ACME is enabled this
+	// is only a stop-gap until the retry time (not a year-long sticky cert).
 	if m.config.AutoCert {
 		cert, err = m.generateSelfSigned(host)
 		if err != nil {
 			return nil, fmt.Errorf("generate certificate: %w", err)
 		}
-		m.certs.Store(host, cert)
+		m.storeCert(host, cert)
 		return cert, nil
 	}
 
@@ -257,7 +333,14 @@ func (m *Manager) normalizeHost(name string) (string, error) {
 			}
 		}
 	}
-	if base := strings.ToLower(m.config.Domain); base != "" && host != base && !strings.HasSuffix(host, "."+base) {
+	base := strings.ToLower(m.config.Domain)
+	if base != "" && host == base {
+		return host, nil // the base domain itself is always served
+	}
+	underBase := base != "" && strings.HasSuffix(host, "."+base)
+	if !underBase || m.allowerSet() {
+		// Outside the base domain (custom domains) a vouching callback is
+		// required; under it, one is enforced whenever the server set it.
 		if !m.hostAllowed(host) {
 			return "", ErrDomainNotConfigured
 		}

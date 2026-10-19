@@ -1882,8 +1882,104 @@ func TestGetCertificateCustomDomainsRequireAllower(t *testing.T) {
 		}
 	}
 
-	// The base domain keeps working without consulting the allower.
-	if _, err := m.GetCertificate(hello("x.example.com")); err != nil {
+	// The base domain itself is always served; its subdomains only when the
+	// allower vouches for them (a live tunnel), so nobody can force issuance
+	// for random names.
+	if _, err := m.GetCertificate(hello("example.com")); err != nil {
 		t.Errorf("base domain: %v", err)
+	}
+	if _, err := m.GetCertificate(hello("random1.example.com")); err != ErrDomainNotConfigured {
+		t.Errorf("subdomain without a tunnel: err = %v, want ErrDomainNotConfigured", err)
+	}
+	active["live.example.com"] = true
+	if _, err := m.GetCertificate(hello("live.example.com")); err != nil {
+		t.Errorf("subdomain with a tunnel: %v", err)
+	}
+}
+
+// A failed ACME order must not be repeated for every handshake, and the
+// self-signed stop-gap must not stick for a year.
+func TestACMEFailureBacksOffAndFallbackIsTemporary(t *testing.T) {
+	dir := t.TempDir()
+	broken, _ := NewACMEManager("test@example.com", dir, true, nil) // never initialised: orders fail
+	m, err := NewManager(Config{Domain: "test.local", CertDir: dir, AutoCert: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.acme = broken
+	hello := &tls.ClientHelloInfo{ServerName: "a.test.local"}
+
+	first, err := m.GetCertificate(hello)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.retryAfter.Load("a.test.local"); !ok {
+		t.Fatal("no retry time recorded after the ACME failure")
+	}
+	if again, _ := m.GetCertificate(hello); again != first {
+		t.Error("inside the back-off window the fallback must be served from cache")
+	}
+
+	// Window over: ACME is tried again (and the stop-gap replaced).
+	m.retryAfter.Store("a.test.local", time.Now().Add(-time.Second))
+	retried, err := m.GetCertificate(hello)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retried == first {
+		t.Error("the self-signed stop-gap was kept after the retry window")
+	}
+	if until, ok := m.retryAfter.Load("a.test.local"); !ok || !until.(time.Time).After(time.Now()) {
+		t.Error("a failed retry must start a new back-off window")
+	}
+}
+
+func TestACMEFailureWithoutAutoCertIsRefusedFast(t *testing.T) {
+	dir := t.TempDir()
+	broken, _ := NewACMEManager("test@example.com", dir, true, nil)
+	m, _ := NewManager(Config{Domain: "test.local", CertDir: dir, AutoCert: false})
+	m.acme = broken
+	hello := &tls.ClientHelloInfo{ServerName: "b.test.local"}
+	if _, err := m.GetCertificate(hello); err != ErrCertificateNotFound {
+		t.Fatalf("err = %v, want ErrCertificateNotFound", err)
+	}
+	if _, ok := m.retryAfter.Load("b.test.local"); !ok {
+		t.Error("failure not remembered")
+	}
+}
+
+func TestCertificateCacheIsBounded(t *testing.T) {
+	m, _ := NewManager(Config{Domain: "test.local", CertDir: t.TempDir(), AutoCert: true})
+	cert := &tls.Certificate{}
+	for i := 0; i < maxCachedCerts+50; i++ {
+		m.storeCert(fmt.Sprintf("h%d.test.local", i), cert)
+	}
+	var n int64
+	m.certs.Range(func(_, _ any) bool { n++; return true })
+	if n > maxCachedCerts {
+		t.Errorf("cache holds %d entries, limit %d", n, maxCachedCerts)
+	}
+	if got := m.certCount.Load(); got != n {
+		t.Errorf("counter %d != entries %d", got, n)
+	}
+}
+
+// If issuing panics, the waiters of that host must be released and the host
+// must be issuable again (they used to block forever).
+func TestGetCertificateReleasesWaitersWhenIssuingPanics(t *testing.T) {
+	m, _ := NewManager(Config{Domain: "test.local", CertDir: t.TempDir(), AutoCert: true})
+	m.acme = &ACMEManager{} // zero value: ObtainCertificate dereferences nil state and panics
+	hello := &tls.ClientHelloInfo{ServerName: "p.test.local"}
+
+	func() {
+		defer func() { _ = recover() }()
+		_, _ = m.GetCertificate(hello)
+	}()
+
+	m.issueMu.Lock()
+	_, stuck := m.inflight["p.test.local"]
+	m.issueMu.Unlock()
+	if stuck {
+		t.Fatal("the in-flight entry survived the panic: later handshakes would wait forever")
 	}
 }
