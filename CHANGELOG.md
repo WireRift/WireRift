@@ -5,10 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.10.0] - 2026-10-19
 
 ### Added
 - **`wirerift-server doctor`**: checks, without starting anything, that this machine can run the server as configured: free ports (with setcap/`-dev` hints for ports below 1024), TCP tunnel range, certificate directory and domain-secret permissions, expiring certificates, wildcard DNS and the local dev CA. Shares its output format with `wirerift doctor` (new `internal/diag`).
+
+### Fixed
+- A local dev CA directory holding only `rootCA.pem` (or only the key) is no longer silently replaced with a brand-new CA, which would have broken every certificate users had already trusted; it is reported as an incomplete CA instead
+- The inspector keeps query strings, so replay and cURL export reproduce the original request
 
 ## [1.9.0] - 2026-10-19
 
