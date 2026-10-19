@@ -1,0 +1,15 @@
+version: 2
+updates:
+  # Website (Vite + React) — weekly version-update PRs for npm dependencies,
+  # so vulnerable or outdated packages raise PRs instead of accumulating
+  # alert backlogs (see: 37-alert react-router backlog, resolved 2026-10-19).
+  - package-ecosystem: npm
+    directory: /website
+    schedule:
+      interval: weekly
+
+  # GitHub Actions used by this repository's workflows.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
