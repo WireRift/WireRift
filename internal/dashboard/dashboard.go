@@ -1401,7 +1401,11 @@ function exportCurl(index){
         var body = typeof r.req_body === 'string' ? r.req_body : JSON.stringify(r.req_body);
         cmd += ' -d ' + shSingle(body);
     }
-    cmd += ' ' + shSingle(r.path || '/');
+    var replayUrl = r.path || '/';
+    if(r.query){
+        replayUrl += (replayUrl.indexOf('?') >= 0 ? '&' : '?') + r.query;
+    }
+    cmd += ' ' + shSingle(replayUrl);
     copyToClipboard(cmd);
     toast('cURL command copied', 'ok');
 }

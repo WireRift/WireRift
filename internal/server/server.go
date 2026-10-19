@@ -230,6 +230,7 @@ type RequestLog struct {
 	TunnelID   string            `json:"tunnel_id"`
 	Method     string            `json:"method"`
 	Path       string            `json:"path"`
+	Query      string            `json:"query,omitempty"`
 	StatusCode int               `json:"status_code"`
 	Duration   time.Duration     `json:"duration_ms"`
 	ReqHeaders map[string]string `json:"req_headers"`

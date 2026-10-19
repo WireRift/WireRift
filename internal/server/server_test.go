@@ -4126,6 +4126,35 @@ func TestLogRequestMaxLogs(t *testing.T) {
 	}
 }
 
+// TestLogRequestCapturesQuery pins inspector capture fidelity: the query
+// string must be stored alongside the path, or ReplayRequest and the curl
+// export silently rebuild a different request (e.g. /echo instead of
+// /echo?msg=hello).
+func TestLogRequestCapturesQuery(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+
+	tunnel := &Tunnel{ID: "tun-query", Inspect: true}
+
+	req := httptest.NewRequest("GET", "/search?q=wirerift&page=2", nil)
+	rec := httptest.NewRecorder()
+	iw := &inspectResponseWriter{ResponseWriter: rec}
+	iw.WriteHeader(http.StatusOK)
+
+	s.logRequest(tunnel, req, iw, "10.0.0.1", time.Now())
+
+	logs := s.GetRequestLogs("", 10)
+	if len(logs) != 1 {
+		t.Fatalf("Expected 1 log, got %d", len(logs))
+	}
+	log := logs[0]
+	if log.Path != "/search" {
+		t.Errorf("Path = %q, want /search", log.Path)
+	}
+	if log.Query != "q=wirerift&page=2" {
+		t.Errorf("Query = %q, want q=wirerift&page=2", log.Query)
+	}
+}
+
 func TestGetRequestLogsWithTunnelFilter(t *testing.T) {
 	s := New(DefaultConfig(), nil)
 

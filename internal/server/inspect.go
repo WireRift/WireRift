@@ -80,6 +80,7 @@ func (s *Server) logRequest(tunnel *Tunnel, r *http.Request, w *inspectResponseW
 		TunnelID:   tunnel.ID,
 		Method:     r.Method,
 		Path:       r.URL.Path,
+		Query:      r.URL.RawQuery,
 		StatusCode: w.statusCode,
 		Duration:   time.Since(start),
 		ReqHeaders: reqHeaders,
@@ -146,8 +147,13 @@ func (s *Server) ReplayRequest(logID string) (*RequestLog, error) {
 		return nil, fmt.Errorf("session not found")
 	}
 
-	// Create a new HTTP request from the log
-	req, _ := http.NewRequestWithContext(context.Background(), original.Method, original.Path, nil)
+	// Create a new HTTP request from the log, restoring the query string so
+	// the replay reaches the local app exactly as the original did.
+	target := original.Path
+	if original.Query != "" {
+		target += "?" + original.Query
+	}
+	req, _ := http.NewRequestWithContext(context.Background(), original.Method, target, nil)
 	for k, v := range original.ReqHeaders {
 		req.Header.Set(k, v)
 	}

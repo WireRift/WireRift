@@ -55,14 +55,17 @@ func servedDashboardJS(t *testing.T) string {
 }
 
 // TestExportCurlQuotesEveryInterpolation pins the structural contract: every
-// interpolated argument goes through the shSingle shell-quoting helper.
+// interpolated argument goes through the shSingle shell-quoting helper. The
+// URL (path + optional query) is composed first and then quoted as one
+// argument, so a query value containing a single quote cannot break out.
 func TestExportCurlQuotesEveryInterpolation(t *testing.T) {
 	js := servedDashboardJS(t)
 	for _, want := range []string{
 		`'curl -X ' + shSingle(r.method || 'GET')`,
 		`' -H ' + shSingle(hKeys[i] + ': ' + r.req_headers[hKeys[i]])`,
 		`' -d ' + shSingle(body)`,
-		`' ' + shSingle(r.path || '/')`,
+		`' ' + shSingle(replayUrl)`,
+		`replayUrl.indexOf('?') >= 0 ? '&' : '?'`,
 	} {
 		if !strings.Contains(js, want) {
 			t.Errorf("exportCurl missing shell-quoted interpolation %q; header/path values with single quotes would break out of the exported command", want)
@@ -95,8 +98,8 @@ func TestExportCurlGeneratedCommandIsShellSafe(t *testing.T) {
 function copyToClipboard(cmd){ generated.push(cmd); }
 function toast(){}
 var requestsCache = [
-  { method: 'GET', path: '/ok', req_headers: { 'X-Benign': 'hello' } },
-  { method: 'GET', path: '/x', req_headers: { 'X-Exploit': "'; echo PWNED_MARKER > pwned.txt; echo '" } }
+  { method: 'GET', path: '/ok', query: 'q=1', req_headers: { 'X-Benign': 'hello' } },
+  { method: 'GET', path: '/x', query: "'; echo PWNED_QUERY > pwned-query.txt; echo '", req_headers: { 'X-Exploit': "'; echo PWNED_MARKER > pwned.txt; echo '" } }
 ];
 `
 	js := servedDashboardJS(t)
@@ -124,6 +127,9 @@ require('fs').writeFileSync('malicious.cmd', generated[1]);
 	if !strings.Contains(string(benign), "X-Benign: hello") || !strings.Contains(string(benign), "/ok") {
 		t.Errorf("benign export lost its arguments: %q", string(benign))
 	}
+	if !strings.Contains(string(benign), "q=1") {
+		t.Errorf("benign export lost its query string: %q", string(benign))
+	}
 
 	malicious, err := os.ReadFile(filepath.Join(dir, "malicious.cmd"))
 	if err != nil {
@@ -143,5 +149,8 @@ require('fs').writeFileSync('malicious.cmd', generated[1]);
 	}
 	if _, statErr := os.Stat(filepath.Join(dir, "pwned.txt")); statErr == nil {
 		t.Fatalf("exported cURL command executed injected shell code (pwned.txt created) — header values must be shell-quoted")
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "pwned-query.txt")); statErr == nil {
+		t.Fatalf("exported cURL command executed injected shell code via the query value (pwned-query.txt created) — query must be shell-quoted")
 	}
 }
