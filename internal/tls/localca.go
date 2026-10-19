@@ -99,7 +99,21 @@ func LoadOrCreateLocalCA(dir string) (*LocalCA, error) {
 	if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
+	// ErrNotExist only means "first use" when neither CA file exists. A lone
+	// certificate or key is a half-broken CA users may already trust;
+	// recreating it silently is exactly what this function must never do.
+	if fileExists(filepath.Join(dir, localCAFile)) || fileExists(filepath.Join(dir, localCAKeyFile)) {
+		// Not wrapping ErrNotExist: callers must not read this state as
+		// "nothing there yet, go ahead and create".
+		return nil, fmt.Errorf("local CA is incomplete: %v; restore the missing file in %s, or delete both files to create and trust a new CA", err, dir)
+	}
 	return createLocalCA(dir)
+}
+
+// fileExists reports whether path exists.
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // LoadLocalCA loads an existing CA from dir. It returns an error wrapping

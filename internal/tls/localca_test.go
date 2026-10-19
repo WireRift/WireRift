@@ -158,6 +158,60 @@ func TestLoadLocalCARefusesBadState(t *testing.T) {
 	}
 }
 
+// A half-broken CA (exactly one of the two files present) must never be
+// silently replaced: users may already trust the surviving certificate, so
+// LoadOrCreateLocalCA must return a hard error and leave that file untouched.
+// Only a directory with neither file is a genuine first use that may create.
+func TestLoadOrCreateRefusesHalfBrokenCA(t *testing.T) {
+	// Key missing, certificate present.
+	ca := newTestCA(t)
+	originalCert, err := os.ReadFile(ca.CertPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(ca.KeyPath()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadOrCreateLocalCA(ca.Dir); err == nil || errors.Is(err, os.ErrNotExist) {
+		t.Errorf("cert-present/key-missing err = %v, want a hard error (not ErrNotExist)", err)
+	}
+	afterCert, err := os.ReadFile(ca.CertPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(afterCert) != string(originalCert) {
+		t.Error("existing trusted CA certificate was silently replaced")
+	}
+
+	// Certificate missing, key present.
+	ca2 := newTestCA(t)
+	originalKey, err := os.ReadFile(ca2.KeyPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(ca2.CertPath()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadOrCreateLocalCA(ca2.Dir); err == nil || errors.Is(err, os.ErrNotExist) {
+		t.Errorf("key-present/cert-missing err = %v, want a hard error (not ErrNotExist)", err)
+	}
+	afterKey, err := os.ReadFile(ca2.KeyPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(afterKey) != string(originalKey) {
+		t.Error("existing CA key was silently replaced")
+	}
+
+	// Control: neither file present -> genuine first use still creates.
+	fresh, err := LoadOrCreateLocalCA(filepath.Join(t.TempDir(), "fresh"))
+	if err != nil {
+		t.Errorf("fresh-dir creation err = %v, want nil", err)
+	} else if _, err := os.Stat(fresh.CertPath()); err != nil {
+		t.Errorf("fresh cert missing: %v", err)
+	}
+}
+
 func TestLeafProviderIssuesExactNamesAndCaches(t *testing.T) {
 	ca := newTestCA(t)
 	p, err := ca.NewLeafProvider("localhost")
