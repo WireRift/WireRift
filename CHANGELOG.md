@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.10.1] - 2026-10-19
 
 ### Security
 - TLS certificates (and ACME orders) are issued only for the base domain or names a live tunnel serves; random SNI names can no longer burn Let's Encrypt quota or grow the cache. Failed ACME hosts back off for 5 minutes and the self-signed stop-gap is no longer cached for a year
