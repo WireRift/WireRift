@@ -13,37 +13,11 @@ import (
 	"time"
 
 	"github.com/wirerift/wirerift/internal/client"
+	"github.com/wirerift/wirerift/internal/diag"
 )
 
-// Check outcomes.
-const (
-	checkOK = iota
-	checkWarn
-	checkFail
-)
-
-// doctor prints one line per diagnostic step and counts problems.
-type doctor struct {
-	out      io.Writer
-	warnings int
-	failures int
-}
-
-func (d *doctor) report(status int, name, detail, hint string) {
-	mark := "✓"
-	switch status {
-	case checkWarn:
-		mark = "!"
-		d.warnings++
-	case checkFail:
-		mark = "✗"
-		d.failures++
-	}
-	fmt.Fprintf(d.out, "  %s  %-16s %s\n", mark, name, detail)
-	if hint != "" && status != checkOK {
-		fmt.Fprintf(d.out, "     %-16s → %s\n", "", hint)
-	}
-}
+// doctor runs the client-side checks and reports them through diag.Report.
+type doctor struct{ diag.Report }
 
 const doctorStepTimeout = 5 * time.Second
 
@@ -82,45 +56,33 @@ func doDoctor(parentCtx context.Context, args []string) error {
 // runDoctor runs the checks and returns the number of failures. A failing
 // step stops the run: later steps depend on it.
 func runDoctor(ctx context.Context, out io.Writer, server, token string) int {
-	d := &doctor{out: out}
+	d := &doctor{diag.Report{Out: out}}
 	hostPort, useTLS := client.SplitServerAddr(server)
 	host, _, err := net.SplitHostPort(hostPort)
 	if err != nil {
-		d.report(checkFail, "Server address", fmt.Sprintf("%q is not host:port", server),
+		d.Add(diag.Fail, "Server address", fmt.Sprintf("%q is not host:port", server),
 			"use -server host:port (or tls://host:port), or set WIRERIFT_SERVER")
-		return d.summary()
+		return d.Summary()
 	}
 	mode := "plain TCP"
 	if useTLS {
 		mode = "TLS"
 	}
-	d.report(checkOK, "Server address", fmt.Sprintf("%s (%s)", hostPort, mode), "")
+	d.Add(diag.OK, "Server address", fmt.Sprintf("%s (%s)", hostPort, mode), "")
 
 	if !d.checkDNS(ctx, host) || !d.checkTCP(ctx, hostPort) {
-		return d.summary()
+		return d.Summary()
 	}
 	if !d.checkTransport(ctx, hostPort, host, useTLS) {
-		return d.summary()
+		return d.Summary()
 	}
 	d.checkAuth(ctx, server, token)
-	return d.summary()
-}
-
-func (d *doctor) summary() int {
-	switch {
-	case d.failures > 0:
-		fmt.Fprintf(d.out, "\n%d problem(s) found.\n", d.failures)
-	case d.warnings > 0:
-		fmt.Fprintf(d.out, "\nNo failures, %d warning(s).\n", d.warnings)
-	default:
-		fmt.Fprintln(d.out, "\nAll checks passed.")
-	}
-	return d.failures
+	return d.Summary()
 }
 
 func (d *doctor) checkDNS(ctx context.Context, host string) bool {
 	if ip := net.ParseIP(host); ip != nil {
-		d.report(checkOK, "DNS", "IP address, no lookup needed", "")
+		d.Add(diag.OK, "DNS", "IP address, no lookup needed", "")
 		return true
 	}
 	ctx, cancel := context.WithTimeout(ctx, doctorStepTimeout)
@@ -128,10 +90,10 @@ func (d *doctor) checkDNS(ctx context.Context, host string) bool {
 	start := time.Now()
 	addrs, err := net.DefaultResolver.LookupHost(ctx, host)
 	if err != nil || len(addrs) == 0 {
-		d.report(checkFail, "DNS", fmt.Sprintf("cannot resolve %s", host), "check the host name and your network/DNS settings")
+		d.Add(diag.Fail, "DNS", fmt.Sprintf("cannot resolve %s", host), "check the host name and your network/DNS settings")
 		return false
 	}
-	d.report(checkOK, "DNS", fmt.Sprintf("%s → %s (%s)", host, addrs[0], ms(time.Since(start))), "")
+	d.Add(diag.OK, "DNS", fmt.Sprintf("%s → %s (%s)", host, addrs[0], ms(time.Since(start))), "")
 	return true
 }
 
@@ -141,12 +103,12 @@ func (d *doctor) checkTCP(ctx context.Context, hostPort string) bool {
 	start := time.Now()
 	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", hostPort)
 	if err != nil {
-		d.report(checkFail, "TCP connect", fmt.Sprintf("cannot connect to %s", hostPort),
+		d.Add(diag.Fail, "TCP connect", fmt.Sprintf("cannot connect to %s", hostPort),
 			"is wirerift-server running, and is the control port open in the firewall?")
 		return false
 	}
 	conn.Close()
-	d.report(checkOK, "TCP connect", fmt.Sprintf("%s (%s)", hostPort, ms(time.Since(start))), "")
+	d.Add(diag.OK, "TCP connect", fmt.Sprintf("%s (%s)", hostPort, ms(time.Since(start))), "")
 	return true
 }
 
@@ -155,9 +117,9 @@ func (d *doctor) checkTCP(ctx context.Context, hostPort string) bool {
 func (d *doctor) checkTransport(ctx context.Context, hostPort, host string, useTLS bool) bool {
 	if !useTLS {
 		if isLoopback(host) {
-			d.report(checkOK, "Encryption", "plain TCP on loopback", "")
+			d.Add(diag.OK, "Encryption", "plain TCP on loopback", "")
 		} else {
-			d.report(checkWarn, "Encryption", "the control plane is not encrypted: your token travels in cleartext",
+			d.Add(diag.Warn, "Encryption", "the control plane is not encrypted: your token travels in cleartext",
 				"ask the operator for TLS (-control-tls-cert) and use tls://"+hostPort)
 		}
 		return true
@@ -165,35 +127,35 @@ func (d *doctor) checkTransport(ctx context.Context, hostPort, host string, useT
 
 	cfg, err := client.ControlTLSConfig(nil)
 	if err != nil {
-		d.report(checkFail, "TLS", err.Error(), "check the WIRERIFT_TLS_CA file")
+		d.Add(diag.Fail, "TLS", err.Error(), "check the WIRERIFT_TLS_CA file")
 		return false
 	}
 	ctx, cancel := context.WithTimeout(ctx, doctorStepTimeout)
 	defer cancel()
 	conn, err := (&tls.Dialer{Config: cfg}).DialContext(ctx, "tcp", hostPort)
 	if err != nil {
-		d.report(checkFail, "TLS", "handshake failed: "+err.Error(),
+		d.Add(diag.Fail, "TLS", "handshake failed: "+err.Error(),
 			"for a private or self-signed CA set WIRERIFT_TLS_CA=/path/to/ca.pem; for a plain server drop the tls:// prefix")
 		return false
 	}
 	defer conn.Close()
 	state := conn.(*tls.Conn).ConnectionState()
 	detail := tlsVersionName(state.Version)
-	status, hint := checkOK, ""
+	status, hint := diag.OK, ""
 	if len(state.PeerCertificates) > 0 {
 		days := int(time.Until(state.PeerCertificates[0].NotAfter).Hours() / 24)
 		detail += fmt.Sprintf(", certificate valid, expires in %d days", days)
 		if days < 14 {
-			status, hint = checkWarn, "the server certificate expires soon; tell the operator to renew it"
+			status, hint = diag.Warn, "the server certificate expires soon; tell the operator to renew it"
 		}
 	}
-	d.report(status, "TLS", detail, hint)
+	d.Add(status, "TLS", detail, hint)
 	return true
 }
 
 func (d *doctor) checkAuth(ctx context.Context, server, token string) {
 	if token == "" {
-		d.report(checkWarn, "Authentication", "no token set, skipped", "pass -token or set WIRERIFT_TOKEN")
+		d.Add(diag.Warn, "Authentication", "no token set, skipped", "pass -token or set WIRERIFT_TOKEN")
 		return
 	}
 	cfg := client.DefaultConfig()
@@ -208,14 +170,14 @@ func (d *doctor) checkAuth(ctx context.Context, server, token string) {
 	select {
 	case err := <-errCh:
 		if err != nil {
-			d.report(checkFail, "Authentication", err.Error(), "check the token (it is case-sensitive) and that the account is active")
+			d.Add(diag.Fail, "Authentication", err.Error(), "check the token (it is case-sensitive) and that the account is active")
 			return
 		}
 		c.Close()
-		d.report(checkOK, "Authentication", fmt.Sprintf("logged in (%s)", ms(time.Since(start))), "")
+		d.Add(diag.OK, "Authentication", fmt.Sprintf("logged in (%s)", ms(time.Since(start))), "")
 	case <-time.After(doctorAuthTimeout):
 		c.Close()
-		d.report(checkFail, "Authentication", "no answer from the server", "the server accepted the connection but is not speaking the WireRift protocol, or is overloaded")
+		d.Add(diag.Fail, "Authentication", "no answer from the server", "the server accepted the connection but is not speaking the WireRift protocol, or is overloaded")
 	case <-ctx.Done():
 		c.Close()
 	}

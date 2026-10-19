@@ -19,6 +19,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/wirerift/wirerift/internal/diag"
 )
 
 func doctorOutput(t *testing.T, server, token string) (string, int) {
@@ -80,17 +82,17 @@ func TestDoctorWithoutToken(t *testing.T) {
 
 func TestDoctorWarnsAboutCleartextOnRemoteHosts(t *testing.T) {
 	var out bytes.Buffer
-	d := &doctor{out: &out}
+	d := &doctor{diag.Report{Out: &out}}
 	if !d.checkTransport(context.Background(), "203.0.113.7:4443", "203.0.113.7", false) {
 		t.Fatal("cleartext must warn, not stop")
 	}
-	if d.warnings != 1 || !strings.Contains(out.String(), "cleartext") || !strings.Contains(out.String(), "tls://203.0.113.7:4443") {
-		t.Errorf("warnings=%d\n%s", d.warnings, out.String())
+	if d.Warnings != 1 || !strings.Contains(out.String(), "cleartext") || !strings.Contains(out.String(), "tls://203.0.113.7:4443") {
+		t.Errorf("warnings=%d\n%s", d.Warnings, out.String())
 	}
 	out.Reset()
-	d = &doctor{out: &out}
+	d = &doctor{diag.Report{Out: &out}}
 	d.checkTransport(context.Background(), "127.0.0.1:4443", "127.0.0.1", false)
-	if d.warnings != 0 {
+	if d.Warnings != 0 {
 		t.Errorf("loopback should not warn:\n%s", out.String())
 	}
 }
