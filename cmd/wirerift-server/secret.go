@@ -22,15 +22,10 @@ func loadOrCreateDomainSecret(dir string) ([]byte, error) {
 	}
 	path := filepath.Join(dir, domainSecretFile)
 
-	if data, err := os.ReadFile(path); err == nil {
-		secret, err := hex.DecodeString(strings.TrimSpace(string(data)))
-		if err != nil || len(secret) < 32 {
-			// Never silently replace it: that would invalidate every published TXT record.
-			return nil, fmt.Errorf("%s is corrupt; fix or delete it (published DNS proofs will change)", path)
-		}
+	if secret, err := readDomainSecret(path); err == nil {
 		return secret, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("read %s: %w", path, err)
+		return nil, err
 	}
 
 	secret := server.NewDomainSecret()
@@ -45,6 +40,24 @@ func loadOrCreateDomainSecret(dir string) ([]byte, error) {
 	defer f.Close()
 	if _, err := f.WriteString(hex.EncodeToString(secret) + "\n"); err != nil {
 		return nil, fmt.Errorf("write %s: %w", path, err)
+	}
+	return secret, nil
+}
+
+// readDomainSecret reads and validates an existing secret file without creating
+// anything. A missing file wraps os.ErrNotExist.
+func readDomainSecret(path string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	secret, err := hex.DecodeString(strings.TrimSpace(string(data)))
+	if err != nil || len(secret) < 32 {
+		// Never silently replace it: that would invalidate every published TXT record.
+		return nil, fmt.Errorf("%s is corrupt; fix or delete it (published DNS proofs will change)", path)
 	}
 	return secret, nil
 }

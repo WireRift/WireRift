@@ -238,20 +238,13 @@ Environment Variables:
   WIRERIFT_HTTP_ADDR     HTTP edge address
 ```
 
-### Troubleshooting a connection
+### Checking a server before you start it
 
-`wirerift doctor` walks from DNS to login and says which step is broken and what to try:
+`wirerift-server doctor` takes the same address/domain flags as the server and checks, without starting anything, whether this machine can run it: whether each port is free (with the `setcap` / `-dev` hint for ports below 1024), the TCP tunnel range, certificate directory permissions, the domain secret, expiring certificates, whether `*.your-domain` resolves in DNS, and the local dev CA. It exits non-zero on failure.
 
+```bash
+wirerift-server doctor -domain tunnel.example.com -acme-email me@example.com
 ```
-$ wirerift doctor -server tls://tunnel.example.com:4443 -token $WIRERIFT_TOKEN
-  ✓  Server address   tunnel.example.com:4443 (TLS)
-  ✓  DNS              tunnel.example.com → 203.0.113.5 (12ms)
-  ✓  TCP connect      tunnel.example.com:4443 (34ms)
-  ✓  TLS              TLS 1.3, certificate valid, expires in 61 days
-  ✓  Authentication   logged in (80ms)
-```
-
-It warns when the control plane is unencrypted on a non-loopback address and never prints your token. Exit status is non-zero when a step fails.
 
 ### Examples
 
@@ -307,6 +300,21 @@ HTTP/Serve Options:
 ```
 
 > **Note:** Both `--flag` and `-flag` syntax work. Flags can appear before or after positional arguments.
+
+### Troubleshooting a connection
+
+`wirerift doctor` walks from DNS to login and says which step is broken and what to try:
+
+```
+$ wirerift doctor -server tls://tunnel.example.com:4443 -token $WIRERIFT_TOKEN
+  ✓  Server address   tunnel.example.com:4443 (TLS)
+  ✓  DNS              tunnel.example.com → 203.0.113.5 (12ms)
+  ✓  TCP connect      tunnel.example.com:4443 (34ms)
+  ✓  TLS              TLS 1.3, certificate valid, expires in 61 days
+  ✓  Authentication   logged in (80ms)
+```
+
+It warns when the control plane is unencrypted on a non-loopback address and never prints your token. Exit status is non-zero when a step fails.
 
 ### Examples
 

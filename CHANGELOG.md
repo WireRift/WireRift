@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`wirerift-server doctor`**: checks, without starting anything, that this machine can run the server as configured: free ports (with setcap/`-dev` hints for ports below 1024), TCP tunnel range, certificate directory and domain-secret permissions, expiring certificates, wildcard DNS and the local dev CA. Shares its output format with `wirerift doctor` (new `internal/diag`).
+
 ## [1.9.0] - 2026-10-19
 
 ### Added

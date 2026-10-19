@@ -71,6 +71,10 @@ func run(parentCtx context.Context, args []string) error {
 	if len(args) > 0 && args[0] == "ca" {
 		return runCA(args[1:], os.Stdout, tlspkg.DefaultTrust())
 	}
+	// "wirerift-server doctor" checks that this machine can run the server.
+	if len(args) > 0 && args[0] == "doctor" {
+		return runServerDoctor(args[1:], os.Stdout)
+	}
 
 	// Parse flags
 	fs := flag.NewFlagSet("wirerift-server", flag.ContinueOnError)
@@ -126,6 +130,8 @@ Examples:
   wirerift-server -domain mytunnel.com               # Custom domain
   wirerift-server -auto-cert -cert-dir ./certs       # Auto-generate certificates
   wirerift-server -control :8443 -http :8080         # Custom ports
+  wirerift-server doctor [options]                   # Check ports, certificates, DNS (nothing is started)
+  wirerift-server ca trust                           # Local HTTPS for -dev
 
 Environment Variables:
   WIRERIFT_DOMAIN       Base domain (default: wirerift.com)
