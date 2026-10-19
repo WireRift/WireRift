@@ -92,10 +92,24 @@ func (ca *LocalCA) Pool() *x509.CertPool {
 // existing but unreadable/invalid CA is an error: a CA that users already
 // trust must never be silently replaced.
 func LoadOrCreateLocalCA(dir string) (*LocalCA, error) {
-	if ca, err := loadExistingOrExplain(dir); ca != nil || !errors.Is(err, os.ErrNotExist) {
-		return ca, err
+	ca, err := loadExistingOrExplain(dir)
+	if ca != nil || errors.Is(err, os.ErrNotExist) {
+		if ca != nil {
+			return ca, nil
+		}
+		return createLocalCALocked(dir)
 	}
-	return createLocalCALocked(dir)
+
+	// A hard error may just be another process in the middle of creating the
+	// CA (it writes the key before the certificate). Tell the two apart: while
+	// its lock exists, wait for it; if it finished meanwhile, load again.
+	if fileExists(filepath.Join(dir, createLockFile)) {
+		return createLocalCALocked(dir)
+	}
+	if ca, rerr := loadExistingOrExplain(dir); rerr == nil {
+		return ca, nil
+	}
+	return nil, err
 }
 
 // loadExistingOrExplain returns the CA when it loads. A missing CA yields an
@@ -119,6 +133,10 @@ func loadExistingOrExplain(dir string) (*LocalCA, error) {
 	}
 	return nil, err
 }
+
+// betweenCAFilesHook runs after the CA key is written and before its
+// certificate is (test seam for the creation race).
+var betweenCAFilesHook func()
 
 const (
 	createLockFile  = ".create.lock"
@@ -270,6 +288,9 @@ func createLocalCA(dir string) (*LocalCA, error) {
 	// Write the key first (0600) so a half-written CA is never trustable.
 	if err := writeFileAtomicMode(ca.KeyPath(), pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
 		return nil, fmt.Errorf("write local CA key: %w", err)
+	}
+	if betweenCAFilesHook != nil {
+		betweenCAFilesHook() // tests widen the window in which only the key exists
 	}
 	if err := writeFileAtomicMode(ca.CertPath(), ca.PEM(), 0o644); err != nil {
 		return nil, fmt.Errorf("write local CA certificate: %w", err)

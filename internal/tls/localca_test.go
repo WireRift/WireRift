@@ -556,3 +556,48 @@ func TestLeafProviderDoesNotChurnWhenCapturedByCAExpiry(t *testing.T) {
 		t.Error("a leaf capped at the CA expiry is re-issued on every handshake")
 	}
 }
+
+// Deterministic version of the race macOS CI found: while one process is
+// between writing the key and writing the certificate, a second process must
+// wait for it instead of reporting a "half-broken" CA.
+func TestSecondProcessWaitsWhileTheFirstIsBetweenKeyAndCertificate(t *testing.T) {
+	inWindow := make(chan struct{})
+	release := make(chan struct{})
+	betweenCAFilesHook = func() {
+		close(inWindow)
+		<-release
+	}
+	defer func() { betweenCAFilesHook = nil }()
+
+	dir := filepath.Join(t.TempDir(), "ca")
+	first := make(chan error, 1)
+	go func() { _, err := LoadOrCreateLocalCA(dir); first <- err }()
+	<-inWindow // the key exists, the certificate does not
+
+	second := make(chan error, 1)
+	var got *LocalCA
+	go func() {
+		var err error
+		got, err = LoadOrCreateLocalCA(dir)
+		second <- err
+	}()
+
+	select {
+	case err := <-second:
+		t.Fatalf("the second caller returned while the first was mid-creation: %v", err)
+	case <-time.After(300 * time.Millisecond): // it is waiting, as it should
+	}
+	close(release)
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-second; err != nil {
+		t.Fatalf("second caller: %v", err)
+	}
+	if got == nil || got.Cert == nil {
+		t.Fatal("second caller got no CA")
+	}
+	if loaded, err := LoadLocalCA(dir); err != nil || !loaded.Cert.Equal(got.Cert) {
+		t.Errorf("the CA on disk differs from the one returned: %v", err)
+	}
+}
