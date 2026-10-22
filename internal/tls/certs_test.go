@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
@@ -1981,5 +1982,46 @@ func TestGetCertificateReleasesWaitersWhenIssuingPanics(t *testing.T) {
 	m.issueMu.Unlock()
 	if stuck {
 		t.Fatal("the in-flight entry survived the panic: later handshakes would wait forever")
+	}
+}
+
+// A certificate inside the renewal window is still valid: when ACME renewal
+// fails it must keep being served instead of a self-signed fallback.
+func TestGetCertificate_ACMEFails_ServesValidCertInRenewalWindow(t *testing.T) {
+	dir := t.TempDir()
+	brokenACME, _ := NewACMEManager("test@example.com", dir, true, nil)
+
+	m, err := NewManager(Config{Domain: "test.local", CertDir: dir, AutoCert: true})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	m.acme = brokenACME
+
+	host := "soon.test.local"
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(42),
+		Subject:      pkix.Name{CommonName: host},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(5 * 24 * time.Hour),
+		DNSNames:     []string{host},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, _ := x509.MarshalECPrivateKey(key)
+	if err := m.saveCertificate(host, der, keyDER); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 2; i++ { // second call runs while ACME is backing off
+		got, err := m.GetCertificate(&tls.ClientHelloInfo{ServerName: host})
+		if err != nil {
+			t.Fatalf("GetCertificate: %v", err)
+		}
+		if string(got.Certificate[0]) != string(der) {
+			t.Fatalf("call %d: served a replacement certificate, want the valid on-disk one", i)
+		}
 	}
 }

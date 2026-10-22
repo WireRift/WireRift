@@ -278,6 +278,14 @@ func (m *Manager) issueCertificate(ctx context.Context, host string) (*tls.Certi
 		}
 	}
 
+	// With ACME, a certificate inside the renewal window is still valid: when
+	// renewal failed or is backing off, serve it rather than a self-signed
+	// stand-in. (Without ACME the on-disk cert is itself self-signed and is
+	// regenerated below.)
+	if m.acme != nil && err == nil && certNotExpired(cert) {
+		return cert, nil
+	}
+
 	// Fallback: generate self-signed for development. When ACME is enabled this
 	// is only a stop-gap until the retry time (not a year-long sticky cert).
 	if m.config.AutoCert {
@@ -298,6 +306,16 @@ const certRenewWindow = 14 * 24 * time.Hour
 
 // certUsable reports whether c is not expired and not within the renewal window.
 func certUsable(c *tls.Certificate) bool {
+	return certValidFor(c, certRenewWindow)
+}
+
+// certNotExpired reports whether c has not expired yet, renewal window aside.
+func certNotExpired(c *tls.Certificate) bool {
+	return certValidFor(c, 0)
+}
+
+// certValidFor reports whether c is still valid d from now.
+func certValidFor(c *tls.Certificate, d time.Duration) bool {
 	leaf := c.Leaf
 	if leaf == nil {
 		if len(c.Certificate) == 0 {
@@ -308,7 +326,7 @@ func certUsable(c *tls.Certificate) bool {
 			return false
 		}
 	}
-	return time.Now().Add(certRenewWindow).Before(leaf.NotAfter)
+	return time.Now().Add(d).Before(leaf.NotAfter)
 }
 
 // normalizeHost validates and lowercases a client-supplied SNI name. The name
