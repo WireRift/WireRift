@@ -9,6 +9,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -93,18 +94,21 @@ func (s *Server) checkPIN(w http.ResponseWriter, r *http.Request, pin, subdomain
 		ip = host
 	}
 	guardKey := subdomain + "|" + ip
-	if s.pinGuard.locked(guardKey) {
-		w.Header().Set("Retry-After", "300")
-		http.Error(w, "Too many invalid PIN attempts. Try again later.", http.StatusTooManyRequests)
-		return false
-	}
 	expectedMAC := s.pinMAC(pin, subdomain)
 
-	// Check PIN cookie (stores HMAC, not raw PIN)
+	// Check PIN cookie (stores HMAC, not raw PIN). A valid cookie proves the PIN
+	// was entered, so it is honoured even while this IP is locked out: the lockout
+	// exists to stop guessing, and shared IPs (NAT) must not lock out holders.
 	if cookie, err := r.Cookie(cookieName); err == nil {
 		if subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(expectedMAC)) == 1 {
 			return true
 		}
+	}
+
+	if s.pinGuard.locked(guardKey) {
+		w.Header().Set("Retry-After", "300")
+		http.Error(w, "Too many invalid PIN attempts. Try again later.", http.StatusTooManyRequests)
+		return false
 	}
 
 	// Check X-WireRift-PIN header (for API/CLI access)
@@ -138,7 +142,7 @@ func (s *Server) checkPIN(w http.ResponseWriter, r *http.Request, pin, subdomain
 		// Redirect to clean URL (strip pin param)
 		q := r.URL.Query()
 		q.Del("pin")
-		cleanURL := r.URL.Path
+		cleanURL := localRedirectPath(r.URL.Path)
 		if encoded := q.Encode(); encoded != "" {
 			cleanURL += "?" + encoded
 		}
@@ -152,7 +156,7 @@ func (s *Server) checkPIN(w http.ResponseWriter, r *http.Request, pin, subdomain
 		if pinMatch(r.FormValue("pin"), pin) {
 			s.pinGuard.reset(guardKey)
 			setPINcookie()
-			http.Redirect(w, r, r.URL.Path, http.StatusFound)
+			http.Redirect(w, r, localRedirectPath(r.URL.Path), http.StatusFound)
 			return false
 		}
 		// Wrong PIN - show form again with error
@@ -164,6 +168,13 @@ func (s *Server) checkPIN(w http.ResponseWriter, r *http.Request, pin, subdomain
 	// Show PIN entry page
 	s.servePINPage(w, subdomain, false)
 	return false
+}
+
+// localRedirectPath makes p safe to use as a redirect target: a path that starts
+// with "//" (or `/\`, which browsers read the same way) would otherwise be
+// followed as a scheme-relative URL to another host.
+func localRedirectPath(p string) string {
+	return "/" + strings.TrimLeft(p, "/\\")
 }
 
 // servePINPage serves the PIN entry HTML page.

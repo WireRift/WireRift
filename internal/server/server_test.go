@@ -5507,3 +5507,49 @@ func TestHandleTunnelRequestsCtxDone(t *testing.T) {
 		t.Error("handleTunnelRequests did not return after ctx cancel")
 	}
 }
+
+// A local app that accepts the replayed request but never answers must not
+// block ReplayRequest forever.
+func TestReplayRequestTimesOutWhenLocalAppHangs(t *testing.T) {
+	old := replayTimeout
+	replayTimeout = 300 * time.Millisecond
+	defer func() { replayTimeout = old }()
+
+	s := New(DefaultConfig(), nil)
+	c1, c2 := net.Pipe()
+	m := mux.New(c1, mux.DefaultConfig())
+	go m.Run()
+	clientMux := mux.New(c2, mux.DefaultConfig())
+	go clientMux.Run()
+
+	tunnel := &Tunnel{ID: "tun-hang", Type: proto.TunnelTypeHTTP, SessionID: "sess-hang", Subdomain: "hang"}
+	s.tunnels.Store("hang", tunnel)
+	s.sessions.Store("sess-hang", &Session{
+		ID: "sess-hang", AccountID: "account-1", Mux: m,
+		Tunnels: map[string]*Tunnel{"tun-hang": tunnel}, CreatedAt: time.Now(), LastSeen: time.Now(),
+		RemoteAddr: c1.RemoteAddr(),
+	})
+	s.logMu.Lock()
+	s.requestLogs = append(s.requestLogs, RequestLog{ID: "req_hang", TunnelID: "tun-hang", Method: "GET", Path: "/"})
+	s.logMu.Unlock()
+
+	go func() { // accept the stream, read the request, never answer
+		stream, err := clientMux.AcceptStream()
+		if err != nil {
+			return
+		}
+		_, _ = http.ReadRequest(bufio.NewReader(stream))
+		select {}
+	}()
+
+	errCh := make(chan error, 1)
+	go func() { _, err := s.ReplayRequest("req_hang"); errCh <- err }()
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("expected a timeout error, got success")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ReplayRequest did not return although the local app never answers")
+	}
+}

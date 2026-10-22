@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 )
@@ -68,16 +69,48 @@ func redactHeader(key, value string) string {
 	return value
 }
 
+// maxLoggedHeaderBytes bounds the header bytes the inspector keeps per message.
+// Visitors control their headers (up to the server's 1 MB limit) and the
+// inspector retains hundreds of entries, so without a cap one tunnel's traffic
+// could pin hundreds of MB.
+const maxLoggedHeaderBytes = 32 * 1024
+
+// captureHeaders flattens h for the inspector: credentials redacted, total size
+// capped at maxLoggedHeaderBytes (values are cut and marked, in sorted key order
+// so the result is deterministic).
+func captureHeaders(h http.Header) map[string]string {
+	keys := make([]string, 0, len(h))
+	for k := range h {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	out := make(map[string]string, len(keys))
+	remaining := maxLoggedHeaderBytes
+	for _, k := range keys {
+		if remaining <= 0 {
+			break
+		}
+		v := redactHeader(k, strings.Join(h.Values(k), ", "))
+		if len(k)+len(v) > remaining {
+			cut := remaining - len(k)
+			if cut < 0 {
+				cut = 0
+			}
+			v = strings.ToValidUTF8(v[:cut], "") + "…[truncated]"
+			remaining = 0
+		} else {
+			remaining -= len(k) + len(v)
+		}
+		out[k] = v
+	}
+	return out
+}
+
 // logRequest captures a request/response pair for the traffic inspector.
 func (s *Server) logRequest(tunnel *Tunnel, r *http.Request, w *inspectResponseWriter, clientIP string, start time.Time) {
-	reqHeaders := make(map[string]string)
-	for k := range r.Header {
-		reqHeaders[k] = redactHeader(k, strings.Join(r.Header.Values(k), ", "))
-	}
-	resHeaders := make(map[string]string)
-	for k := range w.Header() {
-		resHeaders[k] = redactHeader(k, strings.Join(w.Header().Values(k), ", "))
-	}
+	reqHeaders := captureHeaders(r.Header)
+	resHeaders := captureHeaders(w.Header())
 
 	log := RequestLog{
 		ID:         fmt.Sprintf("req_%s", generateSubdomain()),
@@ -123,6 +156,10 @@ func (s *Server) GetRequestLogs(tunnelID string, limit int) []RequestLog {
 	}
 	return result
 }
+
+// replayTimeout bounds one replay: a local app that never answers must not pin
+// the dashboard handler and its stream until the whole session dies.
+var replayTimeout = 2 * time.Minute
 
 // ReplayRequest replays a captured request by ID.
 func (s *Server) ReplayRequest(logID string) (*RequestLog, error) {
@@ -175,6 +212,9 @@ func (s *Server) ReplayRequest(logID string) (*RequestLog, error) {
 		return nil, fmt.Errorf("open stream: %w", err)
 	}
 	defer stream.Close()
+	// Reset wakes the reader blocked below once the replay has run out of time.
+	watchdog := time.AfterFunc(replayTimeout, func() { _ = stream.Reset() })
+	defer watchdog.Stop()
 
 	openFrame, _ := StreamOpenForHTTP(tunnel.ID, stream.ID(), original.ClientIP)
 	if err := session.Mux.GetFrameWriter().Write(openFrame); err != nil {

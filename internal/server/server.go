@@ -47,6 +47,11 @@ type Config struct {
 	// length work while stuck or trickling peers are dropped. Default 60s.
 	EdgeIdleTimeout time.Duration
 
+	// MaxBufferedBodyBytes caps request-body bytes buffered in memory across all
+	// in-flight requests; beyond it new uploads get 503 until others finish.
+	// Default DefaultMaxBufferedBodyBytes (256 MB).
+	MaxBufferedBodyBytes int64
+
 	// TCPBindHost is the interface TCP tunnel ports listen on ("" = all
 	// interfaces). -dev sets it to loopback so nothing is reachable remotely.
 	TCPBindHost string
@@ -141,6 +146,8 @@ type Server struct {
 	nextPort     atomic.Int32
 
 	// Traffic counters
+	bodyBudget *byteBudget // caps buffered request bodies (nil = unlimited)
+
 	bytesIn  atomic.Int64
 	bytesOut atomic.Int64
 
@@ -313,6 +320,9 @@ func New(config Config, logger *slog.Logger) *Server {
 	if config.EdgeIdleTimeout <= 0 {
 		config.EdgeIdleTimeout = 60 * time.Second
 	}
+	if config.MaxBufferedBodyBytes <= 0 {
+		config.MaxBufferedBodyBytes = DefaultMaxBufferedBodyBytes
+	}
 
 	domainSecret := config.DomainSecret
 	if len(domainSecret) == 0 {
@@ -330,6 +340,7 @@ func New(config Config, logger *slog.Logger) *Server {
 		rateLimiter:  ratelimit.NewManager(100, 50),
 		maxLogs:      500, // Keep last 500 requests for inspection
 		pinSecret:    pinSecret,
+		bodyBudget:   newByteBudget(config.MaxBufferedBodyBytes),
 	}
 
 	// Store portStart-1 so first Add(1) yields portStart

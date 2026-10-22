@@ -33,16 +33,25 @@ func skipForwardHeader(key string) bool {
 
 // SerializeRequest serializes an HTTP request for tunneling.
 func SerializeRequest(r *http.Request) ([]byte, error) {
+	head, body, err := serializeRequestParts(r)
+	if err != nil {
+		return nil, err
+	}
+	return append(head, body...), nil
+}
+
+// serializeRequestParts returns the request head and its buffered body
+// separately, so a caller can send them one after the other without a third
+// copy of a large body.
+func serializeRequestParts(r *http.Request) (head, body []byte, err error) {
 	// Buffer the body first so the framing headers match what is sent.
-	var body []byte
 	if r.Body != nil {
-		var err error
 		body, err = io.ReadAll(io.LimitReader(r.Body, maxRequestBodySize+1))
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if len(body) > maxRequestBodySize {
-			return nil, ErrRequestTooLarge
+			return nil, nil, ErrRequestTooLarge
 		}
 	}
 
@@ -113,9 +122,8 @@ func SerializeRequest(r *http.Request) ([]byte, error) {
 
 	// End headers
 	buf.WriteString("\r\n")
-	buf.Write(body)
 
-	return buf.Bytes(), nil
+	return buf.Bytes(), body, nil
 }
 
 // DeserializeResponse deserializes an HTTP response from tunneling.

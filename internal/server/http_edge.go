@@ -155,24 +155,48 @@ func (s *Server) forwardHTTPRequest(w http.ResponseWriter, r *http.Request, sess
 
 	// 3. Serialize the HTTP request and write through the stream. The upload may
 	// take as long as it likes while data keeps arriving.
+	var held *budgetBody
 	if r.Body != nil && r.Body != http.NoBody {
-		r.Body = &idleBody{ReadCloser: r.Body, rc: http.NewResponseController(w), idle: s.config.EdgeIdleTimeout}
+		held = &budgetBody{
+			ReadCloser: &idleBody{ReadCloser: r.Body, rc: http.NewResponseController(w), idle: s.config.EdgeIdleTimeout},
+			budget:     s.bodyBudget,
+		}
+		r.Body = held
 	}
-	reqData, err := SerializeRequest(r)
+	// The body stays in memory until it has been written to the stream, so it is
+	// charged to the budget until then.
+	releaseBody := func() {
+		if held != nil {
+			held.release()
+		}
+	}
+	head, body, err := serializeRequestParts(r)
+	bodyLen := int64(len(body))
 	if err != nil {
+		releaseBody()
 		if errors.Is(err, ErrRequestTooLarge) {
 			writeEdgeError(w, r, http.StatusRequestEntityTooLarge, "Request body too large")
+			return
+		}
+		if errors.Is(err, errBodyBudgetExceeded) {
+			w.Header().Set("Retry-After", "5")
+			writeEdgeError(w, r, http.StatusServiceUnavailable, "Server busy: too many uploads in progress")
 			return
 		}
 		writeEdgeError(w, r, http.StatusInternalServerError, "Failed to serialize request")
 		return
 	}
-	if _, err := stream.Write(reqData); err != nil {
+	_, err = stream.Write(head)
+	if err == nil && len(body) > 0 {
+		_, err = stream.Write(body)
+	}
+	releaseBody()
+	if err != nil {
 		writeEdgeError(w, r, http.StatusBadGateway, "Failed to write request to stream")
 		return
 	}
 
-	s.bytesIn.Add(int64(len(reqData)))
+	s.bytesIn.Add(int64(len(head)) + bodyLen)
 
 	// 4. Stop waiting if the visitor goes away, so a slow or hung local app
 	// cannot pin this goroutine and its stream.
