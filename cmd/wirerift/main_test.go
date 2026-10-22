@@ -752,8 +752,8 @@ func TestDoStartUnknownTunnelType(t *testing.T) {
 
 	args := []string{"wirerift", "start", configFile}
 	err := doStart(ctx, args)
-	if err != nil {
-		t.Fatalf("doStart failed: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "unknown type") {
+		t.Fatalf("doStart with an unknown tunnel type: err = %v, want an \"unknown type\" error", err)
 	}
 }
 
@@ -776,8 +776,8 @@ func TestDoStartTunnelCreateFail(t *testing.T) {
 
 	args := []string{"wirerift", "start", configFile}
 	err := doStart(ctx, args)
-	if err != nil {
-		t.Fatalf("doStart should not return error for individual tunnel failures: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "no tunnels could be started") {
+		t.Fatalf("doStart when every tunnel fails: err = %v, want \"no tunnels could be started\"", err)
 	}
 }
 
@@ -1844,4 +1844,26 @@ func TestDomainFlagIsSentToTheServer(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("tunnel request never reached the server")
 	}
+}
+
+// A non-200 answer (e.g. 401 for a wrong token) must fail the command, with or
+// without -json, instead of printing the error body and exiting 0.
+func TestDoList_NonOKStatusFails(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:4040")
+	if err != nil {
+		t.Skipf("Port 4040 in use: %v", err)
+	}
+	ln.Close()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tunnels", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	})
+	srv := &http.Server{Addr: "127.0.0.1:4040", Handler: mux}
+	go srv.ListenAndServe()
+	time.Sleep(50 * time.Millisecond)
+	defer srv.Close()
+
+	assertErrContains(t, doList([]string{"wirerift", "list", "-server", "127.0.0.1:4040"}), "401")
+	assertErrContains(t, doList([]string{"wirerift", "list", "-json", "-server", "127.0.0.1:4040"}), "401")
 }

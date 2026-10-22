@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/wirerift/wirerift/internal/client"
+	"github.com/wirerift/wirerift/internal/proto"
 )
 
 var (
@@ -480,6 +481,7 @@ func doStart(parentCtx context.Context, args []string) error {
 		return fmt.Errorf("failed to connect: %v", err)
 	}
 
+	started := 0
 	for ti, t := range cfg.Tunnels {
 		switch t.Type {
 		case "http", "":
@@ -519,6 +521,7 @@ func doStart(parentCtx context.Context, args []string) error {
 				continue
 			}
 			fmt.Printf("HTTP tunnel: %s -> localhost:%d\n", tunnel.PublicURL, t.LocalPort)
+			started++
 		case "tcp":
 			tunnel, err := c.TCP(fmt.Sprintf("localhost:%d", t.LocalPort), 0)
 			if err != nil {
@@ -526,12 +529,22 @@ func doStart(parentCtx context.Context, args []string) error {
 				continue
 			}
 			fmt.Printf("TCP tunnel: port %d -> localhost:%d\n", tunnel.Port, t.LocalPort)
+			started++
 		default:
 			fmt.Fprintf(os.Stderr, "Unknown tunnel type: %s\n", t.Type)
 		}
 	}
 
-	fmt.Println("All tunnels started. Press Ctrl+C to stop.")
+	if started == 0 && len(cfg.Tunnels) > 0 {
+		c.Close()
+		return fmt.Errorf("no tunnels could be started")
+	}
+	if started < len(cfg.Tunnels) {
+		fmt.Fprintf(os.Stderr, "Warning: only %d of %d tunnels started.\n", started, len(cfg.Tunnels))
+	} else {
+		fmt.Println("All tunnels started.")
+	}
+	fmt.Println("Press Ctrl+C to stop.")
 
 	<-ctx.Done()
 	c.Close()
@@ -544,6 +557,11 @@ func validateTunnelConfigs(cfg *ConfigFile) error {
 	for ti, t := range cfg.Tunnels {
 		if t.LocalPort < 1 || t.LocalPort > 65535 {
 			return fmt.Errorf("tunnel %d: local_port must be between 1 and 65535, got %d", ti+1, t.LocalPort)
+		}
+		switch proto.TunnelType(t.Type) {
+		case "", proto.TunnelTypeHTTP, proto.TunnelTypeTCP:
+		default:
+			return fmt.Errorf("tunnel %d: unknown type %q (want \"http\" or \"tcp\")", ti+1, t.Type)
 		}
 	}
 	return nil
@@ -867,6 +885,14 @@ func doList(args []string) error {
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
 	if err != nil {
 		return fmt.Errorf("failed to read response: %v", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		msg := strings.TrimSpace(string(body))
+		if len(msg) > 200 {
+			msg = msg[:200]
+		}
+		return fmt.Errorf("server returned %s: %s", resp.Status, msg)
 	}
 
 	if *jsonOutput {

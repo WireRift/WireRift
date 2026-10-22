@@ -47,3 +47,15 @@ func TestValidateTunnelConfigs(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateTunnelConfigsTunnelType(t *testing.T) {
+	for _, typ := range []string{"", "http", "tcp"} {
+		if err := validateTunnelConfigs(&ConfigFile{Tunnels: []TunnelConfig{{Type: typ, LocalPort: 8080}}}); err != nil {
+			t.Errorf("type %q: unexpected error %v", typ, err)
+		}
+	}
+	err := validateTunnelConfigs(&ConfigFile{Tunnels: []TunnelConfig{{Type: "http", LocalPort: 80}, {Type: "tpc", LocalPort: 8080}}})
+	if err == nil || !strings.Contains(err.Error(), "tunnel 2") || !strings.Contains(err.Error(), "tpc") {
+		t.Fatalf("typo'd type: err = %v, want an error naming tunnel 2 and %q", err, "tpc")
+	}
+}

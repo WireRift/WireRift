@@ -163,14 +163,16 @@ Environment Variables:
 		logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
 	}
 
-	// Get config from environment
-	if envDomain := os.Getenv("WIRERIFT_DOMAIN"); envDomain != "" && *domain == "wirerift.com" {
+	// Get config from environment. A flag given on the command line always wins,
+	// even when its value equals the default.
+	given := visitedFlags(fs)
+	if envDomain := os.Getenv("WIRERIFT_DOMAIN"); envDomain != "" && !given["domain"] {
 		*domain = envDomain
 	}
-	if envControl := os.Getenv("WIRERIFT_CONTROL_ADDR"); envControl != "" && *controlAddr == ":4443" {
+	if envControl := os.Getenv("WIRERIFT_CONTROL_ADDR"); envControl != "" && !given["control"] {
 		*controlAddr = envControl
 	}
-	if envHTTP := os.Getenv("WIRERIFT_HTTP_ADDR"); envHTTP != "" && *httpAddr == ":80" {
+	if envHTTP := os.Getenv("WIRERIFT_HTTP_ADDR"); envHTTP != "" && !given["http"] {
 		*httpAddr = envHTTP
 	}
 
