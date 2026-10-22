@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+- The redirect after a successful PIN no longer follows a request path starting with `//` or `/\` to another host
+
+### Changed
+- Memory: a stream no longer preallocates its 256 KB receive window (it starts at 4 KB and grows as data arrives), so a peer opening thousands of idle streams costs ~40 MB instead of ~2.5 GB; a `WindowSize` above the 16 MB buffer limit is clamped instead of silently dropping data
+- Memory: request bodies buffered for tunneling are capped across all in-flight requests (`Config.MaxBufferedBodyBytes`, default 256 MB); beyond it new uploads get `503` with `Retry-After` instead of exhausting memory. The body is also no longer copied a third time when sent
+- Memory: the traffic inspector keeps at most 32 KB of headers per request and per response (credentials were already redacted)
+
+### Fixed
+- Mux: stream IDs are now reused. A session used to refuse every new stream (all requests 502) after ~8.4M streams because IDs only counted up; the allocator now wraps round the 24-bit space and skips IDs still in use, so a long-lived tunnel never runs out
+- Mux: send-window credit could be lost for good when the peer's window update arrived before the sender had debited its window, eventually stalling a long-lived stream; concurrent writers could also overdraw the window and get the stream reset. The window is now reserved before the frame is sent
+- Client: tunnels that could not be re-created after a reconnect are kept and retried on the next reconnect instead of being dropped (the client stayed "connected" but served nothing); a connection that drops again mid re-creation no longer sits through the retry backoff
+- Client: `Close` racing a reconnect could leave a live connection behind and hang; connection state is now mutex-guarded
+- TLS: with ACME enabled, a still-valid certificate inside the 14-day renewal window is served while renewal fails or backs off, instead of a self-signed stand-in
+- `wirerift start` rejects an unknown tunnel `type` before connecting, and exits with an error when no tunnel could be started
+- `wirerift list` fails on a non-200 response (e.g. a wrong token) instead of exiting 0
+- A valid PIN cookie is honoured even while the visitor's IP is locked out by bad guesses (shared NAT); replaying a request now times out (2 min) instead of hanging on a local app that never answers
+- `wirerift-server`: an explicit `-domain`/`-control`/`-http` flag now wins over `WIRERIFT_DOMAIN`/`WIRERIFT_CONTROL_ADDR`/`WIRERIFT_HTTP_ADDR` even when it equals the default
+
 ## [1.10.1] - 2026-10-19
 
 ### Security

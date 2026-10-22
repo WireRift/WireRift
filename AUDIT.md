@@ -206,7 +206,7 @@ return m.devToken, account.(*Account), nil
 
 ### Minor Items Not Requiring Fixes
 1. **`Mux.handleStreamOpen` drops streams silently when accept channel full** (128 buffer) - Acceptable for backpressure; stream is properly Reset.
-2. **`Stream.ID` space exhaustion** - `nextID` wraps at uint32 max, but `MaxStreamID` is 16M (24-bit) which gates this. Long-lived connections could exhaust the ID space. Acceptable for tunnel use case (connections are recreated).
+2. **`Stream.ID` space exhaustion** - ~~Long-lived connections could exhaust the 24-bit ID space.~~ Fixed: `OpenStream` now allocates IDs round the whole space and skips live ones (see `allocIDLocked`), so a session no longer dies after ~8.4M streams.
 3. **`Mux.handleError` creates error from untrusted input** - `errors.New(msg.Message)` uses remote peer's message. Not a security issue since it only propagates within the server process.
 4. **`Stats()` returns `map[string]interface{}`** - Uses `any`/`interface{}` for JSON serialization flexibility. Acceptable pattern.
 5. **Dashboard `handleDomainActions` lacks CSRF check for verify/dns** - These require Bearer token auth, so no CSRF vector.

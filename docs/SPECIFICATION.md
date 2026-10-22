@@ -173,7 +173,7 @@ All communication uses a unified frame format:
 
 - **Version (1 byte):** Protocol version. Currently `0x01`.
 - **Type (1 byte):** Frame type identifier.
-- **Stream ID (3 bytes):** Logical stream identifier (0 = control stream). Supports up to 16,777,215 concurrent streams.
+- **Stream ID (3 bytes):** Logical stream identifier (0 = control stream). IDs opened by the server are even (2, 4, ...) and are allocated round the 24-bit space, skipping IDs still in use; an ID is reused only after the rest of the space has been cycled through, so a session can open an unlimited number of streams over its lifetime.
 - **Length (4 bytes):** Big-endian uint32. Max payload size: 16 MB (`0x01000000`).
 
 ### 4.3 Frame Types
