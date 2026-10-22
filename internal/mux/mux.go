@@ -50,7 +50,10 @@ type Mux struct {
 	config      Config
 
 	streams sync.Map // map[uint32]*Stream
-	nextID  atomic.Uint32
+
+	// idMu guards nextID and makes "pick a free ID + register the stream" atomic.
+	idMu   sync.Mutex
+	nextID uint32
 
 	accept    chan *Stream      // incoming streams from remote
 	controlCh chan *proto.Frame // control frames (auth, tunnel)
@@ -73,6 +76,9 @@ func New(conn net.Conn, config Config) *Mux {
 	if config.WindowSize <= 0 {
 		config.WindowSize = proto.DefaultWindowSize
 	}
+	if config.WindowSize > maxRingBufferSize {
+		config.WindowSize = maxRingBufferSize // the receive buffer cannot hold more
+	}
 	if config.MaxFrameSize <= 0 {
 		config.MaxFrameSize = 64 * 1024
 	}
@@ -87,7 +93,7 @@ func New(conn net.Conn, config Config) *Mux {
 		done:         make(chan struct{}),
 		maxFrameSize: config.MaxFrameSize,
 	}
-	m.nextID.Store(2) // Start at 2 to avoid collision with ControlStreamID (0)
+	m.nextID = 2 // Start at 2 to avoid collision with ControlStreamID (0)
 
 	return m
 }
@@ -100,22 +106,45 @@ func (m *Mux) OpenStream() (*Stream, error) {
 	default:
 	}
 
-	// Generate client stream ID (even numbers)
-	if m.nextID.Load() > proto.MaxStreamID {
-		return nil, ErrTooManyStreams // don't keep incrementing into a wrap
-	}
 	if int(m.streamCount.Load()) >= m.config.MaxStreams {
 		return nil, ErrTooManyStreams
 	}
-	id := m.nextID.Add(2) - 2 // 2, 4, 6...
-	if id > proto.MaxStreamID {
+
+	m.idMu.Lock()
+	defer m.idMu.Unlock()
+
+	id, ok := m.allocIDLocked()
+	if !ok {
 		return nil, ErrTooManyStreams
 	}
-
 	stream := newStream(id, m, m.config.WindowSize)
 	m.addStream(stream)
 
 	return stream, nil
+}
+
+// maxLocalStreamID is the largest ID OpenStream hands out: IDs are even (the
+// opener's half of the ID space) and fit the 3-byte frame field.
+const maxLocalStreamID = proto.MaxStreamID &^ 1
+
+// allocIDLocked returns the next free even stream ID. IDs are handed out round
+// the whole 24-bit space and skip ones that are still live, so a long-lived
+// session never runs out: an ID is reused only after ~8.4M other opens, long
+// after any frame still in flight for its previous stream (all frames share one
+// ordered connection) has been delivered. idMu must be held.
+func (m *Mux) allocIDLocked() (uint32, bool) {
+	// More live streams than this cannot exist, so the scan always ends.
+	for tries := 0; tries <= m.config.MaxStreams+1; tries++ {
+		id := m.nextID
+		if id < 2 || id > maxLocalStreamID {
+			id = 2 // wrapped
+		}
+		m.nextID = id + 2
+		if _, live := m.streams.Load(id); !live {
+			return id, true
+		}
+	}
+	return 0, false
 }
 
 // AcceptStream waits for and returns the next incoming stream.

@@ -22,6 +22,12 @@ var (
 	ErrStreamReset  = errors.New("stream was reset")
 )
 
+// initialReadBuffer is the receive buffer a stream starts with. It grows on
+// demand up to the flow-control window, so a stream that has received nothing
+// (or only a small request) does not pin a full window of memory: a peer can
+// open thousands of streams, but pays for a window only by actually sending it.
+const initialReadBuffer = 4096
+
 // Stream represents a single bidirectional stream within a multiplexed connection.
 // Stream implements io.ReadWriteCloser.
 type Stream struct {
@@ -47,7 +53,7 @@ func newStream(id uint32, m *Mux, windowSize int32) *Stream {
 	s := &Stream{
 		id:        id,
 		mux:       m,
-		readBuf:   newRingBuffer(int(windowSize)),
+		readBuf:   newRingBuffer(min(int(windowSize), initialReadBuffer)),
 		readCh:    make(chan struct{}, 1),
 		windowCh:  make(chan struct{}, 1),
 		maxWindow: windowSize,
@@ -148,7 +154,10 @@ func (s *Stream) Write(p []byte) (n int, err error) {
 			return total, ErrStreamReset
 		}
 
-		// Check how much we can send
+		// Reserve send credit before the frame goes out. Debiting afterwards
+		// let a fast peer's window update arrive first, get clamped to
+		// maxWindow, and lose that credit for good; it also let concurrent
+		// writers overdraw the window.
 		window := s.window.Load()
 		if window <= 0 {
 			// Wait for window update
@@ -168,13 +177,16 @@ func (s *Stream) Write(p []byte) (n int, err error) {
 		if chunk > s.mux.maxFrameSize {
 			chunk = s.mux.maxFrameSize
 		}
+		if !s.window.CompareAndSwap(window, window-int32(chunk)) { //nolint:gosec // chunk <= window (int32)
+			continue // window changed under us; recompute
+		}
 
 		// Send data frame
 		if err := s.mux.sendDataFrame(s.id, p[total:total+chunk]); err != nil {
+			s.window.Add(int32(chunk)) //nolint:gosec // refund the reservation
 			return total, err
 		}
 
-		s.window.Add(-int32(chunk)) //nolint:gosec // chunk <= window (int32)
 		total += chunk
 	}
 

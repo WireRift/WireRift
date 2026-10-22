@@ -46,6 +46,9 @@ func (rb *ringBuffer) Write(data []byte) (int, error) {
 	if available < len(data) {
 		// Grow buffer to fit data (up to maxSize)
 		newSize := rb.size + len(data) - available
+		if double := rb.size * 2; newSize < double {
+			newSize = double // geometric growth: amortised O(1) copying
+		}
 		if newSize > rb.maxSize {
 			newSize = rb.maxSize
 		}

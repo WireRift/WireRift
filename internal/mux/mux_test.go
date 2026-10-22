@@ -1112,23 +1112,6 @@ func TestRingBufferGrowLocked(t *testing.T) {
 	}
 }
 
-// TestOpenStreamMaxStreamIDExceeded tests OpenStream when MaxStreamID is exceeded.
-func TestOpenStreamMaxStreamIDExceeded(t *testing.T) {
-	client, _ := newTestPipe(t)
-
-	// Set nextID beyond MaxStreamID so the next allocation exceeds it.
-	// nextID.Add(2) - 2 produces the ID; we need id > MaxStreamID.
-	// Set nextID to MaxStreamID so Add(2)-2 = MaxStreamID+2-2 = MaxStreamID, then next call overflows.
-	client.nextID.Store(proto.MaxStreamID + 1)
-
-	_, err := client.OpenStream()
-	if err != ErrTooManyStreams {
-		t.Errorf("Expected ErrTooManyStreams, got %v", err)
-	}
-
-	client.Close()
-}
-
 // TestRunHandleFrameReturnsError tests that Run closes the mux when handleFrame returns an error.
 func TestRunHandleFrameReturnsError(t *testing.T) {
 	client, server := newTestPipe(t)
