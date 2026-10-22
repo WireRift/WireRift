@@ -2131,14 +2131,19 @@ func TestRecreateTunnelsPartialFailure(t *testing.T) {
 
 	client.recreateTunnels()
 
-	// Only one tunnel should succeed
+	// One tunnel is re-created; the rejected one stays registered so the next
+	// reconnect retries it instead of losing it for good.
 	var tunnelCount int
+	var kept []string
 	client.tunnels.Range(func(key, value any) bool {
 		tunnelCount++
+		if id := key.(string); id == "old-a" || id == "old-b" {
+			kept = append(kept, id)
+		}
 		return true
 	})
-	if tunnelCount != 1 {
-		t.Errorf("expected 1 tunnel after partial failure, got %d", tunnelCount)
+	if tunnelCount != 2 || len(kept) != 1 {
+		t.Errorf("expected 1 re-created + 1 kept tunnel, got %d total, kept=%v", tunnelCount, kept)
 	}
 
 	client.conn.Close()
@@ -2539,4 +2544,81 @@ func TestRecreateTTLShrinksAcrossRetries(t *testing.T) {
 		t.Errorf("first attempt asked for %ds but only 10s remained", first)
 	}
 	client.conn.Close()
+}
+
+// When the connection drops again mid re-creation, the tunnels must be kept for
+// the next reconnect and the attempt must not sit through the retry backoff.
+func TestRecreateTunnelsKeepsTunnelsWhenConnectionLost(t *testing.T) {
+	old := tunnelRetryBase
+	tunnelRetryBase = time.Minute // would hang the test if the backoff were used
+	defer func() { tunnelRetryBase = old }()
+	client, serverMux := makeConnectedClient(t)
+
+	for _, id := range []string{"old-a", "old-b"} {
+		client.tunnels.Store(id, &Tunnel{
+			ID:      id,
+			Type:    proto.TunnelTypeHTTP,
+			client:  client,
+			request: &proto.TunnelRequest{Type: proto.TunnelTypeHTTP, LocalAddr: "localhost:3000"},
+		})
+	}
+	serverMux.Close()
+	client.mux.Close()
+
+	done := make(chan struct{})
+	go func() {
+		client.recreateTunnels()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("recreateTunnels kept retrying on a dead connection")
+	}
+
+	for _, id := range []string{"old-a", "old-b"} {
+		if _, ok := client.tunnels.Load(id); !ok {
+			t.Errorf("tunnel %s was lost; it must be kept for the next reconnect", id)
+		}
+	}
+	client.conn.Close()
+}
+
+// A connect that finishes after Close must not publish a live mux nobody will
+// close (Close would already have run, and wg.Wait would hang on mux.Run).
+func TestConnectAfterCloseDoesNotLeakConnection(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+		}
+	}()
+
+	cfg := DefaultConfig()
+	cfg.ServerAddr = ln.Addr().String()
+	c := New(cfg, nil)
+	c.cancel() // as Close() does first, before it reads c.mux
+
+	if err := c.connect(); err == nil {
+		t.Fatal("connect succeeded on a closed client")
+	}
+	if c.currentMux() != nil {
+		t.Error("a mux was published on a closed client")
+	}
+
+	done := make(chan struct{})
+	go func() { c.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("goroutine left running after connect on a closed client")
+	}
 }

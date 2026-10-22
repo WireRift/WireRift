@@ -70,9 +70,11 @@ type Client struct {
 	config Config
 	logger *slog.Logger
 
-	// Connection
-	conn net.Conn
-	mux  *mux.Mux
+	// Connection. connMu guards conn, mux and sessionID: reconnectLoop replaces
+	// them while Close and the public accessors read them.
+	connMu sync.RWMutex
+	conn   net.Conn
+	mux    *mux.Mux
 
 	// Session state
 	sessionID  string
@@ -232,28 +234,40 @@ func (c *Client) connect() error {
 		return fmt.Errorf("dial server: %w", err)
 	}
 
-	c.conn = conn
-
 	// Send magic bytes (4 bytes write to a just-opened TCP connection cannot fail)
 	_ = proto.WriteMagic(conn)
 
 	// Create mux and start run loop FIRST so it dispatches control frames
-	c.mux = mux.New(conn, mux.DefaultConfig())
+	m := mux.New(conn, mux.DefaultConfig())
+
+	// Publish the new connection unless the client was closed meanwhile. Close
+	// cancels the context before taking this lock, so either we see the
+	// cancellation here, or Close sees (and closes) the connection published here.
+	c.connMu.Lock()
+	if c.ctx.Err() != nil {
+		c.connMu.Unlock()
+		m.Close()
+		conn.Close()
+		return fmt.Errorf("cancelled")
+	}
+	c.conn, c.mux = conn, m
+	c.connMu.Unlock()
+
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
-		_ = c.mux.Run()
+		_ = m.Run()
 	}()
 
 	// Authenticate
 	if err := c.authenticate(); err != nil {
-		c.mux.Close() // Close mux first to stop mux.Run() goroutine
+		m.Close() // Close mux first to stop mux.Run() goroutine
 		conn.Close()
 		return err
 	}
 
 	c.connected.Store(true)
-	c.logger.Info("connected", "session", c.sessionID)
+	c.logger.Info("connected", "session", c.SessionID())
 
 	return nil
 }
@@ -268,16 +282,17 @@ func (c *Client) authenticate() error {
 	// EncodeJSONPayload cannot fail for AuthRequest (only string fields)
 	frame, _ := proto.EncodeJSONPayload(proto.FrameAuthReq, proto.ControlStreamID, authReq)
 
-	if err := c.mux.GetFrameWriter().Write(frame); err != nil {
+	m := c.currentMux()
+	if err := m.GetFrameWriter().Write(frame); err != nil {
 		return fmt.Errorf("send auth request: %w", err)
 	}
 
 	// Read response from control frame channel (dispatched by mux.Run)
 	var respFrame *proto.Frame
 	select {
-	case f := <-c.mux.ControlFrame():
+	case f := <-m.ControlFrame():
 		respFrame = f
-	case <-c.mux.Done():
+	case <-m.Done():
 		return fmt.Errorf("connection closed")
 	case <-c.ctx.Done():
 		return fmt.Errorf("cancelled")
@@ -296,7 +311,9 @@ func (c *Client) authenticate() error {
 		return fmt.Errorf("%w: %s", ErrAuthFailed, authRes.Error)
 	}
 
+	c.connMu.Lock()
 	c.sessionID = authRes.SessionID
+	c.connMu.Unlock()
 	c.maxTunnels = authRes.MaxTunnels
 
 	return nil
@@ -306,11 +323,14 @@ func (c *Client) authenticate() error {
 func (c *Client) Close() error {
 	c.cancel()
 
-	if c.mux != nil {
-		c.mux.Close()
+	c.connMu.RLock()
+	m, conn := c.mux, c.conn
+	c.connMu.RUnlock()
+	if m != nil {
+		m.Close()
 	}
-	if c.conn != nil {
-		c.conn.Close()
+	if conn != nil {
+		conn.Close()
 	}
 
 	c.wg.Wait()
@@ -358,16 +378,17 @@ func (c *Client) openTunnel(req *proto.TunnelRequest) (*Tunnel, error) {
 	// EncodeJSONPayload cannot fail for TunnelRequest (simple JSON-serializable fields)
 	frame, _ := proto.EncodeJSONPayload(proto.FrameTunnelReq, proto.ControlStreamID, req)
 
-	if err := c.mux.GetFrameWriter().Write(frame); err != nil {
+	m := c.currentMux()
+	if err := m.GetFrameWriter().Write(frame); err != nil {
 		return nil, fmt.Errorf("send tunnel request: %w", err)
 	}
 
 	// Read response from control frame channel (dispatched by mux.Run)
 	var respFrame *proto.Frame
 	select {
-	case f := <-c.mux.ControlFrame():
+	case f := <-m.ControlFrame():
 		respFrame = f
-	case <-c.mux.Done():
+	case <-m.Done():
 		return nil, fmt.Errorf("connection closed")
 	case <-c.ctx.Done():
 		return nil, fmt.Errorf("cancelled")
@@ -432,7 +453,8 @@ func assignedTCPPort(tunnelType proto.TunnelType, publicURL string, remotePort i
 
 // CloseTunnel closes a tunnel.
 func (c *Client) CloseTunnel(id string) error {
-	if c.mux == nil {
+	m := c.currentMux()
+	if m == nil {
 		return ErrNotConnected
 	}
 
@@ -440,7 +462,7 @@ func (c *Client) CloseTunnel(id string) error {
 	// EncodeJSONPayload cannot fail for TunnelClose (only string field)
 	frame, _ := proto.EncodeJSONPayload(proto.FrameTunnelClose, proto.ControlStreamID, closeReq)
 
-	if err := c.mux.GetFrameWriter().Write(frame); err != nil {
+	if err := m.GetFrameWriter().Write(frame); err != nil {
 		return err
 	}
 
@@ -452,7 +474,16 @@ func (c *Client) CloseTunnel(id string) error {
 
 // SessionID returns the current session ID.
 func (c *Client) SessionID() string {
+	c.connMu.RLock()
+	defer c.connMu.RUnlock()
 	return c.sessionID
+}
+
+// currentMux returns the active mux (nil before the first connection).
+func (c *Client) currentMux() *mux.Mux {
+	c.connMu.RLock()
+	defer c.connMu.RUnlock()
+	return c.mux
 }
 
 // IsConnected returns true if connected.
@@ -462,18 +493,20 @@ func (c *Client) IsConnected() bool {
 
 // FrameWriter returns the frame writer (for internal use).
 func (c *Client) FrameWriter() *proto.FrameWriter {
-	if c.mux == nil {
+	m := c.currentMux()
+	if m == nil {
 		return nil
 	}
-	return c.mux.GetFrameWriter()
+	return m.GetFrameWriter()
 }
 
 // FrameReader returns the frame reader (for internal use).
 func (c *Client) FrameReader() *proto.FrameReader {
-	if c.mux == nil {
+	m := c.currentMux()
+	if m == nil {
 		return nil
 	}
-	return c.mux.GetFrameReader()
+	return m.GetFrameReader()
 }
 
 // heartbeatLoop sends periodic heartbeats using the given mux.
@@ -582,7 +615,7 @@ func (c *Client) reconnectLoop() {
 			}()
 
 			interval = c.config.ReconnectInterval
-			c.logger.Info("tunnel restored", "session", c.sessionID)
+			c.logger.Info("tunnel restored", "session", c.SessionID())
 		}
 	}
 }
@@ -599,6 +632,12 @@ func (c *Client) recreateTunnels() {
 		return true
 	})
 
+	// A tunnel that could not be re-created stays registered so the next
+	// reconnect tries again, instead of being lost for good (a client with an
+	// empty tunnel map looks connected but serves nothing).
+	m := c.mux
+	keep := func(t *Tunnel) { c.tunnels.Store(t.ID, t) }
+
 	for _, t := range oldTunnels {
 		if t.request == nil {
 			continue
@@ -608,7 +647,7 @@ func (c *Client) recreateTunnels() {
 		// port) for a moment, so retry with backoff before giving up.
 		var newTunnel *Tunnel
 		var err error
-		expired := false
+		expired, lost := false, false
 		for attempt, delay := 0, tunnelRetryBase; attempt < 5; attempt, delay = attempt+1, delay*2 {
 			// A time-limited tunnel keeps its ORIGINAL deadline across reconnects.
 			// The remaining time is recomputed on every attempt (the retry sleeps
@@ -625,6 +664,16 @@ func (c *Client) recreateTunnels() {
 			if newTunnel, err = c.openTunnel(&request); err == nil {
 				break
 			}
+			select {
+			case <-m.Done():
+				// The connection dropped again: retrying on a dead mux only burns
+				// time. Leave it to the next reconnect.
+				lost = true
+			default:
+			}
+			if lost {
+				break
+			}
 			c.logger.Warn("failed to re-create tunnel, will retry", "id", t.ID, "attempt", attempt+1, "error", err)
 			select {
 			case <-time.After(delay):
@@ -636,8 +685,14 @@ func (c *Client) recreateTunnels() {
 			c.logger.Info("tunnel expired, not re-creating", "id", t.ID)
 			continue
 		}
+		if lost {
+			c.logger.Warn("connection lost while re-creating tunnel, will retry on next reconnect", "id", t.ID, "error", err)
+			keep(t)
+			continue
+		}
 		if err != nil {
-			c.logger.Error("giving up re-creating tunnel", "id", t.ID, "error", err)
+			c.logger.Error("giving up re-creating tunnel for now, will retry on next reconnect", "id", t.ID, "error", err)
+			keep(t)
 			continue
 		}
 		c.logger.Info("tunnel re-created", "old_id", t.ID, "new_id", newTunnel.ID, "url", newTunnel.PublicURL)
