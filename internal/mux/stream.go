@@ -180,10 +180,16 @@ func (s *Stream) Write(p []byte) (n int, err error) {
 		if !s.window.CompareAndSwap(window, window-int32(chunk)) { //nolint:gosec // chunk <= window (int32)
 			continue // window changed under us; recompute
 		}
+		// windowCh holds one token, so one update wakes one blocked writer. If
+		// credit is left over, pass the wake-up on to the next writer.
+		if s.window.Load() > 0 {
+			s.signalWindow()
+		}
 
 		// Send data frame
 		if err := s.mux.sendDataFrame(s.id, p[total:total+chunk]); err != nil {
 			s.window.Add(int32(chunk)) //nolint:gosec // refund the reservation
+			s.signalWindow()
 			return total, err
 		}
 
@@ -287,7 +293,11 @@ func (s *Stream) onWindowUpdate(delta uint32) {
 		}
 	}
 
-	// Signal window available
+	s.signalWindow()
+}
+
+// signalWindow wakes a writer waiting for send credit (non-blocking).
+func (s *Stream) signalWindow() {
 	select {
 	case s.windowCh <- struct{}{}:
 	default:
