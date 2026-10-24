@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Multiple tokens and accounts: `wirerift-server token create|list|revoke` manage a token file (default `<cert-dir>/tokens.json`, `-tokens-file`) that the server reads at startup. Only a SHA-256 digest of each token is stored, tokens can expire or be revoked, and accounts carry `max_tunnels`, `max_sessions` and `rate_limit` settings. The bootstrap token (`-token`, `WIRERIFT_TOKEN` or generated) keeps working unchanged. Enforcing the account limits and picking up file changes without a restart follow in a later release
+
 ## [1.11.0] - 2026-10-25
 
 ### Security

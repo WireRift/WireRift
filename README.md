@@ -451,6 +451,22 @@ wirerift http 8080           # reads from env
 wirerift-server              # generates random token, prints to stderr
 ```
 
+### Multiple tokens and accounts
+
+The token above is the server's bootstrap token. To give several people or
+machines their own access, create tokens in the token file (default
+`<cert-dir>/tokens.json`, read at startup; only a SHA-256 digest of each token
+is stored):
+
+```bash
+wirerift-server token create -account acme -name ci -max-tunnels 5 -expires 30d
+wirerift-server token list
+wirerift-server token revoke tok_ab12cd34
+```
+
+The secret is printed once. Tokens of the same account share its limits.
+The server reads the file at startup, so restart it to apply changes. The per-account limits are recorded now and enforced from the next release.
+
 ---
 
 ## Encrypted control plane

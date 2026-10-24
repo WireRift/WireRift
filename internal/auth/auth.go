@@ -25,7 +25,9 @@ type Token struct {
 	Name      string
 	CreatedAt time.Time
 	ExpiresAt time.Time
-	Secret    string
+	Secret    string // plaintext secret: only the bootstrap token and in-memory tokens
+	Hash      string // SHA-256 of the secret, for tokens loaded from the token file
+	Revoked   bool
 }
 
 // IsExpired returns true if the token has expired.
@@ -35,13 +37,14 @@ func (t *Token) IsExpired() bool {
 
 // Account represents a user account.
 type Account struct {
-	ID         string
-	Email      string
-	Name       string
-	Active     bool
-	CreatedAt  time.Time
-	MaxTunnels int
-	RateLimit  int
+	ID          string
+	Email       string
+	Name        string
+	Active      bool
+	CreatedAt   time.Time
+	MaxTunnels  int
+	MaxSessions int // 0 = unlimited
+	RateLimit   int
 }
 
 // Manager manages authentication.
@@ -50,7 +53,14 @@ type Manager struct {
 	accounts sync.Map
 	devToken *Token
 	mu       sync.RWMutex
+
+	byHash         map[string]*Token // tokens from the token file, by secret digest
+	loadedAccounts []string          // account IDs loaded from the token file
 }
+
+// DevAccountID is the account of the bootstrap token (-token, WIRERIFT_TOKEN or
+// the generated one). It is unlimited and may see every tunnel.
+const DevAccountID = "dev_account"
 
 // NewManager creates a new auth manager.
 // Token resolution order: explicit token > WIRERIFT_TOKEN env > random.
@@ -107,6 +117,13 @@ func (m *Manager) ValidateToken(tokenSecret string) (*Token, *Account, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
+	// Tokens from the token file: direct lookup by digest.
+	if len(m.byHash) > 0 {
+		if t, ok := m.byHash[HashSecret(tokenSecret)]; ok {
+			return m.checkStored(t)
+		}
+	}
+
 	var foundToken *Token
 	var foundAccount *Account
 
@@ -135,6 +152,68 @@ func (m *Manager) ValidateToken(tokenSecret string) (*Token, *Account, error) {
 	}
 
 	return foundToken, foundAccount, nil
+}
+
+// checkStored validates a token found by digest. The caller holds m.mu.
+func (m *Manager) checkStored(t *Token) (*Token, *Account, error) {
+	if t.Revoked || t.IsExpired() {
+		return nil, nil, ErrInvalidToken
+	}
+	account, ok := m.accounts.Load(t.AccountID)
+	if !ok || !account.(*Account).Active {
+		return nil, nil, ErrInvalidToken
+	}
+	return t, account.(*Account), nil
+}
+
+// LoadTokenFile replaces the tokens and accounts that came from a token file
+// with the contents of path (a missing file means none). The bootstrap token and
+// its account are untouched. It returns how many tokens are now loaded; on an
+// error nothing changes.
+func (m *Manager) LoadTokenFile(path string) (int, error) {
+	f, err := LoadTokenFile(path)
+	if err != nil {
+		return 0, err
+	}
+	m.ApplyTokenFile(f)
+	return len(f.Tokens), nil
+}
+
+// ApplyTokenFile is LoadTokenFile for an already parsed file.
+func (m *Manager) ApplyTokenFile(f *TokenFile) {
+	accounts := make(map[string]*Account, len(f.Accounts))
+	for _, a := range f.Accounts {
+		if a.ID == DevAccountID {
+			continue // the bootstrap account cannot be redefined from a file
+		}
+		accounts[a.ID] = &Account{
+			ID: a.ID, Name: a.Name, Active: a.Active, CreatedAt: a.CreatedAt,
+			MaxTunnels: a.MaxTunnels, MaxSessions: a.MaxSessions, RateLimit: a.RateLimit,
+		}
+	}
+	byHash := make(map[string]*Token, len(f.Tokens))
+	for _, ft := range f.Tokens {
+		if _, ok := accounts[ft.AccountID]; !ok || ft.Hash == "" {
+			continue
+		}
+		t := &Token{ID: ft.ID, AccountID: ft.AccountID, Name: ft.Name, CreatedAt: ft.CreatedAt, Hash: ft.Hash, Revoked: ft.Revoked}
+		if ft.ExpiresAt != nil {
+			t.ExpiresAt = *ft.ExpiresAt
+		}
+		byHash[ft.Hash] = t
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, id := range m.loadedAccounts {
+		m.accounts.Delete(id)
+	}
+	m.loadedAccounts = m.loadedAccounts[:0]
+	for id, a := range accounts {
+		m.accounts.Store(id, a)
+		m.loadedAccounts = append(m.loadedAccounts, id)
+	}
+	m.byHash = byHash
 }
 
 // DevToken returns the development token secret for testing.

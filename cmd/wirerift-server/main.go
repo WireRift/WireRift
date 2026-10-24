@@ -66,14 +66,26 @@ func normalizeArgs(args []string) []string {
 	return append(flags, positional...)
 }
 
-func run(parentCtx context.Context, args []string) error {
-	// "wirerift-server ca ..." manages the local development CA.
-	if len(args) > 0 && args[0] == "ca" {
-		return runCA(args[1:], os.Stdout, tlspkg.DefaultTrust())
+// runSubcommand runs "ca", "token" or "doctor" when args name one, and reports
+// whether it did.
+func runSubcommand(args []string) (bool, error) {
+	if len(args) == 0 {
+		return false, nil
 	}
-	// "wirerift-server doctor" checks that this machine can run the server.
-	if len(args) > 0 && args[0] == "doctor" {
-		return runServerDoctor(args[1:], os.Stdout)
+	switch args[0] {
+	case "ca": // manages the local development CA
+		return true, runCA(args[1:], os.Stdout, tlspkg.DefaultTrust())
+	case "token": // manages access tokens
+		return true, runToken(args[1:], os.Stdout)
+	case "doctor": // checks that this machine can run the server
+		return true, runServerDoctor(args[1:], os.Stdout)
+	}
+	return false, nil
+}
+
+func run(parentCtx context.Context, args []string) error {
+	if handled, err := runSubcommand(args); handled {
+		return err
 	}
 
 	// Parse flags
@@ -107,6 +119,7 @@ func run(parentCtx context.Context, args []string) error {
 
 	// Auth
 	tokenFlag := fs.String("token", "", "Set a fixed auth token (default: auto-generated)")
+	tokensFile := fs.String("tokens-file", "", "Token file made with 'wirerift-server token create' (default: <cert-dir>/tokens.json)")
 
 	// Logging
 	verbose := fs.Bool("v", false, "Verbose logging")
@@ -191,6 +204,9 @@ Environment Variables:
 
 	// Create auth manager (flag > env > random)
 	authMgr := auth.NewManager(*tokenFlag)
+	if err := loadTokenFile(authMgr, tokenFilePath(*tokensFile, *certDir), logger); err != nil {
+		return err
+	}
 	devToken := authMgr.DevToken()
 
 	// Print connection info prominently
@@ -422,6 +438,18 @@ func txtResolverFor(addr string) (server.TXTResolver, error) {
 // configureCustomDomains prepares everything custom domains need on a regular
 // (non-dev) server: the persisted proof secret, the DNS resolver for the TXT
 // check, and https URLs when trusted (ACME) certificates are available.
+// loadTokenFile loads the token file into mgr and logs how many tokens it holds.
+func loadTokenFile(mgr *auth.Manager, path string, logger *slog.Logger) error {
+	n, err := mgr.LoadTokenFile(path)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		logger.Info("loaded tokens", "count", n, "file", path)
+	}
+	return nil
+}
+
 // startCertRenewal renews certificates in the background until ctx ends.
 func startCertRenewal(ctx context.Context, tlsMgr *tlspkg.Manager) {
 	if tlsMgr != nil {
