@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Security
+- Control port: an unauthenticated connection now has 10s to finish the TLS handshake, send the magic bytes and authenticate, then it is cut (idle connections used to hold a goroutine and a file descriptor forever), and it cannot open streams before authenticating
+- A tunnel request with an unknown or incomplete `auth` block (anything but `basic` with a username and password) is rejected instead of creating an unprotected tunnel
+- A tunnel client that stops crediting the send window can no longer pin an upload: writing a buffered request body (or WebSocket upgrade) into the tunnel stream now ends when the visitor disconnects, the tunnel closes, or after 3 minutes, and releases its share of the global body budget (before, one stalled request held it until the 5-minute session timeout)
+- Reserved subdomains (`www`, `api`, `admin`, `dashboard`, ...) can no longer be claimed by a tunnel
 - The redirect after a successful PIN no longer follows a request path starting with `//` or `/\` to another host
 
 ### Changed

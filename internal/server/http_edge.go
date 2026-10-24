@@ -153,7 +153,23 @@ func (s *Server) forwardHTTPRequest(w http.ResponseWriter, r *http.Request, sess
 		return
 	}
 
-	// 3. Serialize the HTTP request and write through the stream. The upload may
+	// 3. Stop waiting if the visitor goes away or the tunnel closes, so a slow
+	// or hung local app cannot pin this goroutine and its stream. This must be
+	// in place before the request is written: the write itself waits for window
+	// credit from the tunnel's client.
+	done := make(chan struct{})
+	defer close(done)
+	stopWatch := tunnel.watch(func() { _ = stream.Reset() }) // tunnel closed / expired
+	defer stopWatch()
+	go func() {
+		select {
+		case <-r.Context().Done():
+			_ = stream.Reset()
+		case <-done:
+		}
+	}()
+
+	// 4. Serialize the HTTP request and write through the stream. The upload may
 	// take as long as it likes while data keeps arriving.
 	var held *budgetBody
 	if r.Body != nil && r.Body != http.NoBody {
@@ -186,10 +202,14 @@ func (s *Server) forwardHTTPRequest(w http.ResponseWriter, r *http.Request, sess
 		writeEdgeError(w, r, http.StatusInternalServerError, "Failed to serialize request")
 		return
 	}
+	// A tunnel client that never credits the send window would otherwise hold
+	// the buffered body (and its share of the global budget) indefinitely.
+	writeTimer := time.AfterFunc(requestWriteTimeout, func() { _ = stream.Reset() })
 	_, err = stream.Write(head)
 	if err == nil && len(body) > 0 {
 		_, err = stream.Write(body)
 	}
+	writeTimer.Stop()
 	releaseBody()
 	if err != nil {
 		writeEdgeError(w, r, http.StatusBadGateway, "Failed to write request to stream")
@@ -197,20 +217,6 @@ func (s *Server) forwardHTTPRequest(w http.ResponseWriter, r *http.Request, sess
 	}
 
 	s.bytesIn.Add(int64(len(head)) + bodyLen)
-
-	// 4. Stop waiting if the visitor goes away, so a slow or hung local app
-	// cannot pin this goroutine and its stream.
-	done := make(chan struct{})
-	defer close(done)
-	stopWatch := tunnel.watch(func() { _ = stream.Reset() }) // tunnel closed / expired mid-response
-	defer stopWatch()
-	go func() {
-		select {
-		case <-r.Context().Done():
-			_ = stream.Reset()
-		case <-done:
-		}
-	}()
 
 	// 5. Parse the response head from the stream and stream the body back as it
 	// arrives (no full buffering), so large downloads, SSE and long polling work.
@@ -239,6 +245,10 @@ func (s *Server) forwardHTTPRequest(w http.ResponseWriter, r *http.Request, sess
 
 // responseHeadTimeout bounds how long the local app may take to start responding.
 const responseHeadTimeout = 2 * time.Minute
+
+// requestWriteTimeout bounds how long writing a buffered request into a tunnel
+// stream may take when the tunnel client is not crediting the send window.
+var requestWriteTimeout = 3 * time.Minute
 
 // countingReader adds the bytes read to a shared counter.
 type countingReader struct {
@@ -291,7 +301,13 @@ func (s *Server) forwardWebSocket(w http.ResponseWriter, r *http.Request, sessio
 		writeEdgeError(w, r, http.StatusInternalServerError, "Failed to serialize request")
 		return
 	}
-	if _, err := stream.Write(reqData); err != nil {
+	// Bound the write: it waits for window credit from the tunnel's client.
+	writeTimer := time.AfterFunc(requestWriteTimeout, func() { _ = stream.Reset() })
+	stopPreWatch := tunnel.watch(func() { _ = stream.Reset() })
+	_, err = stream.Write(reqData)
+	stopPreWatch()
+	writeTimer.Stop()
+	if err != nil {
 		writeEdgeError(w, r, http.StatusBadGateway, "Failed to write request")
 		return
 	}

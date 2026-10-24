@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -120,5 +121,62 @@ func TestCaptureHeadersIsBounded(t *testing.T) {
 	}
 	if limit := maxLoggedHeaderBytes + 2*len("…[truncated]"); total > limit {
 		t.Errorf("captured %d header bytes, want <= %d", total, limit)
+	}
+}
+
+// A tunnel client that stops crediting the send window must not be able to pin
+// an upload (and its share of the body budget) forever: the write is bounded
+// and also ends when the visitor goes away.
+func TestRequestBodyWriteToStalledTunnelIsBounded(t *testing.T) {
+	for _, tc := range []string{"timeout", "visitor gone"} {
+		t.Run(tc, func(t *testing.T) {
+			old := requestWriteTimeout
+			requestWriteTimeout = 300 * time.Millisecond
+			defer func() { requestWriteTimeout = old }()
+
+			s := New(DefaultConfig(), nil)
+			c1, c2 := net.Pipe()
+			defer c2.Close()
+			m := mux.New(c1, mux.DefaultConfig())
+			go m.Run()
+			defer m.Close()
+
+			// A peer that reads frames but never sends a window update.
+			go func() {
+				fr := proto.NewFrameReader(c2)
+				for {
+					if _, err := fr.Read(); err != nil {
+						return
+					}
+				}
+			}()
+
+			tunnel := &Tunnel{ID: "tun-stall", Type: proto.TunnelTypeHTTP, Subdomain: "stall", SessionID: "sess-stall", closed: make(chan struct{})}
+			session := &Session{ID: "sess-stall", AccountID: "a", Mux: m}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			req := httptest.NewRequest("POST", "http://stall.wirerift.com/up", bytes.NewReader(make([]byte, 2<<20))).WithContext(ctx)
+			req.Host = "stall.wirerift.com"
+			rr := httptest.NewRecorder()
+
+			if tc == "visitor gone" {
+				requestWriteTimeout = time.Minute
+				time.AfterFunc(200*time.Millisecond, cancel)
+			}
+			done := make(chan struct{})
+			go func() { s.forwardHTTPRequest(rr, req, session, tunnel); close(done) }()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("upload to a stalled tunnel was not cut")
+			}
+			if rr.Code != http.StatusBadGateway {
+				t.Errorf("code = %d, want 502", rr.Code)
+			}
+			if got := s.bodyBudget.used.Load(); got != 0 {
+				t.Errorf("budget still holds %d bytes", got)
+			}
+		})
 	}
 }
