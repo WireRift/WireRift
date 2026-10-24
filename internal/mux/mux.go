@@ -187,7 +187,7 @@ func (m *Mux) closeWithError(err error) error {
 	// Close all streams
 	m.streams.Range(func(key, value any) bool {
 		if stream, ok := value.(*Stream); ok {
-			stream.onResetFrame()
+			stream.onMuxClosed()
 		}
 		return true
 	})

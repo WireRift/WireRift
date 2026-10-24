@@ -1287,8 +1287,25 @@ func TestStreamReadMuxDone(t *testing.T) {
 
 	buf := make([]byte, 10)
 	_, err := stream.Read(buf)
-	if err != io.EOF {
-		t.Errorf("Expected io.EOF, got %v", err)
+	if err == nil || err == io.EOF {
+		t.Errorf("a stream cut off by a closing mux must not look like a clean EOF, got %v", err)
+	}
+}
+
+// A stream whose peer already finished sending still delivers its data and a
+// clean EOF after the connection goes away.
+func TestStreamFinishedBeforeMuxCloseEndsInEOF(t *testing.T) {
+	client, _ := newTestPipe(t)
+
+	stream := newStream(1, client, 1000)
+	client.streams.Store(uint32(1), stream)
+	_ = stream.onDataFrame([]byte("done"))
+	stream.onCloseFrame()
+	client.Close()
+
+	got, err := io.ReadAll(stream)
+	if err != nil || string(got) != "done" {
+		t.Fatalf("ReadAll = %q, %v; want \"done\", nil", got, err)
 	}
 }
 

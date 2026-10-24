@@ -92,6 +92,7 @@ func (s *Stream) SetMetadata(remoteAddr, protocol, tunnelID string) {
 
 // Read reads data from the stream. Blocks until data is available or stream is closed.
 func (s *Stream) Read(p []byte) (n int, err error) {
+	muxDone := false
 	for {
 		// Observe the state before draining the buffer: if the remote has
 		// already closed, any data it sent is guaranteed to be buffered by now,
@@ -110,12 +111,21 @@ func (s *Stream) Read(p []byte) (n int, err error) {
 			return 0, ErrStreamReset
 		}
 
+		if muxDone {
+			// The connection died before the peer finished this stream. That is
+			// a truncation, not a normal end: reporting io.EOF would let a
+			// close-delimited response or a TCP tunnel look complete.
+			return 0, io.ErrUnexpectedEOF
+		}
+
 		// Wait for data
 		select {
 		case <-s.readCh:
 			// Data available, continue loop
 		case <-s.mux.done:
-			return 0, io.EOF
+			// Go round once more: data and a peer close may have landed just
+			// before the connection went away.
+			muxDone = true
 		}
 	}
 }
@@ -339,6 +349,26 @@ func (s *Stream) onResetFrame() {
 	s.state.Store(streamStateReset)
 	defer s.cleanup()
 	s.wake()
+}
+
+// onMuxClosed is called when the whole connection goes away. A stream whose
+// peer already finished sending keeps its end-of-stream state, so the data it
+// received can still be read and then ends in a clean EOF; any other stream was
+// cut off and is reset.
+func (s *Stream) onMuxClosed() {
+	for {
+		state := s.state.Load()
+		if state == streamStateHalfClosedRemote || state == streamStateClosed || state == streamStateReset {
+			defer s.cleanup()
+			s.wake()
+			return
+		}
+		if s.state.CompareAndSwap(state, streamStateReset) {
+			defer s.cleanup()
+			s.wake()
+			return
+		}
+	}
 }
 
 // IsClosed returns true if the stream is fully closed.
