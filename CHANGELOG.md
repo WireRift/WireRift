@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-10-25
+
 ### Security
 - Control port: an unauthenticated connection now has 10s to finish the TLS handshake, send the magic bytes and authenticate, then it is cut (idle connections used to hold a goroutine and a file descriptor forever), and it cannot open streams before authenticating
 - Control port: at most 32 unauthenticated connections per IP and 1024 overall are held at once; further ones are dropped until others authenticate or time out
