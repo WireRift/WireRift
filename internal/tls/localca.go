@@ -16,6 +16,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -160,7 +161,7 @@ func createLocalCALocked(dir string) (*LocalCA, error) {
 			defer os.Remove(lock)
 			break
 		}
-		if !errors.Is(err, os.ErrExist) {
+		if !lockContended(err) {
 			return nil, fmt.Errorf("lock local CA dir: %w", err)
 		}
 		// Someone else is creating it: use their result once it is complete.
@@ -182,6 +183,13 @@ func createLocalCALocked(dir string) (*LocalCA, error) {
 		return ca, err
 	}
 	return createLocalCA(dir)
+}
+
+// lockContended reports whether err from creating the lock file means another
+// process holds (or is just deleting) it. Windows reports a lock file that is
+// pending deletion as "Access is denied" instead of "already exists".
+func lockContended(err error) bool {
+	return errors.Is(err, os.ErrExist) || (runtime.GOOS == "windows" && errors.Is(err, os.ErrPermission))
 }
 
 // fileExists reports whether path exists.

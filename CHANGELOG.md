@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Memory: the traffic inspector keeps at most 32 KB of headers per request and per response (credentials were already redacted)
 
 ### Fixed
+- Windows: creating the local dev CA from several processes at once could fail with "Access is denied" on the lock file; that is now treated as another process holding the lock and retried
 - ACME: a `badNonce` rejection is retried with a fresh nonce (up to 3 times) instead of failing the order, a missing `Replay-Nonce` is an error, and certificate, key and metadata files are written atomically so a crash cannot leave a torn file
 - `wirerift list` can reach a dashboard on another port or behind TLS (`-dashboard host:port|https://...` or `WIRERIFT_DASHBOARD`) and warns before sending the token over plain HTTP to a non-local host
 - Makefile test/lint/vet use the same package set as CI; the Docker image embeds its version (`--build-arg VERSION`); README: dashboard published on loopback in the `docker run` example, correct test and lint commands, no stale coverage table; the design documents say where they differ from the code
