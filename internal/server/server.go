@@ -496,12 +496,21 @@ func generateSubdomain() string {
 	return string(b)
 }
 
+// controlAuthTimeout bounds how long a control connection may stay
+// unauthenticated.
+var controlAuthTimeout = 10 * time.Second
+
 // handleControlConnection handles a control plane connection.
 func (s *Server) handleControlConnection(conn net.Conn) {
 	defer conn.Close()
 
 	remoteAddr := conn.RemoteAddr()
 	s.logger.Debug("control connection", "remote", remoteAddr)
+
+	// An unauthenticated peer gets controlAuthTimeout to finish the TLS
+	// handshake, the magic bytes and the auth frame; the deadline is lifted
+	// once it has authenticated.
+	_ = conn.SetReadDeadline(time.Now().Add(controlAuthTimeout))
 
 	// Read magic bytes
 	if err := proto.ReadMagic(conn); err != nil {
@@ -510,7 +519,9 @@ func (s *Server) handleControlConnection(conn net.Conn) {
 	}
 
 	// Create mux
-	m := mux.New(conn, mux.DefaultConfig())
+	muxCfg := mux.DefaultConfig()
+	m := mux.New(conn, muxCfg)
+	m.SetMaxStreams(0) // no streams before authentication
 	go func() { _ = m.Run() }()
 
 	// Authenticate
@@ -521,6 +532,8 @@ func (s *Server) handleControlConnection(conn net.Conn) {
 		return
 	}
 	defer s.removeSession(session.ID)
+	_ = conn.SetReadDeadline(time.Time{})
+	m.SetMaxStreams(muxCfg.MaxStreams)
 
 	s.logger.Info("session started", "id", session.ID, "remote", remoteAddr)
 
@@ -533,7 +546,7 @@ func (s *Server) handleControlConnection(conn net.Conn) {
 // handleAuth authenticates a client connection.
 func (s *Server) handleAuth(m *mux.Mux, remoteAddr net.Addr) (*Session, error) {
 	// Wait for auth frame with timeout
-	authTimer := time.NewTimer(10 * time.Second)
+	authTimer := time.NewTimer(controlAuthTimeout)
 	defer authTimer.Stop()
 
 	select {
@@ -686,6 +699,21 @@ func (s *Server) handleTunnelRequest(m *mux.Mux, session *Session, frame *proto.
 	}
 }
 
+// validateTunnelAuth rejects an auth block the edge would not enforce, so a
+// tunnel is never created unprotected by mistake.
+func validateTunnelAuth(a *proto.TunnelAuth) error {
+	if a == nil {
+		return nil
+	}
+	if a.Type != "basic" {
+		return fmt.Errorf("unsupported auth type %q", a.Type)
+	}
+	if a.Username == "" || a.Password == "" {
+		return errors.New("basic auth needs a username and a password")
+	}
+	return nil
+}
+
 // createHTTPTunnel handles HTTP tunnel creation.
 func (s *Server) createHTTPTunnel(m *mux.Mux, session *Session, req *proto.TunnelRequest, tunnelID string) {
 	// Subdomains are case-insensitive on the wire; normalize so "MyApp" and
@@ -697,6 +725,14 @@ func (s *Server) createHTTPTunnel(m *mux.Mux, session *Session, req *proto.Tunne
 
 	if !utils.IsValidSubdomain(subdomain) {
 		sendTunnelError(m, "invalid subdomain")
+		return
+	}
+	if utils.IsReservedSubdomain(subdomain) {
+		sendTunnelError(m, "subdomain is reserved")
+		return
+	}
+	if err := validateTunnelAuth(req.Auth); err != nil {
+		sendTunnelError(m, err.Error())
 		return
 	}
 

@@ -69,3 +69,14 @@ func TestIsAlphaNum(t *testing.T) {
 		}
 	}
 }
+
+func TestIsReservedSubdomain(t *testing.T) {
+	for _, s := range []string{"www", "api", "admin", "dashboard"} {
+		if !IsReservedSubdomain(s) {
+			t.Errorf("%q should be reserved", s)
+		}
+	}
+	if IsReservedSubdomain("myapp") {
+		t.Error("myapp should not be reserved")
+	}
+}

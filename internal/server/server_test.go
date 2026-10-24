@@ -5553,3 +5553,93 @@ func TestReplayRequestTimesOutWhenLocalAppHangs(t *testing.T) {
 		t.Fatal("ReplayRequest did not return although the local app never answers")
 	}
 }
+
+func TestHandleTunnelRequestRejectsUnsafeRequests(t *testing.T) {
+	cases := []struct {
+		name string
+		req  proto.TunnelRequest
+		want string
+	}{
+		{"reserved subdomain", proto.TunnelRequest{Subdomain: "admin"}, "reserved"},
+		{"auth without type", proto.TunnelRequest{Auth: &proto.TunnelAuth{Username: "u", Password: "p"}}, "unsupported auth type"},
+		{"unknown auth type", proto.TunnelRequest{Auth: &proto.TunnelAuth{Type: "digest", Username: "u", Password: "p"}}, "unsupported auth type"},
+		{"basic without password", proto.TunnelRequest{Auth: &proto.TunnelAuth{Type: "basic", Username: "u"}}, "username and a password"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.AuthManager = auth.NewManager()
+			s := New(cfg, nil)
+
+			c1, c2 := net.Pipe()
+			defer c2.Close()
+			m := mux.New(c1, mux.DefaultConfig())
+			go m.Run()
+			defer m.Close()
+
+			session := &Session{ID: "sess-unsafe", Tunnels: make(map[string]*Tunnel)}
+			tc.req.Type = proto.TunnelTypeHTTP
+			tc.req.LocalAddr = "localhost:8080"
+			frame, _ := proto.EncodeJSONPayload(proto.FrameTunnelReq, 0, &tc.req)
+			go s.handleTunnelRequest(m, session, frame)
+
+			respFrame, err := proto.NewFrameReader(c2).Read()
+			if err != nil {
+				t.Fatalf("read response: %v", err)
+			}
+			var res proto.TunnelResponse
+			proto.DecodeJSONPayload(respFrame, &res)
+			if res.OK || !strings.Contains(res.Error, tc.want) {
+				t.Fatalf("got OK=%v error=%q, want rejection containing %q", res.OK, res.Error, tc.want)
+			}
+			if len(session.Tunnels) != 0 {
+				t.Errorf("tunnel was created despite rejection")
+			}
+		})
+	}
+}
+
+func TestControlConnectionIdleIsCut(t *testing.T) {
+	old := controlAuthTimeout
+	controlAuthTimeout = 150 * time.Millisecond
+	defer func() { controlAuthTimeout = old }()
+
+	s := New(DefaultConfig(), nil)
+	c1, c2 := net.Pipe()
+	defer c2.Close()
+
+	done := make(chan struct{})
+	go func() { s.handleControlConnection(c1); close(done) }()
+
+	// The peer never sends the magic bytes.
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("idle unauthenticated control connection was not cut")
+	}
+}
+
+func TestControlConnectionNoStreamsBeforeAuth(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+	c1, c2 := net.Pipe()
+	defer c2.Close()
+	go s.handleControlConnection(c1)
+
+	if err := proto.WriteMagic(c2); err != nil {
+		t.Fatal(err)
+	}
+	fw := proto.NewFrameWriter(c2)
+	open, _ := proto.EncodeJSONPayload(proto.FrameStreamOpen, 2, &proto.StreamOpen{})
+	if err := fw.Write(open); err != nil {
+		t.Fatal(err)
+	}
+	// The server must answer with a reset instead of registering the stream.
+	_ = c2.SetReadDeadline(time.Now().Add(2 * time.Second))
+	f, err := proto.NewFrameReader(c2).Read()
+	if err != nil {
+		t.Fatalf("expected a reset frame: %v", err)
+	}
+	if f.Type != proto.FrameStreamRst {
+		t.Fatalf("got frame type %v, want stream reset", f.Type)
+	}
+}

@@ -42,6 +42,12 @@ func DefaultConfig() Config {
 	}
 }
 
+// SetMaxStreams changes the concurrent stream limit. A server sets 0 until the
+// peer has authenticated, so an unauthenticated peer cannot open streams.
+func (m *Mux) SetMaxStreams(n int) {
+	m.maxStreams.Store(int64(n))
+}
+
 // Mux is a stream multiplexer that carries multiple streams over a single connection.
 type Mux struct {
 	conn        net.Conn
@@ -61,6 +67,7 @@ type Mux struct {
 	err       atomic.Value // error that caused shutdown
 
 	streamCount   atomic.Int32 // number of registered streams
+	maxStreams    atomic.Int64 // current stream limit (see SetMaxStreams)
 	lastHeartbeat atomic.Int64 // unix nano of last heartbeat ack
 
 	maxFrameSize int
@@ -93,6 +100,7 @@ func New(conn net.Conn, config Config) *Mux {
 		done:         make(chan struct{}),
 		maxFrameSize: config.MaxFrameSize,
 	}
+	m.maxStreams.Store(int64(config.MaxStreams))
 	m.nextID = 2 // Start at 2 to avoid collision with ControlStreamID (0)
 
 	return m
@@ -106,7 +114,7 @@ func (m *Mux) OpenStream() (*Stream, error) {
 	default:
 	}
 
-	if int(m.streamCount.Load()) >= m.config.MaxStreams {
+	if int(m.streamCount.Load()) >= int(m.maxStreams.Load()) {
 		return nil, ErrTooManyStreams
 	}
 
@@ -134,7 +142,7 @@ const maxLocalStreamID = proto.MaxStreamID &^ 1
 // ordered connection) has been delivered. idMu must be held.
 func (m *Mux) allocIDLocked() (uint32, bool) {
 	// More live streams than this cannot exist, so the scan always ends.
-	for tries := 0; tries <= m.config.MaxStreams+1; tries++ {
+	for tries := 0; tries <= int(m.maxStreams.Load())+1; tries++ {
 		id := m.nextID
 		if id < 2 || id > maxLocalStreamID {
 			id = 2 // wrapped
@@ -295,7 +303,7 @@ func (m *Mux) handleStreamOpen(frame *proto.Frame) error {
 
 	// Reject IDs that would clobber a live stream, the control stream, and
 	// opens beyond the configured concurrency limit.
-	if frame.StreamID == proto.ControlStreamID || int(m.streamCount.Load()) >= m.config.MaxStreams {
+	if frame.StreamID == proto.ControlStreamID || int(m.streamCount.Load()) >= int(m.maxStreams.Load()) {
 		_ = m.sendStreamReset(frame.StreamID)
 		return nil
 	}
