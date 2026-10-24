@@ -113,6 +113,8 @@ func DefaultConfig() Config {
 
 // Server is the tunnel server.
 type Server struct {
+	pending pendingConns // control connections still unauthenticated
+
 	config      Config
 	logger      *slog.Logger
 	authManager *auth.Manager
@@ -507,6 +509,13 @@ func (s *Server) handleControlConnection(conn net.Conn) {
 	remoteAddr := conn.RemoteAddr()
 	s.logger.Debug("control connection", "remote", remoteAddr)
 
+	releasePending, ok := s.pending.acquire(remoteAddr)
+	if !ok {
+		s.logger.Warn("too many unauthenticated control connections", "remote", remoteAddr)
+		return
+	}
+	defer releasePending()
+
 	// An unauthenticated peer gets controlAuthTimeout to finish the TLS
 	// handshake, the magic bytes and the auth frame; the deadline is lifted
 	// once it has authenticated.
@@ -532,6 +541,7 @@ func (s *Server) handleControlConnection(conn net.Conn) {
 		return
 	}
 	defer s.removeSession(session.ID)
+	releasePending()
 	_ = conn.SetReadDeadline(time.Time{})
 	m.SetMaxStreams(muxCfg.MaxStreams)
 

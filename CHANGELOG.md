@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 - Control port: an unauthenticated connection now has 10s to finish the TLS handshake, send the magic bytes and authenticate, then it is cut (idle connections used to hold a goroutine and a file descriptor forever), and it cannot open streams before authenticating
+- Control port: at most 32 unauthenticated connections per IP and 1024 overall are held at once; further ones are dropped until others authenticate or time out
 - A tunnel request with an unknown or incomplete `auth` block (anything but `basic` with a username and password) is rejected instead of creating an unprotected tunnel
 - A tunnel client that stops crediting the send window can no longer pin an upload: writing a buffered request body (or WebSocket upgrade) into the tunnel stream now ends when the visitor disconnects, the tunnel closes, or after 3 minutes, and releases its share of the global body budget (before, one stalled request held it until the 5-minute session timeout)
 - Reserved subdomains (`www`, `api`, `admin`, `dashboard`, ...) can no longer be claimed by a tunnel
@@ -22,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Memory: the traffic inspector keeps at most 32 KB of headers per request and per response (credentials were already redacted)
 
 ### Fixed
+- ACME: a `badNonce` rejection is retried with a fresh nonce (up to 3 times) instead of failing the order, a missing `Replay-Nonce` is an error, and certificate, key and metadata files are written atomically so a crash cannot leave a torn file
 - `wirerift list` can reach a dashboard on another port or behind TLS (`-dashboard host:port|https://...` or `WIRERIFT_DASHBOARD`) and warns before sending the token over plain HTTP to a non-local host
 - Makefile test/lint/vet use the same package set as CI; the Docker image embeds its version (`--build-arg VERSION`); README: dashboard published on loopback in the `docker run` example, correct test and lint commands, no stale coverage table; the design documents say where they differ from the code
 - Mux: a connection lost mid-stream is no longer reported as a clean end of stream (`io.EOF`), so close-delimited responses and TCP tunnels cannot look complete when they were cut short; a stream whose peer had already finished still delivers its data and ends in EOF
