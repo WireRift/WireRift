@@ -91,6 +91,12 @@ type Client struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+
+	// failed is closed, with failErr set, when the client gave up for good
+	// (the server rejected the token), so callers do not wait on a dead client.
+	failed   chan struct{}
+	failOnce sync.Once
+	failErr  error
 }
 
 // Tunnel represents an active tunnel.
@@ -119,6 +125,7 @@ func New(config Config, logger *slog.Logger) *Client {
 		logger: logger,
 		ctx:    ctx,
 		cancel: cancel,
+		failed: make(chan struct{}),
 		httpClient: &http.Client{
 			// No overall Timeout: it would also cap body streaming and cut off
 			// large downloads/SSE. Bound connect and time-to-first-byte instead.
@@ -135,6 +142,27 @@ func New(config Config, logger *slog.Logger) *Client {
 			},
 		},
 	}
+}
+
+// Failed returns a channel that is closed when the client has given up for good
+// and will not reconnect; Err then says why.
+func (c *Client) Failed() <-chan struct{} { return c.failed }
+
+// Err returns the reason the client gave up, or nil while it is still running.
+func (c *Client) Err() error {
+	select {
+	case <-c.failed:
+		return c.failErr
+	default:
+		return nil
+	}
+}
+
+func (c *Client) fail(err error) {
+	c.failOnce.Do(func() {
+		c.failErr = err
+		close(c.failed)
+	})
 }
 
 // Connect connects to the tunnel server.
@@ -591,6 +619,12 @@ func (c *Client) reconnectLoop() {
 			}
 
 			if err := c.connect(); err != nil {
+				if errors.Is(err, ErrAuthFailed) {
+					// Retrying cannot help: the token was revoked or changed.
+					c.logger.Error("server rejected the token; giving up", "error", err)
+					c.fail(err)
+					return
+				}
 				c.logger.Warn("reconnect failed", "error", err)
 				interval = interval * 2
 				if interval > c.config.MaxReconnectInterval {

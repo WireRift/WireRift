@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -2620,5 +2621,48 @@ func TestConnectAfterCloseDoesNotLeakConnection(t *testing.T) {
 	case <-done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("goroutine left running after connect on a closed client")
+	}
+}
+
+// When the server starts rejecting the token (revoked or changed), reconnecting
+// cannot succeed: the client must give up and say why instead of retrying
+// forever while looking alive.
+func TestReconnectGivesUpWhenTokenIsRejected(t *testing.T) {
+	server := newMockServer(t)
+
+	cfg := DefaultConfig()
+	cfg.ServerAddr = server.addr
+	cfg.Token = server.token
+	cfg.Reconnect = true
+	cfg.ReconnectInterval = 20 * time.Millisecond
+	cfg.MaxReconnectInterval = 40 * time.Millisecond
+
+	c := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := c.Connect(); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer c.Close()
+
+	// Same address, but now a different token is the valid one.
+	server.Close()
+	l, err := net.Listen("tcp", server.addr)
+	if err != nil {
+		t.Skipf("could not reuse the address: %v", err)
+	}
+	other := &mockServer{listener: l, addr: server.addr, token: "rotated", tunnels: map[string]*Tunnel{}}
+	go other.serve()
+	defer other.Close()
+
+	if err := c.currentMux().Close(); err != nil {
+		t.Logf("mux close: %v", err)
+	}
+
+	select {
+	case <-c.Failed():
+	case <-time.After(5 * time.Second):
+		t.Fatal("client kept retrying with a rejected token")
+	}
+	if !errors.Is(c.Err(), ErrAuthFailed) {
+		t.Errorf("Err() = %v, want ErrAuthFailed", c.Err())
 	}
 }

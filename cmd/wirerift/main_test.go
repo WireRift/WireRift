@@ -1770,10 +1770,13 @@ func TestTTLOptions(t *testing.T) {
 }
 
 func TestWaitUntilDone(t *testing.T) {
+	c := client.New(client.Config{}, nil)
+	defer c.Close()
+
 	// No deadline: waits for the context.
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { waitUntilDone(ctx, &client.Tunnel{}); close(done) }()
+	go func() { _ = waitUntilDone(ctx, c, &client.Tunnel{}); close(done) }()
 	select {
 	case <-done:
 		t.Fatal("returned before the context ended")
@@ -1788,7 +1791,7 @@ func TestWaitUntilDone(t *testing.T) {
 
 	// Deadline: returns by itself when the tunnel expires.
 	start := time.Now()
-	waitUntilDone(context.Background(), &client.Tunnel{ExpiresAt: time.Now().Add(150 * time.Millisecond)})
+	_ = waitUntilDone(context.Background(), c, &client.Tunnel{ExpiresAt: time.Now().Add(150 * time.Millisecond)})
 	if d := time.Since(start); d < 100*time.Millisecond || d > 2*time.Second {
 		t.Errorf("returned after %v", d)
 	}

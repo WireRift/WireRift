@@ -330,9 +330,9 @@ func doHTTP(parentCtx context.Context, args []string) error {
 	}
 
 	// Wait for context (or the tunnel's time limit)
-	waitUntilDone(ctx, tunnel)
+	err = waitUntilDone(ctx, c, tunnel)
 	c.Close()
-	return nil
+	return err
 }
 
 // doTCP creates a TCP tunnel.
@@ -413,9 +413,9 @@ func doTCP(parentCtx context.Context, args []string) error {
 	fmt.Printf("TCP tunnel created: %s:%d -> localhost:%d\n", serverHost(opts.server), tunnel.Port, localPort)
 
 	// Wait for context (or the tunnel's time limit)
-	waitUntilDone(ctx, tunnel)
+	err = waitUntilDone(ctx, c, tunnel)
 	c.Close()
-	return nil
+	return err
 }
 
 // doStart starts tunnels from a config file.
@@ -546,9 +546,14 @@ func doStart(parentCtx context.Context, args []string) error {
 	}
 	fmt.Println("Press Ctrl+C to stop.")
 
-	<-ctx.Done()
+	var waitErr error
+	select {
+	case <-ctx.Done():
+	case <-c.Failed():
+		waitErr = c.Err()
+	}
 	c.Close()
-	return nil
+	return waitErr
 }
 
 // validateTunnelConfigs checks every configured tunnel before anything is
@@ -833,12 +838,12 @@ func doServe(parentCtx context.Context, args []string) error {
 
 	fmt.Printf("Serving %s at %s\n", dir, tunnel.PublicURL)
 
-	waitUntilDone(ctx, tunnel)
+	waitErr := waitUntilDone(ctx, c, tunnel)
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 	_ = fileSrv.Shutdown(shutdownCtx)
 	c.Close()
-	return nil
+	return waitErr
 }
 
 // doList lists active tunnels.
@@ -1042,20 +1047,24 @@ func ttlOptions(ttl time.Duration) ([]client.HTTPOption, error) {
 	return []client.HTTPOption{client.WithTTL(ttl)}, nil
 }
 
-// waitUntilDone blocks until ctx ends or, for a time-limited tunnel, until the
-// server closes it at its deadline.
-func waitUntilDone(ctx context.Context, tunnel *client.Tunnel) {
-	if tunnel.ExpiresAt.IsZero() {
-		<-ctx.Done()
-		return
+// waitUntilDone blocks until ctx ends, until the client gives up (the server
+// rejected its token) or, for a time-limited tunnel, until the server closes
+// the tunnel at its deadline. It returns the client's error in the second case.
+func waitUntilDone(ctx context.Context, c *client.Client, tunnel *client.Tunnel) error {
+	var expired <-chan time.Time
+	if !tunnel.ExpiresAt.IsZero() {
+		remaining := time.Until(tunnel.ExpiresAt)
+		fmt.Printf("Expires: %s (in %s)\n", tunnel.ExpiresAt.Local().Format("15:04:05"), remaining.Round(time.Second))
+		timer := time.NewTimer(remaining)
+		defer timer.Stop()
+		expired = timer.C
 	}
-	remaining := time.Until(tunnel.ExpiresAt)
-	fmt.Printf("Expires: %s (in %s)\n", tunnel.ExpiresAt.Local().Format("15:04:05"), remaining.Round(time.Second))
-	timer := time.NewTimer(remaining)
-	defer timer.Stop()
 	select {
 	case <-ctx.Done():
-	case <-timer.C:
+	case <-c.Failed():
+		return c.Err()
+	case <-expired:
 		fmt.Println("Tunnel expired (ttl reached); closing")
 	}
+	return nil
 }
