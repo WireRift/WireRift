@@ -9,7 +9,13 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -137,4 +143,70 @@ func TestACMEOrderSlotsAreBoundedNotExclusive(t *testing.T) {
 		t.Fatalf("slot after release: %v", err)
 	}
 	release()
+}
+
+func newPostTestACME(t *testing.T, handler http.HandlerFunc) *ACMEManager {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	return &ACMEManager{
+		directory:  acmeDirectory{NewNonce: srv.URL + "/nonce"},
+		account:    &acmeAccount{Key: key},
+		httpClient: srv.Client(),
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		certDir:    t.TempDir(),
+	}
+}
+
+// A badNonce rejection is retried with a fresh nonce instead of failing the order.
+func TestSignedPostRetriesBadNonce(t *testing.T) {
+	var posts atomic.Int32
+	m := newPostTestACME(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/nonce" {
+			w.Header().Set("Replay-Nonce", "n")
+			return
+		}
+		if posts.Add(1) == 1 {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"type":"urn:ietf:params:acme:error:badNonce"}`))
+			return
+		}
+		_, _ = w.Write([]byte("ok"))
+	})
+	resp, err := m.signedPost(context.Background(), m.directory.NewNonce+"/x", nil)
+	if err != nil || string(resp.body) != "ok" || posts.Load() != 2 {
+		t.Fatalf("resp=%v err=%v posts=%d, want ok after one retry", resp, err, posts.Load())
+	}
+}
+
+func TestSignedPostGivesUpOnPersistentErrorsAndMissingNonce(t *testing.T) {
+	m := newPostTestACME(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/nonce" {
+			w.Header().Set("Replay-Nonce", "n")
+			return
+		}
+		w.WriteHeader(http.StatusForbidden)
+	})
+	if _, err := m.signedPost(context.Background(), m.directory.NewNonce+"/x", nil); err == nil {
+		t.Error("a 403 must not be retried into success")
+	}
+
+	m = newPostTestACME(t, func(w http.ResponseWriter, r *http.Request) {})
+	if _, err := m.getNonce(context.Background()); err == nil {
+		t.Error("an empty Replay-Nonce must be an error")
+	}
+}
+
+func TestSaveCertBundleLeavesNoTempFiles(t *testing.T) {
+	m := newPostTestACME(t, func(http.ResponseWriter, *http.Request) {})
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	b := &CertificateBundle{CertPEM: []byte("pem"), PrivateKey: key, Domains: []string{"a.test"}, IssuedAt: time.Now(), ExpiresAt: time.Now()}
+	if err := m.saveCertBundle("a.test", b); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := os.ReadDir(m.certDir)
+	if len(entries) != 3 {
+		t.Errorf("want exactly the .crt/.key/.json files, got %d entries", len(entries))
+	}
 }

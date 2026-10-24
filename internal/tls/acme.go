@@ -461,6 +461,21 @@ type acmeResponse struct {
 }
 
 func (m *ACMEManager) signedPost(ctx context.Context, url string, payload []byte) (*acmeResponse, error) {
+	// A nonce can be rejected as stale or already used (badNonce); the server
+	// expects the client to simply retry with a fresh one.
+	var resp *acmeResponse
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		if resp, err = m.signedPostOnce(ctx, url, payload); !errors.Is(err, errBadNonce) {
+			break
+		}
+	}
+	return resp, err
+}
+
+var errBadNonce = errors.New("ACME badNonce")
+
+func (m *ACMEManager) signedPostOnce(ctx context.Context, url string, payload []byte) (*acmeResponse, error) {
 	// Get nonce
 	nonce, err := m.getNonce(ctx)
 	if err != nil {
@@ -528,6 +543,9 @@ func (m *ACMEManager) signedPost(ctx context.Context, url string, payload []byte
 	}
 
 	if resp.StatusCode >= 400 {
+		if resp.StatusCode == http.StatusBadRequest && strings.Contains(string(body), "urn:ietf:params:acme:error:badNonce") {
+			return nil, fmt.Errorf("%w: %s", errBadNonce, string(body))
+		}
 		return nil, fmt.Errorf("ACME error %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -547,7 +565,11 @@ func (m *ACMEManager) getNonce(ctx context.Context) (string, error) {
 		return "", err
 	}
 	resp.Body.Close()
-	return resp.Header.Get("Replay-Nonce"), nil
+	nonce := resp.Header.Get("Replay-Nonce")
+	if nonce == "" {
+		return "", errors.New("ACME server returned no Replay-Nonce")
+	}
+	return nonce, nil
 }
 
 func (m *ACMEManager) registerAccount() error {
@@ -628,14 +650,14 @@ func (m *ACMEManager) saveCertBundle(domain string, bundle *CertificateBundle) e
 	keyPath := filepath.Join(m.certDir, domain+".key")
 
 	// Save cert chain
-	if err := os.WriteFile(certPath, bundle.CertPEM, 0600); err != nil {
+	if err := writeFileAtomicMode(certPath, bundle.CertPEM, 0600); err != nil {
 		return err
 	}
 
 	// Save private key
 	keyDER, _ := x509.MarshalECPrivateKey(bundle.PrivateKey)
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
-	if err := os.WriteFile(keyPath, keyPEM, 0600); err != nil {
+	if err := writeFileAtomicMode(keyPath, keyPEM, 0600); err != nil {
 		return err
 	}
 
@@ -646,7 +668,7 @@ func (m *ACMEManager) saveCertBundle(domain string, bundle *CertificateBundle) e
 		"expires_at": bundle.ExpiresAt.Format(time.RFC3339),
 	}
 	metaJSON, _ := json.MarshalIndent(meta, "", "  ")
-	if err := os.WriteFile(filepath.Join(m.certDir, domain+".json"), metaJSON, 0600); err != nil {
+	if err := writeFileAtomicMode(filepath.Join(m.certDir, domain+".json"), metaJSON, 0600); err != nil {
 		m.logger.Warn("failed to save certificate metadata", "domain", domain, "error", err)
 	}
 
