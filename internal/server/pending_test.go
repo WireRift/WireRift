@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"net"
 	"testing"
 )
@@ -47,5 +48,44 @@ func TestPendingConnsTotalLimit(t *testing.T) {
 	}
 	if _, ok := p.acquire(&net.TCPAddr{IP: net.ParseIP("192.168.0.1"), Port: 1}); ok {
 		t.Fatal("total limit not enforced")
+	}
+}
+
+// A port of the range that another program already listens on is skipped; the
+// tunnel only fails when none can be bound.
+func TestListenTunnelPortSkipsBusyPorts(t *testing.T) {
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skip(err)
+	}
+	base := probe.Addr().(*net.TCPAddr).Port
+	probe.Close()
+
+	cfg := DefaultConfig()
+	cfg.TCPAddrRange = fmt.Sprintf("%d-%d", base, base+2)
+	cfg.TCPBindHost = "127.0.0.1"
+	s := New(cfg, nil)
+
+	for _, p := range []int{base, base + 1} {
+		l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", p))
+		if err != nil {
+			t.Skipf("port %d not free: %v", p, err)
+		}
+		defer l.Close()
+	}
+
+	l, port, err := s.listenTunnelPort()
+	if err != nil {
+		t.Fatalf("a free port was left: %v", err)
+	}
+	defer l.Close()
+	if port != base+2 {
+		t.Errorf("got port %d, want the only free one %d", port, base+2)
+	}
+
+	l2, _, err := s.listenTunnelPort()
+	if err == nil {
+		l2.Close()
+		t.Fatal("expected an error when every port is taken")
 	}
 }

@@ -813,9 +813,15 @@ func (s *Server) createHTTPTunnel(m *mux.Mux, session *Session, req *proto.Tunne
 
 // createTCPTunnel handles TCP tunnel creation.
 func (s *Server) createTCPTunnel(m *mux.Mux, session *Session, req *proto.TunnelRequest, tunnelID string) {
-	port, err := s.allocatePort()
+	// Bind before announcing success so a listen failure is reported.
+	listener, port, err := s.listenTunnelPort()
 	if err != nil {
-		sendTunnelError(m, "no ports available")
+		if errors.Is(err, ErrPortUnavailable) {
+			sendTunnelError(m, "no ports available")
+			return
+		}
+		s.logger.Error("failed to start TCP tunnel listener", "error", err)
+		sendTunnelError(m, "failed to bind tunnel port")
 		return
 	}
 
@@ -830,15 +836,6 @@ func (s *Server) createTCPTunnel(m *mux.Mux, session *Session, req *proto.Tunnel
 		CreatedAt:  time.Now(),
 		ExpiresAt:  expiryFor(req.TTLSeconds),
 		closed:     make(chan struct{}),
-	}
-
-	// Bind before announcing success so a listen failure is reported.
-	listener, err := net.Listen("tcp", s.tcpListenAddr(port))
-	if err != nil {
-		s.releasePort(port)
-		s.logger.Error("failed to start TCP tunnel listener", "port", port, "error", err)
-		sendTunnelError(m, "failed to bind tunnel port")
-		return
 	}
 	tunnel.listener = listener
 	tunnel.stop = make(chan struct{})
@@ -873,6 +870,35 @@ func (s *Server) createTCPTunnel(m *mux.Mux, session *Session, req *proto.Tunnel
 	_ = m.GetFrameWriter().Write(respFrame)
 
 	s.logger.Info("tunnel created", "id", tunnelID, "type", "tcp", "port", port)
+}
+
+// maxTunnelBindAttempts bounds how many ports of the range are tried when some
+// are taken by other programs (a busy range is common: it overlaps the OS's
+// ephemeral ports).
+const maxTunnelBindAttempts = 16
+
+// listenTunnelPort reserves a free port of the range and listens on it. A port
+// that cannot be bound is skipped, so one foreign listener does not fail the
+// tunnel while the rest of the range is free.
+func (s *Server) listenTunnelPort() (net.Listener, int, error) {
+	var lastErr error
+	for attempt := 0; attempt < maxTunnelBindAttempts; attempt++ {
+		port, err := s.allocatePort()
+		if err != nil {
+			if lastErr != nil {
+				return nil, 0, lastErr
+			}
+			return nil, 0, err
+		}
+		listener, err := net.Listen("tcp", s.tcpListenAddr(port))
+		if err == nil {
+			return listener, port, nil
+		}
+		s.releasePort(port)
+		s.logger.Warn("tunnel port unavailable, trying the next one", "port", port, "error", err)
+		lastErr = err
+	}
+	return nil, 0, lastErr
 }
 
 // handleTunnelClose processes a tunnel close request.
