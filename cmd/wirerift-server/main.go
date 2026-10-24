@@ -291,6 +291,8 @@ Environment Variables:
 	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
 
+	startCertRenewal(ctx, tlsMgr)
+
 	// Handle signals
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
@@ -420,6 +422,13 @@ func txtResolverFor(addr string) (server.TXTResolver, error) {
 // configureCustomDomains prepares everything custom domains need on a regular
 // (non-dev) server: the persisted proof secret, the DNS resolver for the TXT
 // check, and https URLs when trusted (ACME) certificates are available.
+// startCertRenewal renews certificates in the background until ctx ends.
+func startCertRenewal(ctx context.Context, tlsMgr *tlspkg.Manager) {
+	if tlsMgr != nil {
+		tlsMgr.StartRenewal(ctx, tlspkg.RenewalCheckInterval)
+	}
+}
+
 func configureCustomDomains(cfg *server.Config, tlsMgr *tlspkg.Manager, certDir, dnsServer, httpsAddr string) error {
 	secret, err := loadOrCreateDomainSecret(certDir)
 	if err != nil {

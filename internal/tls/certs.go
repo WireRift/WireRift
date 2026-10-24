@@ -197,6 +197,13 @@ func (m *Manager) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, 
 		m.dropCert(host)
 	}
 
+	return m.issueCoalesced(hello.Context(), host)
+}
+
+// issueCoalesced runs one issuance for host, shared by every concurrent caller.
+// parent supplies values only (nil is fine): the order must not be cancelled
+// when the first caller goes away.
+func (m *Manager) issueCoalesced(parent context.Context, host string) (*tls.Certificate, error) {
 	// Coalesce concurrent issuances for the same host: parallel handshakes
 	// for one uncached host must run a single disk load / ACME order, not
 	// one per connection.
@@ -228,7 +235,6 @@ func (m *Manager) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, 
 
 	// The order is shared by every coalesced waiter, so it must not die with
 	// the first client's connection: detach from that client's cancellation.
-	parent := hello.Context()
 	if parent == nil {
 		parent = context.Background() // a hand-built ClientHelloInfo has no context
 	}
@@ -237,6 +243,64 @@ func (m *Manager) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, 
 	cert, err := m.issueCertificate(ctx, host)
 	call.cert, call.err = cert, err
 	return cert, err
+}
+
+// RenewalCheckInterval is how often StartRenewal looks for certificates that
+// have entered the renewal window.
+const RenewalCheckInterval = 12 * time.Hour
+
+// StartRenewal renews certificates in the background until ctx ends, so a
+// certificate is replaced before the first visitor after the renewal window
+// opens has to wait for (or lose to) an ACME order. Only hosts that are still
+// allowed are renewed; a failed renewal keeps serving the old certificate and
+// is retried at the next tick.
+func (m *Manager) StartRenewal(ctx context.Context, every time.Duration) {
+	if m.acme == nil || every <= 0 {
+		return
+	}
+	go func() {
+		t := time.NewTicker(every)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				m.renewDue(ctx)
+			}
+		}
+	}()
+}
+
+// renewDue renews every cached certificate that is inside the renewal window.
+func (m *Manager) renewDue(ctx context.Context) {
+	due := map[string]*tls.Certificate{}
+	m.certs.Range(func(k, v any) bool {
+		if c := v.(*tls.Certificate); !certUsable(c) && certNotExpired(c) {
+			due[k.(string)] = c
+		}
+		return true
+	})
+	for host, old := range due {
+		if ctx.Err() != nil {
+			return
+		}
+		if _, err := m.normalizeHost(host); err != nil {
+			continue // no longer a host we serve
+		}
+		m.dropCert(host)
+		cert, err := m.issueCoalesced(ctx, host)
+		// A failed order leaves a retry time behind and may have produced a
+		// self-signed stand-in; the old certificate is still valid and better.
+		if _, backoff := m.retryAfter.Load(host); err != nil || backoff {
+			if err != nil {
+				slog.Warn("certificate renewal failed", "host", host, "error", err)
+			}
+			m.storeCert(host, old)
+			continue
+		}
+		m.storeCert(host, cert)
+	}
 }
 
 // fallbackExpired reports (and clears) a finished retry window for a host that

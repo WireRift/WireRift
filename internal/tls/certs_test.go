@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -1076,7 +1077,30 @@ func mockACMEServerForCerts(t *testing.T) *httptest.Server {
 		})
 	})
 
+	// The finalize call carries the client's CSR inside the JWS payload; the
+	// certificate handed out afterwards must be for the CSR's key, or the
+	// client rejects it ("private key does not match public key").
+	var csrMu sync.Mutex
+	var csr *x509.CertificateRequest
+
 	mux.HandleFunc("/finalize", func(w http.ResponseWriter, r *http.Request) {
+		var jws struct {
+			Payload string `json:"payload"`
+		}
+		var body struct {
+			CSR string `json:"csr"`
+		}
+		if json.NewDecoder(r.Body).Decode(&jws) == nil {
+			if raw, err := base64.RawURLEncoding.DecodeString(jws.Payload); err == nil && json.Unmarshal(raw, &body) == nil {
+				if der, err := base64.RawURLEncoding.DecodeString(body.CSR); err == nil {
+					if parsed, err := x509.ParseCertificateRequest(der); err == nil {
+						csrMu.Lock()
+						csr = parsed
+						csrMu.Unlock()
+					}
+				}
+			}
+		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(acmeOrder{
 			Status:      "valid",
@@ -1086,15 +1110,25 @@ func mockACMEServerForCerts(t *testing.T) *httptest.Server {
 
 	mux.HandleFunc("/cert", func(w http.ResponseWriter, r *http.Request) {
 		// Issue a cert signed by our CA
-		certKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		var pub any
+		dnsNames := []string{"acmetest.test.local"}
+		csrMu.Lock()
+		if csr != nil {
+			pub, dnsNames = csr.PublicKey, csr.DNSNames
+		}
+		csrMu.Unlock()
+		if pub == nil {
+			certKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			pub = &certKey.PublicKey
+		}
 		serial, _ := rand.Int(rand.Reader, big.NewInt(1000))
 		tmpl := &x509.Certificate{
 			SerialNumber: serial,
 			NotBefore:    time.Now(),
 			NotAfter:     time.Now().Add(90 * 24 * time.Hour),
-			DNSNames:     []string{"acmetest.test.local"},
+			DNSNames:     dnsNames,
 		}
-		certDER, _ := x509.CreateCertificate(rand.Reader, tmpl, caTemplate, &certKey.PublicKey, caKey)
+		certDER, _ := x509.CreateCertificate(rand.Reader, tmpl, caTemplate, pub, caKey)
 		certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
 		caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
 		w.Header().Set("Content-Type", "application/pem-certificate-chain")

@@ -15,11 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The redirect after a successful PIN no longer follows a request path starting with `//` or `/\` to another host
 
 ### Changed
+- TLS: certificates are renewed in the background (checked every 12 hours) once they enter the 14-day window, instead of by the first visitor after it opens; a failed renewal keeps serving the old, still valid certificate. The recorded expiry now comes from the certificate itself rather than a fixed 90 days, and several ACME orders may run at once, so one host's slow challenge no longer holds up every other first handshake
+- Client: when the server rejects the token on a reconnect (revoked or changed), the client stops retrying, and `wirerift` exits with the error instead of staying up serving nothing
 - Memory: a stream no longer preallocates its 256 KB receive window (it starts at 4 KB and grows as data arrives), so a peer opening thousands of idle streams costs ~40 MB instead of ~2.5 GB; a `WindowSize` above the 16 MB buffer limit is clamped instead of silently dropping data
 - Memory: request bodies buffered for tunneling are capped across all in-flight requests (`Config.MaxBufferedBodyBytes`, default 256 MB); beyond it new uploads get `503` with `Retry-After` instead of exhausting memory. The body is also no longer copied a third time when sent
 - Memory: the traffic inspector keeps at most 32 KB of headers per request and per response (credentials were already redacted)
 
 ### Fixed
+- Mux: a connection lost mid-stream is no longer reported as a clean end of stream (`io.EOF`), so close-delimited responses and TCP tunnels cannot look complete when they were cut short; a stream whose peer had already finished still delivers its data and ends in EOF
 - Mux: stream IDs are now reused. A session used to refuse every new stream (all requests 502) after ~8.4M streams because IDs only counted up; the allocator now wraps round the 24-bit space and skips IDs still in use, so a long-lived tunnel never runs out
 - Mux: send-window credit could be lost for good when the peer's window update arrived before the sender had debited its window, eventually stalling a long-lived stream; concurrent writers could also overdraw the window and get the stream reset. The window is now reserved before the frame is sent
 - Client: tunnels that could not be re-created after a reconnect are kept and retried on the next reconnect instead of being dropped (the client stayed "connected" but served nothing); a connection that drops again mid re-creation no longer sits through the retry backoff

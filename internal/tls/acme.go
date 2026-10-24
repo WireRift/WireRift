@@ -90,8 +90,12 @@ type ACMEManager struct {
 	// HTTP-01 challenge responses: token -> keyAuth
 	challenges sync.Map
 
-	// Pending certificates being issued
-	mu sync.Mutex
+	// orderSlots bounds concurrent orders. Orders share no mutable state (the
+	// account is read-only after init, nonces are fetched per request, challenge
+	// tokens are unique), so one host's slow HTTP-01 challenge must not make
+	// every other first handshake wait behind it.
+	orderSlotsOnce sync.Once
+	orderSlots     chan struct{}
 
 	httpClient *http.Client
 }
@@ -166,10 +170,26 @@ func (m *ACMEManager) Initialize() error {
 	return nil
 }
 
+// maxConcurrentOrders is how many certificate orders may run at once.
+const maxConcurrentOrders = 4
+
+func (m *ACMEManager) acquireOrderSlot(ctx context.Context) (func(), error) {
+	m.orderSlotsOnce.Do(func() { m.orderSlots = make(chan struct{}, maxConcurrentOrders) })
+	select {
+	case m.orderSlots <- struct{}{}:
+		return func() { <-m.orderSlots }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 // ObtainCertificate requests a certificate for the given domains.
 func (m *ACMEManager) ObtainCertificate(ctx context.Context, domains []string) (*CertificateBundle, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	release, err := m.acquireOrderSlot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 
 	m.logger.Info("requesting certificate", "domains", domains)
 
@@ -286,7 +306,7 @@ func (m *ACMEManager) ObtainCertificate(ctx context.Context, domains []string) (
 		PrivateKey: certKey,
 		Domains:    domains,
 		IssuedAt:   time.Now(),
-		ExpiresAt:  time.Now().Add(90 * 24 * time.Hour), // Let's Encrypt standard
+		ExpiresAt:  certificateNotAfter(certResp.body, time.Now().Add(90*24*time.Hour)),
 	}
 
 	// 7. Save to disk
@@ -316,6 +336,20 @@ func (b *CertificateBundle) TLSCertificate() (*cryptotls.Certificate, error) {
 		return nil, err
 	}
 	return &cert, nil
+}
+
+// certificateNotAfter returns the expiry of the first certificate in pemData,
+// or fallback when it cannot be parsed.
+func certificateNotAfter(pemData []byte, fallback time.Time) time.Time {
+	block, _ := pem.Decode(pemData)
+	if block == nil {
+		return fallback
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return fallback
+	}
+	return cert.NotAfter
 }
 
 // NeedsRenewal returns true if the certificate expires within 30 days.
