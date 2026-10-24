@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -846,12 +847,40 @@ func doServe(parentCtx context.Context, args []string) error {
 	return waitErr
 }
 
+// dashboardBaseURL returns the dashboard's base URL: the explicit address
+// (host:port, or a full http(s) URL) or, by default, port 4040 on the server's host.
+func dashboardBaseURL(server, explicit string) string {
+	switch {
+	case strings.Contains(explicit, "://"):
+		return strings.TrimRight(explicit, "/")
+	case explicit != "":
+		return "http://" + explicit
+	default:
+		return "http://" + net.JoinHostPort(serverHost(server), "4040")
+	}
+}
+
+// isLoopbackURL reports whether the URL's host is this machine.
+func isLoopbackURL(raw string) bool {
+	u, err := neturl.Parse(raw)
+	if err != nil {
+		return false
+	}
+	h := u.Hostname()
+	if h == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
+}
+
 // doList lists active tunnels.
 func doList(args []string) error {
 	fs := flag.NewFlagSet("list", flag.ContinueOnError)
 	server := fs.String("server", "", "Server address (default: localhost:4443)")
 	token := fs.String("token", "", "Authentication token")
 	jsonOutput := fs.Bool("json", false, "JSON output")
+	dashboard := fs.String("dashboard", "", "Dashboard address, host:port or http(s)://host:port (default: <server host>:4040, env WIRERIFT_DASHBOARD)")
 
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: wirerift list [options]\n\n")
@@ -873,7 +902,14 @@ func doList(args []string) error {
 	}
 
 	// Query the dashboard API
-	url := fmt.Sprintf("http://%s/api/tunnels", net.JoinHostPort(serverHost(opts.server), "4040"))
+	if *dashboard == "" {
+		*dashboard = os.Getenv("WIRERIFT_DASHBOARD")
+	}
+	base := dashboardBaseURL(opts.server, *dashboard)
+	if opts.token != "" && strings.HasPrefix(base, "http://") && !isLoopbackURL(base) {
+		fmt.Fprintf(os.Stderr, "Warning: sending the token over plain HTTP to %s; use -dashboard https://... if the dashboard has TLS\n", base)
+	}
+	url := base + "/api/tunnels"
 
 	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
 	if opts.token != "" {

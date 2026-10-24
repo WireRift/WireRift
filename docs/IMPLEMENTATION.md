@@ -1,5 +1,15 @@
 # WireRift — Implementation Guide
 
+> **Note (2026-10):** this is the original design document, not a description of
+> the current code. Known differences: there is a single shared token and account
+> (no `tk_` tokens, `token create|list|revoke` or `authtoken`); the dashboard is an
+> inline page in `internal/dashboard` (no `dist/` embed, no SSE stream); config is
+> `wirerift.yaml`/`.json` in the current directory (no TOML); certificate renewal is
+> a 12-hourly background check with a 14-day window; sessions are torn down at once
+> (no resume grace period or "503 Tunnel Offline"); no `GO_AWAY` is sent. Tunnels
+> cannot claim a small reserved set of subdomains (`www`, `api`, `admin`, ...).
+> See README.md and CHANGELOG.md for what is current.
+
 > **Companion to:** SPECIFICATION.md v1.0.0-draft  
 > **Purpose:** Defines build order, code patterns, implementation strategies, and technical recipes  
 > **Go Version:** 1.23+  

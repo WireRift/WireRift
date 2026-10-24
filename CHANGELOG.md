@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Memory: the traffic inspector keeps at most 32 KB of headers per request and per response (credentials were already redacted)
 
 ### Fixed
+- `wirerift list` can reach a dashboard on another port or behind TLS (`-dashboard host:port|https://...` or `WIRERIFT_DASHBOARD`) and warns before sending the token over plain HTTP to a non-local host
+- Makefile test/lint/vet use the same package set as CI; the Docker image embeds its version (`--build-arg VERSION`); README: dashboard published on loopback in the `docker run` example, correct test and lint commands, no stale coverage table; the design documents say where they differ from the code
 - Mux: a connection lost mid-stream is no longer reported as a clean end of stream (`io.EOF`), so close-delimited responses and TCP tunnels cannot look complete when they were cut short; a stream whose peer had already finished still delivers its data and ends in EOF
 - Mux: stream IDs are now reused. A session used to refuse every new stream (all requests 502) after ~8.4M streams because IDs only counted up; the allocator now wraps round the 24-bit space and skips IDs still in use, so a long-lived tunnel never runs out
 - Mux: send-window credit could be lost for good when the peer's window update arrived before the sender had debited its window, eventually stalling a long-lived stream; concurrent writers could also overdraw the window and get the stream reset. The window is now reserved before the frame is sent

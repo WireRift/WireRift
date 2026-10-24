@@ -578,11 +578,13 @@ curl -X POST -H "Authorization: Bearer TOKEN" http://localhost:4040/api/requests
 ```bash
 docker build -t wirerift-server .
 
+# The dashboard serves plain HTTP inside the container, so publish it on
+# loopback only (or put TLS in front of it with -dashboard-tls-cert/-key).
 docker run -d \
   -p 4443:4443 \
   -p 80:80 \
   -p 443:443 \
-  -p 4040:4040 \
+  -p 127.0.0.1:4040:4040 \
   -e WIRERIFT_TOKEN=my-secret \
   -v wirerift-certs:/data/certs \
   wirerift-server \
@@ -731,34 +733,23 @@ go test -bench=. ./internal/   # Micro-benchmarks
 ### Running Tests
 
 ```bash
-go test ./...                    # All unit tests (15 packages)
-go test -race ./...              # With race detector
-go test -cover ./...             # With coverage
+go test ./cmd/... ./internal/... ./test/integration/   # All unit + integration tests
+go test -race ./cmd/... ./internal/...                 # With race detector
+go test -cover ./cmd/... ./internal/...                # With coverage
 go run ./test/advanced/          # Advanced E2E suite (34 tests)
 go run ./test/benchmark/         # Benchmark suite
 ```
 
 ### Test Coverage
 
-| Package | Coverage |
-|---------|----------|
-| internal/auth | 100% |
-| internal/client | 100% |
-| internal/mux | 100% |
-| internal/proto | 100% |
-| internal/ratelimit | 100% |
-| internal/utils | 100% |
-| internal/server | 99.7% |
-| internal/dashboard | 99.3% |
-| internal/tls | 97.4% |
-| cmd/wirerift | 99.6% |
-| cmd/wirerift-server | 97.9% |
+CI requires at least 90% total statement coverage. Per-package numbers:
+`go test -cover ./cmd/... ./internal/...`
 
 ### Linting
 
 ```bash
-go vet ./...
-golangci-lint run ./...          # uses .golangci.yml config
+go vet ./cmd/... ./internal/...
+golangci-lint run ./cmd/... ./internal/...   # uses .golangci.yml config
 ```
 
 ---

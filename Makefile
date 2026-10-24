@@ -5,7 +5,9 @@ BINARY_CLIENT=wirerift
 VERSION?=1.10.1
 GO=go
 GOFLAGS=-v
-PACKAGES=$(shell go list ./... | grep -v /website/)
+# Same package set as CI (the website/ and standalone test/advanced, test/benchmark
+# programs are not part of it).
+PACKAGES=./cmd/... ./internal/...
 
 build: build-server build-client
 
@@ -16,7 +18,7 @@ build-client:
 	$(GO) build $(GOFLAGS) -ldflags="-s -w -X main.version=$(VERSION)" -o bin/$(BINARY_CLIENT) ./cmd/wirerift
 
 test:
-	$(GO) test $(GOFLAGS) $(PACKAGES) -timeout 120s
+	$(GO) test $(GOFLAGS) $(PACKAGES) ./test/integration/ -timeout 120s
 
 test-cover:
 	$(GO) test $(PACKAGES) -cover -timeout 120s
@@ -46,7 +48,7 @@ lint:
 	@which golangci-lint > /dev/null 2>&1 && golangci-lint run $(PACKAGES) || echo "golangci-lint not installed"
 
 docker:
-	docker build -t wirerift-server:$(VERSION) -t wirerift-server:latest .
+	docker build --build-arg VERSION=$(VERSION) -t wirerift-server:$(VERSION) -t wirerift-server:latest .
 
 release:
 	@mkdir -p dist

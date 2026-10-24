@@ -1,5 +1,7 @@
 # WireRift Comprehensive Go Codebase Audit Report
 
+> Historical report (2026-04-03). File paths such as `internal/config/domains.go` no longer exist; later changes are in CHANGELOG.md.
+
 **Date**: 2026-04-03
 **Auditor**: Claude (Opus 4.6)
 **Codebase**: github.com/wirerift/wirerift

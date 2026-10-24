@@ -1870,3 +1870,25 @@ func TestDoList_NonOKStatusFails(t *testing.T) {
 	assertErrContains(t, doList([]string{"wirerift", "list", "-server", "127.0.0.1:4040"}), "401")
 	assertErrContains(t, doList([]string{"wirerift", "list", "-json", "-server", "127.0.0.1:4040"}), "401")
 }
+
+func TestDashboardBaseURL(t *testing.T) {
+	cases := []struct{ server, explicit, want string }{
+		{"example.com:4443", "", "http://example.com:4040"},
+		{"[::1]:4443", "", "http://[::1]:4040"},
+		{"example.com:4443", "example.com:9000", "http://example.com:9000"},
+		{"example.com:4443", "https://dash.example.com/", "https://dash.example.com"},
+	}
+	for _, c := range cases {
+		if got := dashboardBaseURL(c.server, c.explicit); got != c.want {
+			t.Errorf("dashboardBaseURL(%q, %q) = %q, want %q", c.server, c.explicit, got, c.want)
+		}
+	}
+	for url, want := range map[string]bool{
+		"http://localhost:4040": true, "http://127.0.0.1:4040": true, "http://[::1]:4040": true,
+		"http://example.com:4040": false, "https://10.0.0.5": false, "://bad": false,
+	} {
+		if got := isLoopbackURL(url); got != want {
+			t.Errorf("isLoopbackURL(%q) = %v, want %v", url, got, want)
+		}
+	}
+}
