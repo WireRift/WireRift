@@ -30,12 +30,10 @@ Options (all commands):
 create options:
   -account name    account the token belongs to (created if new; required)
   -name label      a label for this token
-  -max-tunnels N   tunnels the account may have at once (0 = server default)
+  -max-tunnels N   tunnels the account may have at once, over all its
+                   connections (0 = only the per-connection cap)
   -max-sessions N  simultaneous connections of the account (0 = unlimited)
   -rate N          tunnel creations per second for the account (0 = default)
-
-  The account limits are recorded now and enforced by the server from the
-  next release.
   -expires dur     lifetime, e.g. 12h or 30d (default: never)
 `
 

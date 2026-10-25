@@ -465,7 +465,7 @@ wirerift-server token revoke tok_ab12cd34
 ```
 
 The secret is printed once. Tokens of the same account share its limits.
-The server reads the file at startup, so restart it to apply changes. The per-account limits are recorded now and enforced from the next release.
+The server reads the file at startup, so restart it to apply changes. A token may also be refused on its own account's limits: at most `-max-sessions` simultaneous connections and `-max-tunnels` tunnels over all of them, and `-rate` tunnel creations per second shared by every connection of the account (reconnecting does not reset it). Ten failed logins from one IP exhaust its allowance, after which that IP is refused (even with a valid token) until it refills at one attempt per five seconds.
 
 ---
 

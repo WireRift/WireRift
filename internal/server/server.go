@@ -140,6 +140,11 @@ type Server struct {
 
 	// Rate limiting
 	rateLimiter *ratelimit.Manager
+	authFails   *ratelimit.Manager // failed control-plane logins, per remote IP
+
+	// acctMu serialises the session-count check with registering a session so
+	// the per-account session limit cannot be overshot by parallel logins.
+	acctMu sync.Mutex
 
 	// Port allocation
 	tcpPortStart int
@@ -169,6 +174,7 @@ type Server struct {
 type Session struct {
 	ID         string
 	AccountID  string
+	Account    *auth.Account // limits as of login; nil in tests that build sessions by hand
 	Mux        *mux.Mux
 	Tunnels    map[string]*Tunnel
 	CreatedAt  time.Time
@@ -340,6 +346,7 @@ func New(config Config, logger *slog.Logger) *Server {
 		tcpPortStart: portStart,
 		tcpPortEnd:   portEnd,
 		rateLimiter:  ratelimit.NewManager(100, 50),
+		authFails:    ratelimit.NewManager(authFailRefill, authFailBurst),
 		maxLogs:      500, // Keep last 500 requests for inspection
 		pinSecret:    pinSecret,
 		bodyBudget:   newByteBudget(config.MaxBufferedBodyBytes),
@@ -570,9 +577,18 @@ func (s *Server) handleAuth(m *mux.Mux, remoteAddr net.Addr) (*Session, error) {
 			return nil, fmt.Errorf("decode auth request: %w", err)
 		}
 
+		ip := remoteIP(remoteAddr)
+		if s.authFails.Get(ip).Tokens() < 1 {
+			resp := &proto.AuthResponse{OK: false, Error: "too many failed attempts, try again later"}
+			respFrame, _ := proto.EncodeJSONPayload(proto.FrameAuthRes, 0, resp)
+			_ = m.GetFrameWriter().Write(respFrame)
+			return nil, fmt.Errorf("auth throttled for %s", ip)
+		}
+
 		// Validate token
 		_, account, err := s.authManager.ValidateToken(authReq.Token)
 		if err != nil {
+			s.authFails.Allow(ip) // spend one credit; a run of failures empties the bucket
 			// Send failure response
 			resp := &proto.AuthResponse{OK: false, Error: err.Error()}
 			respFrame, _ := proto.EncodeJSONPayload(proto.FrameAuthRes, 0, resp)
@@ -585,13 +601,19 @@ func (s *Server) handleAuth(m *mux.Mux, remoteAddr net.Addr) (*Session, error) {
 		session := &Session{
 			ID:         sessionID,
 			AccountID:  account.ID,
+			Account:    account,
 			Mux:        m,
 			Tunnels:    make(map[string]*Tunnel),
 			CreatedAt:  time.Now(),
 			LastSeen:   time.Now(),
 			RemoteAddr: remoteAddr,
 		}
-		s.sessions.Store(sessionID, session)
+		if !s.registerSession(session, account.MaxSessions) {
+			resp := &proto.AuthResponse{OK: false, Error: "session limit reached for this account"}
+			respFrame, _ := proto.EncodeJSONPayload(proto.FrameAuthRes, 0, resp)
+			_ = m.GetFrameWriter().Write(respFrame)
+			return nil, fmt.Errorf("account %s is at its session limit (%d)", account.ID, account.MaxSessions)
+		}
 
 		// Send success response
 		maxTunnels := s.config.MaxTunnelsPerSession
@@ -611,6 +633,80 @@ func (s *Server) handleAuth(m *mux.Mux, remoteAddr net.Addr) (*Session, error) {
 	case <-s.ctx.Done():
 		return nil, fmt.Errorf("server shutting down")
 	}
+}
+
+// Failed logins from one IP: a burst of authFailBurst, then one more every
+// 1/authFailRefill seconds. An empty bucket refuses further attempts outright,
+// so guessing tokens over the control port is slow and a correct token from a
+// quiet IP is never delayed.
+const (
+	authFailBurst  = 10
+	authFailRefill = 0.2
+)
+
+// remoteIP returns the host part of addr (or its whole string).
+func remoteIP(addr net.Addr) string {
+	if addr == nil {
+		return ""
+	}
+	s := addr.String()
+	if host, _, err := net.SplitHostPort(s); err == nil {
+		return host
+	}
+	return s
+}
+
+// registerSession stores session unless its account already has maxSessions
+// live sessions (0 = unlimited).
+func (s *Server) registerSession(session *Session, maxSessions int) bool {
+	s.acctMu.Lock()
+	defer s.acctMu.Unlock()
+	if maxSessions > 0 && s.accountSessionCount(session.AccountID) >= maxSessions {
+		return false
+	}
+	s.sessions.Store(session.ID, session)
+	return true
+}
+
+func (s *Server) accountSessionCount(accountID string) int {
+	n := 0
+	s.sessions.Range(func(_, v any) bool {
+		if v.(*Session).AccountID == accountID {
+			n++
+		}
+		return true
+	})
+	return n
+}
+
+// accountTunnelCount counts the tunnels of every live session of an account.
+func (s *Server) accountTunnelCount(accountID string) int {
+	n := 0
+	s.sessions.Range(func(_, v any) bool {
+		sess := v.(*Session)
+		if sess.AccountID == accountID {
+			sess.mu.RLock()
+			n += len(sess.Tunnels)
+			sess.mu.RUnlock()
+		}
+		return true
+	})
+	return n
+}
+
+// allowTunnelRequest applies the account's tunnel-creation rate. The limiter is
+// keyed by account, so reconnecting does not hand out a fresh allowance. The
+// bootstrap account keeps the server default.
+func (s *Server) allowTunnelRequest(session *Session) bool {
+	account := session.Account
+	if account == nil {
+		return s.rateLimiter.Allow("tunnel:" + session.ID)
+	}
+	key := "tunnel:" + account.ID
+	if account.ID != auth.DevAccountID && account.RateLimit > 0 {
+		return s.rateLimiter.AllowWith(key, float64(account.RateLimit), account.RateLimit)
+	}
+	return s.rateLimiter.Allow(key)
 }
 
 // handleTunnelRequests processes tunnel requests from a session.
@@ -674,8 +770,13 @@ func (s *Server) handleTunnelRequest(m *mux.Mux, session *Session, frame *proto.
 		return
 	}
 
-	if !s.rateLimiter.Allow("tunnel:" + session.ID) {
+	if !s.allowTunnelRequest(session) {
 		sendTunnelError(m, "rate limit exceeded")
+		return
+	}
+
+	if acct := session.Account; acct != nil && acct.MaxTunnels > 0 && s.accountTunnelCount(acct.ID) >= acct.MaxTunnels {
+		sendTunnelError(m, "account tunnel limit reached")
 		return
 	}
 
@@ -1385,7 +1486,7 @@ func (s *Server) runRateLimiterEviction(interval time.Duration) {
 		case <-s.ctx.Done():
 			return
 		case <-ticker.C:
-			evicted := s.rateLimiter.Evict(interval * 2)
+			evicted := s.rateLimiter.Evict(interval*2) + s.authFails.Evict(interval*2)
 			if evicted > 0 {
 				s.logger.Debug("evicted stale rate limiters", "count", evicted)
 			}

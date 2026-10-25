@@ -345,3 +345,18 @@ func TestEvict(t *testing.T) {
 		t.Error("new-key should still exist")
 	}
 }
+
+func TestManagerAllowWithUsesOwnBurst(t *testing.T) {
+	m := NewManager(100, 50)
+	for i := 0; i < 2; i++ {
+		if !m.AllowWith("k", 0.001, 2) {
+			t.Fatalf("request %d within the key's own burst was refused", i)
+		}
+	}
+	if m.AllowWith("k", 1000, 1000) {
+		t.Error("the parameters of the first call stay in force")
+	}
+	if !m.Allow("other") {
+		t.Error("other keys keep the manager defaults")
+	}
+}

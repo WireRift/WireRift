@@ -175,6 +175,16 @@ func (m *Manager) Get(key string) *Limiter {
 	return actual.(*Limiter)
 }
 
+// AllowWith is Allow for a key that has its own rate and burst instead of the
+// manager's defaults. The parameters apply when the limiter is first created.
+func (m *Manager) AllowWith(key string, rate float64, burst int) bool {
+	if v, ok := m.limiters.Load(key); ok {
+		return v.(*Limiter).Allow()
+	}
+	actual, _ := m.limiters.LoadOrStore(key, New(rate, burst))
+	return actual.(*Limiter).Allow()
+}
+
 // Allow checks if the key is allowed.
 func (m *Manager) Allow(key string) bool {
 	return m.Get(key).Allow()

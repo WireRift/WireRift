@@ -8,7 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Multiple tokens and accounts: `wirerift-server token create|list|revoke` manage a token file (default `<cert-dir>/tokens.json`, `-tokens-file`) that the server reads at startup. Only a SHA-256 digest of each token is stored, tokens can expire or be revoked, and accounts carry `max_tunnels`, `max_sessions` and `rate_limit` settings. The bootstrap token (`-token`, `WIRERIFT_TOKEN` or generated) keeps working unchanged. Enforcing the account limits and picking up file changes without a restart follow in a later release
+- Multiple tokens and accounts: `wirerift-server token create|list|revoke` manage a token file (default `<cert-dir>/tokens.json`, `-tokens-file`) that the server reads at startup. Only a SHA-256 digest of each token is stored, tokens can expire or be revoked, and accounts carry `max_tunnels`, `max_sessions` and `rate_limit` settings. The bootstrap token (`-token`, `WIRERIFT_TOKEN` or generated) keeps working unchanged. Picking up file changes without a restart follows in a later release
+- Account limits are enforced: `max_sessions` (simultaneous connections), `max_tunnels` (over all of the account's connections) and `rate_limit` (tunnel creations per second, shared by the account's connections instead of restarting with every reconnect)
+- Control port: a burst of 10 failed logins from one IP empties its allowance and further attempts, including valid ones, are refused until it refills (one per 5 seconds)
 
 ### Fixed
 - TCP tunnels: when the chosen port of the range was already used by another program (the default range overlaps the OS's ephemeral ports) the tunnel failed with "failed to bind tunnel port"; up to 16 ports are now tried before giving up
