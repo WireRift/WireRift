@@ -16,7 +16,9 @@ import (
 const usageText = `Usage: wirerift-server token <command> [options]
 
 Manage the access tokens stored in the token file (default <cert-dir>/tokens.json).
-The server reads the file at startup (restart it to apply changes).
+The running server notices changes to the file within a few seconds (or at
+once on SIGHUP): new tokens work, revoked ones stop working and their open
+connections are closed. Changed account limits apply to new connections.
 
 Commands:
   create    Create a token (the secret is shown once)
@@ -66,6 +68,14 @@ func runToken(args []string, out io.Writer) error {
 	if err := fs.Parse(args[1:]); err != nil {
 		return fmt.Errorf("token %s: %v\n\n%s", cmd, err, usageText)
 	}
+	positional := fs.Args()
+	// Options may also follow the token id: `token revoke tok_ab12 -cert-dir d`.
+	if cmd == "revoke" && len(positional) > 1 {
+		if err := fs.Parse(positional[1:]); err != nil {
+			return fmt.Errorf("token %s: %v\n\n%s", cmd, err, usageText)
+		}
+		positional = append(positional[:1], fs.Args()...)
+	}
 	path := tokenFilePath(*file, *certDir)
 
 	switch cmd {
@@ -76,10 +86,10 @@ func runToken(args []string, out io.Writer) error {
 	case "list":
 		return tokenList(path, out)
 	case "revoke":
-		if fs.NArg() != 1 {
+		if len(positional) != 1 {
 			return fmt.Errorf("token revoke: give the token id (see 'token list')")
 		}
-		return tokenRevoke(path, out, fs.Arg(0))
+		return tokenRevoke(path, out, positional[0])
 	default:
 		return fmt.Errorf("unknown token command %q\n\n%s", cmd, usageText)
 	}

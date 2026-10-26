@@ -455,7 +455,7 @@ wirerift-server              # generates random token, prints to stderr
 
 The token above is the server's bootstrap token. To give several people or
 machines their own access, create tokens in the token file (default
-`<cert-dir>/tokens.json`, read at startup; only a SHA-256 digest of each token
+`<cert-dir>/tokens.json`, reloaded while the server runs; only a SHA-256 digest of each token
 is stored):
 
 ```bash
@@ -465,7 +465,7 @@ wirerift-server token revoke tok_ab12cd34
 ```
 
 The secret is printed once. Tokens of the same account share its limits.
-The server reads the file at startup, so restart it to apply changes. A token may also be refused on its own account's limits: at most `-max-sessions` simultaneous connections and `-max-tunnels` tunnels over all of them, and `-rate` tunnel creations per second shared by every connection of the account (reconnecting does not reset it). Ten failed logins from one IP exhaust its allowance, after which that IP is refused (even with a valid token) until it refills at one attempt per five seconds.
+The server notices changes to the file within five seconds (or immediately on `SIGHUP`): new tokens work at once, and a revoked, expired or removed token also has its open connections and tunnels closed. A file that fails to parse is logged and the previous tokens stay in force. Changed account limits apply to connections made afterwards. A token may also be refused on its own account's limits: at most `-max-sessions` simultaneous connections and `-max-tunnels` tunnels over all of them, and `-rate` tunnel creations per second shared by every connection of the account (reconnecting does not reset it). The dashboard shows an account's own token only its own tunnels, sessions, captured requests and counts (replaying another account's request is refused); the bootstrap token sees everything. Ten failed logins from one IP exhaust its allowance, after which that IP is refused (even with a valid token) until it refills at one attempt per five seconds.
 
 ---
 

@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"context"
 	"crypto/rand"
 	"embed"
 	"encoding/base64"
@@ -190,10 +191,10 @@ func (d *Dashboard) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			if r.Method == http.MethodGet {
 				cookie, err := r.Cookie("wirerift_session")
 				if err == nil && cookie.Value != "" {
-					_, _, err := d.authManager.ValidateToken(cookie.Value)
+					_, acct, err := d.authManager.ValidateToken(cookie.Value)
 					if err == nil {
 						d.guard.reset(ip)
-						next(w, r)
+						next(w, withScope(r, acct))
 						return
 					}
 					d.guard.fail(ip)
@@ -210,7 +211,7 @@ func (d *Dashboard) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		_, _, err := d.authManager.ValidateToken(parts[1])
+		_, acct, err := d.authManager.ValidateToken(parts[1])
 		if err != nil {
 			d.guard.fail(ip)
 			d.jsonError(w, "Invalid token", http.StatusUnauthorized)
@@ -218,8 +219,27 @@ func (d *Dashboard) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		d.guard.reset(ip)
-		next(w, r)
+		next(w, withScope(r, acct))
 	}
+}
+
+type scopeKey struct{}
+
+// withScope records whose data the request may see: the bootstrap account is
+// the administrator and sees everything (empty scope), any other account only
+// its own tunnels, sessions and captured requests.
+func withScope(r *http.Request, acct *auth.Account) *http.Request {
+	scope := ""
+	if acct != nil && acct.ID != auth.DevAccountID {
+		scope = acct.ID
+	}
+	return r.WithContext(context.WithValue(r.Context(), scopeKey{}, scope))
+}
+
+// scope returns the account a request is limited to ("" = unrestricted).
+func scope(r *http.Request) string {
+	s, _ := r.Context().Value(scopeKey{}).(string)
+	return s
 }
 
 // handleTunnels handles GET /api/tunnels
@@ -230,6 +250,15 @@ func (d *Dashboard) handleTunnels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tunnels := d.server.ListTunnels()
+	if acct := scope(r); acct != "" {
+		own := make([]server.TunnelInfo, 0, len(tunnels))
+		for _, t := range tunnels {
+			if t.AccountID == acct {
+				own = append(own, t)
+			}
+		}
+		tunnels = own
+	}
 	d.jsonResponse(w, tunnels)
 }
 
@@ -241,6 +270,15 @@ func (d *Dashboard) handleSessions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sessions := d.server.ListSessions()
+	if acct := scope(r); acct != "" {
+		own := make([]server.SessionInfo, 0, len(sessions))
+		for _, s := range sessions {
+			if s.AccountID == acct {
+				own = append(own, s)
+			}
+		}
+		sessions = own
+	}
 	d.jsonResponse(w, sessions)
 }
 
@@ -251,7 +289,7 @@ func (d *Dashboard) handleStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stats := d.server.Stats()
+	stats := d.server.StatsFor(scope(r))
 	stats["uptime"] = time.Since(d.server.StartTime()).Seconds()
 	stats["dashboard_port"] = d.port
 	stats["https_enabled"] = d.httpsEnabled
@@ -276,7 +314,19 @@ func (d *Dashboard) handleRequests(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	logs := d.server.GetRequestLogs(tunnelID, limit)
+	logs := d.server.GetRequestLogs(tunnelID, 0)
+	if acct := scope(r); acct != "" {
+		own := logs[:0:0]
+		for _, l := range logs {
+			if l.AccountID == acct {
+				own = append(own, l)
+			}
+		}
+		logs = own
+	}
+	if len(logs) > limit {
+		logs = logs[:limit]
+	}
 	d.jsonResponse(w, logs)
 }
 
@@ -295,7 +345,7 @@ func (d *Dashboard) handleRequestActions(w http.ResponseWriter, r *http.Request)
 	}
 
 	logID := parts[0]
-	result, err := d.server.ReplayRequest(logID)
+	result, err := d.server.ReplayRequestAs(logID, scope(r))
 	if err != nil {
 		d.jsonError(w, err.Error(), http.StatusBadRequest)
 		return

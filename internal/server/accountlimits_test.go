@@ -180,3 +180,75 @@ func TestFailedLoginsThrottlePerIP(t *testing.T) {
 		t.Fatalf("IP still blocked after the bucket refilled: err=%v resp=%+v", err, resp)
 	}
 }
+
+func TestCloseRevokedSessions(t *testing.T) {
+	mgr := auth.NewManager()
+	tf := &auth.TokenFile{}
+	keep, _, _ := tf.CreateToken(auth.CreateOptions{Account: "acme", Name: "keep"})
+	drop, dropRec, _ := tf.CreateToken(auth.CreateOptions{Account: "acme", Name: "drop"})
+	mgr.ApplyTokenFile(tf)
+	cfg := DefaultConfig()
+	cfg.AuthManager = mgr
+	s := New(cfg, nil)
+	addr := &net.TCPAddr{IP: net.IPv4(10, 0, 0, 9), Port: 1}
+
+	kept, _, err := login(t, s, keep, addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dropped, _, err := login(t, s, drop, addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	boot, _, err := login(t, s, mgr.DevToken(), addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tunnel := &Tunnel{ID: "tun-drop", Type: proto.TunnelTypeHTTP, Subdomain: "dropme", SessionID: dropped.ID, closed: make(chan struct{})}
+	dropped.Tunnels[tunnel.ID] = tunnel
+	s.tunnels.Store("dropme", tunnel)
+
+	if n := s.CloseRevokedSessions(); n != 0 {
+		t.Fatalf("closed %d sessions while every token was valid", n)
+	}
+
+	if err := tf.Revoke(dropRec.ID); err != nil {
+		t.Fatal(err)
+	}
+	mgr.ApplyTokenFile(tf)
+	if n := s.CloseRevokedSessions(); n != 1 {
+		t.Fatalf("closed %d sessions, want 1", n)
+	}
+	if _, ok := s.getSession(dropped.ID); ok {
+		t.Error("the revoked session is still registered")
+	}
+	if _, ok := s.getTunnelBySubdomain("dropme"); ok {
+		t.Error("the revoked session's tunnel is still being served")
+	}
+	for _, sess := range []*Session{kept, boot} {
+		if _, ok := s.getSession(sess.ID); !ok {
+			t.Errorf("session %s of a valid token was closed", sess.ID)
+		}
+	}
+}
+
+func TestStatsForAccount(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+	s.sessions.Store("s1", &Session{ID: "s1", AccountID: "a"})
+	s.sessions.Store("s2", &Session{ID: "s2", AccountID: "b"})
+	s.tunnels.Store("one", &Tunnel{ID: "t1", AccountID: "a"})
+	s.tunnels.Store("two", &Tunnel{ID: "t2", AccountID: "b"})
+	s.tunnels.Store("three", &Tunnel{ID: "t3", AccountID: "b"})
+
+	own := s.StatsFor("b")
+	if own["active_tunnels"] != 2 || own["active_sessions"] != 1 {
+		t.Errorf("account b stats = %v, want 2 tunnels and 1 session", own)
+	}
+	if _, ok := own["bytes_in"]; ok {
+		t.Error("an account's stats must not carry server-wide traffic")
+	}
+	all := s.Stats()
+	if all["active_tunnels"] != 3 || all["active_sessions"] != 2 {
+		t.Errorf("server stats = %v, want 3 tunnels and 2 sessions", all)
+	}
+}

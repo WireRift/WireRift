@@ -332,6 +332,8 @@ Environment Variables:
 		return fmt.Errorf("failed to start server: %v", err)
 	}
 
+	go watchTokenFile(ctx, authMgr, srv, tokenFilePath(*tokensFile, *certDir), tokenReloadInterval, logger)
+
 	// Start dashboard
 	dashServer := &http.Server{
 		Addr:              net.JoinHostPort(*dashboardBind, strconv.Itoa(*dashboardAddr)),

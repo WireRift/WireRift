@@ -188,3 +188,50 @@ func TestSavedFileIsValidJSON(t *testing.T) {
 		t.Fatal("not valid JSON")
 	}
 }
+
+func TestStillValidFollowsTheTokenFile(t *testing.T) {
+	m := NewManager()
+	tf := &TokenFile{}
+	secret, rec, err := tf.CreateToken(CreateOptions{Account: "acme", Name: "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.ApplyTokenFile(tf)
+	tok, _, err := m.ValidateToken(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.StillValid(tok) {
+		t.Fatal("a fresh token must be valid")
+	}
+	if !m.StillValid(nil) {
+		t.Error("a session without a recorded token is left alone")
+	}
+	dev, _, _ := m.ValidateToken(m.DevToken())
+	if !m.StillValid(dev) {
+		t.Error("the bootstrap token stays valid")
+	}
+
+	// Reloading a file that revoked it makes the old handle invalid, even though
+	// the reload produced new Token objects.
+	if err := tf.Revoke(rec.ID); err != nil {
+		t.Fatal(err)
+	}
+	m.ApplyTokenFile(tf)
+	if m.StillValid(tok) {
+		t.Error("a revoked token is still valid")
+	}
+
+	// Dropping the token from the file, or its account, has the same effect.
+	tf2 := &TokenFile{}
+	s2, _, _ := tf2.CreateToken(CreateOptions{Account: "acme", Name: "b"})
+	m.ApplyTokenFile(tf2)
+	tok2, _, err := m.ValidateToken(s2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.ApplyTokenFile(&TokenFile{})
+	if m.StillValid(tok2) {
+		t.Error("a token removed from the file is still valid")
+	}
+}

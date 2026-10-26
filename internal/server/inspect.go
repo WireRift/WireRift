@@ -115,6 +115,7 @@ func (s *Server) logRequest(tunnel *Tunnel, r *http.Request, w *inspectResponseW
 	log := RequestLog{
 		ID:         fmt.Sprintf("req_%s", generateSubdomain()),
 		TunnelID:   tunnel.ID,
+		AccountID:  tunnel.AccountID,
 		Method:     r.Method,
 		Path:       r.URL.Path,
 		Query:      r.URL.RawQuery,
@@ -163,10 +164,17 @@ var replayTimeout = 2 * time.Minute
 
 // ReplayRequest replays a captured request by ID.
 func (s *Server) ReplayRequest(logID string) (*RequestLog, error) {
+	return s.ReplayRequestAs(logID, "")
+}
+
+// ReplayRequestAs replays a captured request on behalf of an account: a log
+// that belongs to another account is reported as not found. An empty
+// accountID is the administrator and may replay anything.
+func (s *Server) ReplayRequestAs(logID, accountID string) (*RequestLog, error) {
 	s.logMu.RLock()
 	var original *RequestLog
 	for i := range s.requestLogs {
-		if s.requestLogs[i].ID == logID {
+		if s.requestLogs[i].ID == logID && (accountID == "" || s.requestLogs[i].AccountID == accountID) {
 			orig := s.requestLogs[i]
 			original = &orig
 			break
@@ -247,6 +255,7 @@ func (s *Server) ReplayRequest(logID string) (*RequestLog, error) {
 	replay := &RequestLog{
 		ID:         fmt.Sprintf("req_%s", generateSubdomain()),
 		TunnelID:   original.TunnelID,
+		AccountID:  original.AccountID,
 		Method:     original.Method,
 		Path:       original.Path,
 		Query:      original.Query,

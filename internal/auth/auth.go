@@ -216,6 +216,34 @@ func (m *Manager) ApplyTokenFile(f *TokenFile) {
 	m.byHash = byHash
 }
 
+// StillValid reports whether a token returned earlier by ValidateToken would
+// still be accepted: it has not been revoked or removed from the token file, has
+// not expired, and its account is still active. Sessions use it to notice that
+// their token was withdrawn after they logged in.
+func (m *Manager) StillValid(t *Token) bool {
+	if t == nil {
+		return true
+	}
+	if t == m.devToken {
+		return m.accountActive(t.AccountID)
+	}
+	if t.Hash != "" {
+		m.mu.RLock()
+		cur, ok := m.byHash[t.Hash]
+		m.mu.RUnlock()
+		return ok && !cur.Revoked && !cur.IsExpired() && m.accountActive(cur.AccountID)
+	}
+	if _, ok := m.tokens.Load(t.ID); !ok {
+		return false
+	}
+	return !t.IsExpired() && m.accountActive(t.AccountID)
+}
+
+func (m *Manager) accountActive(id string) bool {
+	a, ok := m.accounts.Load(id)
+	return ok && a.(*Account).Active
+}
+
 // DevToken returns the development token secret for testing.
 func (m *Manager) DevToken() string {
 	if m.devToken != nil {

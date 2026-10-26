@@ -147,3 +147,24 @@ func TestRunSubcommandDispatch(t *testing.T) {
 		t.Errorf("token help: handled=%v err=%v", handled, err)
 	}
 }
+
+func TestTokenRevokeAcceptsOptionsAfterTheID(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := runTokenCmd(t, "create", "-account", "acme", "-cert-dir", dir); err != nil {
+		t.Fatal(err)
+	}
+	list, _ := runTokenCmd(t, "list", "-cert-dir", dir)
+	id := regexp.MustCompile(`tok_[a-z0-9]+`).FindString(list)
+	if id == "" {
+		t.Fatalf("no token id in %q", list)
+	}
+	if _, err := runTokenCmd(t, "revoke", id, "-cert-dir", dir); err != nil {
+		t.Fatalf("revoke with the option after the id: %v", err)
+	}
+	if list, _ = runTokenCmd(t, "list", "-cert-dir", dir); !strings.Contains(list, "revoked") {
+		t.Errorf("token not revoked: %s", list)
+	}
+	if _, err := runTokenCmd(t, "revoke", id, "extra", "-cert-dir", dir); err == nil {
+		t.Error("an extra argument must be rejected")
+	}
+}

@@ -175,6 +175,7 @@ type Session struct {
 	ID         string
 	AccountID  string
 	Account    *auth.Account // limits as of login; nil in tests that build sessions by hand
+	Token      *auth.Token   // the credential the session logged in with
 	Mux        *mux.Mux
 	Tunnels    map[string]*Tunnel
 	CreatedAt  time.Time
@@ -188,6 +189,7 @@ type Tunnel struct {
 	ID           string
 	Type         proto.TunnelType
 	SessionID    string
+	AccountID    string // owner, copied from the session
 	Subdomain    string // for HTTP tunnels
 	CustomDomain string // optional extra host the tunnel is served on
 	Port         int    // for TCP tunnels
@@ -283,6 +285,7 @@ func (sess *Session) addTunnel(t *Tunnel, limit int) bool {
 type RequestLog struct {
 	ID         string            `json:"id"`
 	TunnelID   string            `json:"tunnel_id"`
+	AccountID  string            `json:"account_id,omitempty"`
 	Method     string            `json:"method"`
 	Path       string            `json:"path"`
 	Query      string            `json:"query,omitempty"`
@@ -586,7 +589,7 @@ func (s *Server) handleAuth(m *mux.Mux, remoteAddr net.Addr) (*Session, error) {
 		}
 
 		// Validate token
-		_, account, err := s.authManager.ValidateToken(authReq.Token)
+		tok, account, err := s.authManager.ValidateToken(authReq.Token)
 		if err != nil {
 			s.authFails.Allow(ip) // spend one credit; a run of failures empties the bucket
 			// Send failure response
@@ -602,6 +605,7 @@ func (s *Server) handleAuth(m *mux.Mux, remoteAddr net.Addr) (*Session, error) {
 			ID:         sessionID,
 			AccountID:  account.ID,
 			Account:    account,
+			Token:      tok,
 			Mux:        m,
 			Tunnels:    make(map[string]*Tunnel),
 			CreatedAt:  time.Now(),
@@ -707,6 +711,25 @@ func (s *Server) allowTunnelRequest(session *Session) bool {
 		return s.rateLimiter.AllowWith(key, float64(account.RateLimit), account.RateLimit)
 	}
 	return s.rateLimiter.Allow(key)
+}
+
+// CloseRevokedSessions ends every session whose token has been revoked, has
+// expired or lost its account since the session logged in (typically after the
+// token file was reloaded) and returns how many it closed.
+func (s *Server) CloseRevokedSessions() int {
+	var stale []*Session
+	s.sessions.Range(func(_, v any) bool {
+		if sess := v.(*Session); !s.authManager.StillValid(sess.Token) {
+			stale = append(stale, sess)
+		}
+		return true
+	})
+	for _, sess := range stale {
+		s.logger.Info("closing session: token is no longer valid", "session", sess.ID, "account", sess.AccountID)
+		s.removeSession(sess.ID)
+		_ = sess.Mux.Close()
+	}
+	return len(stale)
 }
 
 // handleTunnelRequests processes tunnel requests from a session.
@@ -859,6 +882,7 @@ func (s *Server) createHTTPTunnel(m *mux.Mux, session *Session, req *proto.Tunne
 		ID:           tunnelID,
 		Type:         proto.TunnelTypeHTTP,
 		SessionID:    session.ID,
+		AccountID:    session.AccountID,
 		Subdomain:    subdomain,
 		CustomDomain: customDomain,
 		PublicURL:    s.publicHTTPURL(subdomain),
@@ -930,6 +954,7 @@ func (s *Server) createTCPTunnel(m *mux.Mux, session *Session, req *proto.Tunnel
 		ID:         tunnelID,
 		Type:       proto.TunnelTypeTCP,
 		SessionID:  session.ID,
+		AccountID:  session.AccountID,
 		Port:       port,
 		PublicURL:  "tcp://" + s.config.Domain + ":" + strconv.Itoa(port),
 		LocalAddr:  req.LocalAddr,
@@ -1345,6 +1370,7 @@ func (s *Server) HTTPAddr() string {
 // TunnelInfo represents tunnel information for API responses.
 type TunnelInfo struct {
 	ID           string     `json:"id"`
+	AccountID    string     `json:"account_id,omitempty"`
 	Type         string     `json:"type"`
 	URL          string     `json:"url,omitempty"`
 	CustomDomain string     `json:"custom_domain,omitempty"`
@@ -1383,6 +1409,7 @@ func (s *Server) ListTunnels() []TunnelInfo {
 			t.mu.RLock()
 			info := TunnelInfo{
 				ID:           t.ID,
+				AccountID:    t.AccountID,
 				Type:         string(t.Type),
 				URL:          t.PublicURL,
 				Port:         t.Port,
@@ -1434,20 +1461,39 @@ func (s *Server) ListSessions() []SessionInfo {
 
 // Stats returns server statistics.
 func (s *Server) Stats() map[string]interface{} {
+	return s.statsFor("")
+}
+
+// StatsFor is Stats limited to one account: its own tunnel and session counts
+// and no server-wide traffic totals. An empty accountID means everything.
+func (s *Server) StatsFor(accountID string) map[string]interface{} {
+	return s.statsFor(accountID)
+}
+
+func (s *Server) statsFor(accountID string) map[string]interface{} {
 	var tunnelCount, sessionCount int
 
 	s.tunnels.Range(func(key, value any) bool {
-		if !isAliasKey(key) {
-			tunnelCount++
+		if isAliasKey(key) {
+			return true
 		}
+		if t, ok := value.(*Tunnel); ok && accountID != "" && t.AccountID != accountID {
+			return true
+		}
+		tunnelCount++
 		return true
 	})
 
 	s.sessions.Range(func(key, value any) bool {
-		sessionCount++
+		if accountID == "" || value.(*Session).AccountID == accountID {
+			sessionCount++
+		}
 		return true
 	})
 
+	if accountID != "" {
+		return map[string]interface{}{"active_tunnels": tunnelCount, "active_sessions": sessionCount}
+	}
 	return map[string]interface{}{
 		"active_tunnels":  tunnelCount,
 		"active_sessions": sessionCount,
