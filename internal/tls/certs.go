@@ -274,6 +274,7 @@ func (m *Manager) StartRenewal(ctx context.Context, every time.Duration) {
 
 // renewDue renews every cached certificate that is inside the renewal window.
 func (m *Manager) renewDue(ctx context.Context) {
+	m.pruneRetries()
 	due := map[string]*tls.Certificate{}
 	m.certs.Range(func(k, v any) bool {
 		if c := v.(*tls.Certificate); !certUsable(c) && certNotExpired(c) {
@@ -301,6 +302,21 @@ func (m *Manager) renewDue(ctx context.Context) {
 		}
 		m.storeCert(host, cert)
 	}
+}
+
+// pruneRetries forgets finished back-off windows of hosts that have no cached
+// certificate (anymore), so the map does not keep an entry for every host that
+// ever failed to get one. A host with a cached fallback keeps its entry:
+// fallbackExpired needs it to notice the end of the window.
+func (m *Manager) pruneRetries() {
+	m.retryAfter.Range(func(k, v any) bool {
+		if time.Now().After(v.(time.Time)) {
+			if _, cached := m.certs.Load(k); !cached {
+				m.retryAfter.Delete(k)
+			}
+		}
+		return true
+	})
 }
 
 // fallbackExpired reports (and clears) a finished retry window for a host that

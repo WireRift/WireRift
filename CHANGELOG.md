@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Control port: a burst of 10 failed logins from one IP empties its allowance and further attempts, including valid ones, are refused until it refills (one per 5 seconds)
 
 ### Fixed
+- Mux: a write to the connection now times out after 60s (`mux.Config.WriteTimeout`) and closes the connection, instead of a peer that stops reading holding the frame writer, every stream's writes and the heartbeat replies until the session timeout
+- TLS: finished ACME back-off entries of hosts without a cached certificate are forgotten by the renewal pass instead of accumulating
 - TCP tunnels: when the chosen port of the range was already used by another program (the default range overlaps the OS's ephemeral ports) the tunnel failed with "failed to bind tunnel port"; up to 16 ports are now tried before giving up
 
 ## [1.11.0] - 2026-10-25

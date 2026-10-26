@@ -210,3 +210,20 @@ func TestSaveCertBundleLeavesNoTempFiles(t *testing.T) {
 		t.Errorf("want exactly the .crt/.key/.json files, got %d entries", len(entries))
 	}
 }
+
+func TestPruneRetriesDropsOnlyFinishedEntriesWithoutCertificate(t *testing.T) {
+	m := &Manager{}
+	past, future := time.Now().Add(-time.Minute), time.Now().Add(time.Hour)
+	m.retryAfter.Store("gone.example", past)      // finished, nothing cached: drop
+	m.retryAfter.Store("waiting.example", future) // still backing off: keep
+	m.retryAfter.Store("served.example", past)    // finished but a fallback is cached: keep
+	m.certs.Store("served.example", &tls.Certificate{})
+
+	m.pruneRetries()
+
+	for host, want := range map[string]bool{"gone.example": false, "waiting.example": true, "served.example": true} {
+		if _, ok := m.retryAfter.Load(host); ok != want {
+			t.Errorf("%s kept = %v, want %v", host, ok, want)
+		}
+	}
+}

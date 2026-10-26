@@ -30,7 +30,17 @@ type Config struct {
 
 	// HeartbeatInterval is the interval between heartbeats.
 	HeartbeatInterval time.Duration
+
+	// WriteTimeout bounds one write to the connection. A peer that stops
+	// reading would otherwise hold the frame writer (and with it every stream
+	// and the read loop's heartbeat replies) until the session times out; when
+	// a write times out the connection is closed, since a partly written frame
+	// cannot be recovered. Zero means DefaultWriteTimeout, negative disables it.
+	WriteTimeout time.Duration
 }
+
+// DefaultWriteTimeout is the WriteTimeout used when the config leaves it zero.
+const DefaultWriteTimeout = 60 * time.Second
 
 // DefaultConfig returns the default configuration.
 func DefaultConfig() Config {
@@ -39,6 +49,7 @@ func DefaultConfig() Config {
 		WindowSize:        proto.DefaultWindowSize,
 		MaxFrameSize:      64 * 1024, // 64 KB
 		HeartbeatInterval: 30 * time.Second,
+		WriteTimeout:      DefaultWriteTimeout,
 	}
 }
 
@@ -90,9 +101,12 @@ func New(conn net.Conn, config Config) *Mux {
 		config.MaxFrameSize = 64 * 1024
 	}
 
+	if config.WriteTimeout == 0 {
+		config.WriteTimeout = DefaultWriteTimeout
+	}
+
 	m := &Mux{
 		conn:         conn,
-		frameWriter:  proto.NewFrameWriter(conn),
 		frameReader:  proto.NewFrameReader(conn),
 		config:       config,
 		accept:       make(chan *Stream, 128),
@@ -100,10 +114,29 @@ func New(conn net.Conn, config Config) *Mux {
 		done:         make(chan struct{}),
 		maxFrameSize: config.MaxFrameSize,
 	}
+	m.frameWriter = proto.NewFrameWriter(&deadlineWriter{m: m})
 	m.maxStreams.Store(int64(config.MaxStreams))
 	m.nextID = 2 // Start at 2 to avoid collision with ControlStreamID (0)
 
 	return m
+}
+
+// deadlineWriter writes to the mux's connection with the configured write
+// timeout and shuts the mux down on a failed write.
+type deadlineWriter struct{ m *Mux }
+
+func (w *deadlineWriter) Write(p []byte) (int, error) {
+	m := w.m
+	if m.config.WriteTimeout > 0 {
+		_ = m.conn.SetWriteDeadline(time.Now().Add(m.config.WriteTimeout))
+	}
+	n, err := m.conn.Write(p)
+	if err != nil && n < len(p) {
+		// The frame may be cut in the middle: the connection is unusable. Close
+		// asynchronously, the caller may hold locks the shutdown needs.
+		go func() { _ = m.closeWithError(err) }()
+	}
+	return n, err
 }
 
 // OpenStream opens a new stream.

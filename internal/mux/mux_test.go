@@ -2039,3 +2039,45 @@ func TestLocalResetWakesBlockedReadAndWrite(t *testing.T) {
 		t.Fatal("a window-blocked Write was not woken by a local Reset")
 	}
 }
+
+// A peer that stops reading must not hold the writer forever: the write times
+// out, the mux closes (the frame may be half written) and blocked callers wake.
+func TestWriteTimeoutClosesMuxOnStalledPeer(t *testing.T) {
+	c1, c2 := net.Pipe() // nothing reads c2
+	defer c2.Close()
+	cfg := DefaultConfig()
+	cfg.WriteTimeout = 100 * time.Millisecond
+	m := New(c1, cfg)
+
+	frame := &proto.Frame{Version: proto.Version, Type: proto.FrameHeartbeat, Payload: []byte("ping")}
+	errc := make(chan error, 1)
+	go func() { errc <- m.GetFrameWriter().Write(frame) }()
+
+	select {
+	case err := <-errc:
+		if err == nil {
+			t.Fatal("write to a peer that never reads succeeded")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("write to a stalled peer was not bounded")
+	}
+	select {
+	case <-m.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("mux stayed open after a failed write")
+	}
+}
+
+func TestWriteTimeoutCanBeDisabled(t *testing.T) {
+	c1, c2 := net.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+	cfg := DefaultConfig()
+	cfg.WriteTimeout = -1
+	m := New(c1, cfg)
+	go io.Copy(io.Discard, c2)
+	frame := &proto.Frame{Version: proto.Version, Type: proto.FrameHeartbeat, Payload: []byte("ping")}
+	if err := m.GetFrameWriter().Write(frame); err != nil {
+		t.Fatalf("write with the timeout disabled: %v", err)
+	}
+}
