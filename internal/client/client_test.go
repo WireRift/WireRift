@@ -224,7 +224,8 @@ type mockServer struct {
 	tunnels  map[string]*Tunnel
 	mu       struct {
 		sync.Mutex
-		connCount int
+		connCount   int
+		lastVersion string // Version of the latest AuthRequest
 	}
 }
 
@@ -299,6 +300,10 @@ func (ms *mockServer) handleAuth(frame *proto.Frame, writer *proto.FrameWriter) 
 	if err := proto.DecodeJSONPayload(frame, &authReq); err != nil {
 		return
 	}
+
+	ms.mu.Lock()
+	ms.mu.lastVersion = authReq.Version
+	ms.mu.Unlock()
 
 	authRes := &proto.AuthResponse{
 		OK:         authReq.Token == ms.token,
@@ -2664,5 +2669,28 @@ func TestReconnectGivesUpWhenTokenIsRejected(t *testing.T) {
 	}
 	if !errors.Is(c.Err(), ErrAuthFailed) {
 		t.Errorf("Err() = %v, want ErrAuthFailed", c.Err())
+	}
+}
+
+func TestClientReportsItsVersionAtLogin(t *testing.T) {
+	for _, tc := range []struct{ set, want string }{{"v9.9.9", "v9.9.9"}, {"", "unknown"}} {
+		ms := newMockServer(t)
+		cfg := DefaultConfig()
+		cfg.ServerAddr = ms.addr
+		cfg.Token = ms.token
+		cfg.Reconnect = false
+		cfg.Version = tc.set
+		c := New(cfg, nil)
+		if err := c.Connect(); err != nil {
+			t.Fatal(err)
+		}
+		c.Close()
+		ms.listener.Close()
+		ms.mu.Lock()
+		got := ms.mu.lastVersion
+		ms.mu.Unlock()
+		if got != tc.want {
+			t.Errorf("Version %q: server saw %q, want %q", tc.set, got, tc.want)
+		}
 	}
 }

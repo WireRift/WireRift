@@ -255,6 +255,7 @@ func doHTTP(parentCtx context.Context, args []string) error {
 
 	// Create client
 	clientCfg := client.DefaultConfig()
+	clientCfg.Version = version
 	clientCfg.ServerAddr = opts.server
 	clientCfg.Token = opts.token
 	clientCfg.Reconnect = true
@@ -389,6 +390,7 @@ func doTCP(parentCtx context.Context, args []string) error {
 
 	// Create client
 	clientCfg := client.DefaultConfig()
+	clientCfg.Version = version
 	clientCfg.ServerAddr = opts.server
 	clientCfg.Token = opts.token
 	clientCfg.Reconnect = true
@@ -472,6 +474,7 @@ func doStart(parentCtx context.Context, args []string) error {
 	go handleSignals(ctx, cancel)
 
 	startCfg := client.DefaultConfig()
+	startCfg.Version = version
 	startCfg.ServerAddr = cfg.Server
 	startCfg.Token = cfg.Token
 	startCfg.Reconnect = true
@@ -782,6 +785,7 @@ func doServe(parentCtx context.Context, args []string) error {
 
 	// Create client
 	clientCfg := client.DefaultConfig()
+	clientCfg.Version = version
 	clientCfg.ServerAddr = opts.server
 	clientCfg.Token = opts.token
 	clientCfg.Reconnect = true

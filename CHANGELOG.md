@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Client: the login now reports the client's real build version instead of a hard-coded `1.0.0`
+
 ## [1.12.0] - 2026-10-27
 
 ### Added

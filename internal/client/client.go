@@ -38,6 +38,10 @@ type Config struct {
 	// Token is the authentication token.
 	Token string
 
+	// Version is reported to the server at login (the CLI sets its build
+	// version). Empty means "unknown".
+	Version string
+
 	// TLSConfig is the TLS configuration.
 	TLSConfig *tls.Config
 
@@ -300,11 +304,18 @@ func (c *Client) connect() error {
 	return nil
 }
 
+func (c *Client) versionString() string {
+	if c.config.Version == "" {
+		return "unknown"
+	}
+	return c.config.Version
+}
+
 // authenticate sends authentication request.
 func (c *Client) authenticate() error {
 	authReq := &proto.AuthRequest{
 		Token:   c.config.Token,
-		Version: "1.0.0",
+		Version: c.versionString(),
 	}
 
 	// EncodeJSONPayload cannot fail for AuthRequest (only string fields)
