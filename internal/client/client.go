@@ -347,6 +347,11 @@ func (c *Client) authenticate() error {
 	}
 
 	if !authRes.OK {
+		if authRes.Retry {
+			// Not a verdict on the token (session limit, throttled IP, typically a
+			// session of ours the server has not yet noticed is dead): retryable.
+			return fmt.Errorf("server refused the login for now: %s", authRes.Error)
+		}
 		return fmt.Errorf("%w: %s", ErrAuthFailed, authRes.Error)
 	}
 

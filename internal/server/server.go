@@ -582,7 +582,7 @@ func (s *Server) handleAuth(m *mux.Mux, remoteAddr net.Addr) (*Session, error) {
 
 		ip := remoteIP(remoteAddr)
 		if s.authFails.Get(ip).Tokens() < 1 {
-			resp := &proto.AuthResponse{OK: false, Error: "too many failed attempts, try again later"}
+			resp := &proto.AuthResponse{OK: false, Error: "too many failed attempts, try again later", Retry: true}
 			respFrame, _ := proto.EncodeJSONPayload(proto.FrameAuthRes, 0, resp)
 			_ = m.GetFrameWriter().Write(respFrame)
 			return nil, fmt.Errorf("auth throttled for %s", ip)
@@ -613,7 +613,7 @@ func (s *Server) handleAuth(m *mux.Mux, remoteAddr net.Addr) (*Session, error) {
 			RemoteAddr: remoteAddr,
 		}
 		if !s.registerSession(session, account.MaxSessions) {
-			resp := &proto.AuthResponse{OK: false, Error: "session limit reached for this account"}
+			resp := &proto.AuthResponse{OK: false, Error: "session limit reached for this account", Retry: true}
 			respFrame, _ := proto.EncodeJSONPayload(proto.FrameAuthRes, 0, resp)
 			_ = m.GetFrameWriter().Write(respFrame)
 			return nil, fmt.Errorf("account %s is at its session limit (%d)", account.ID, account.MaxSessions)

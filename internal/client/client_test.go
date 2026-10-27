@@ -224,8 +224,9 @@ type mockServer struct {
 	tunnels  map[string]*Tunnel
 	mu       struct {
 		sync.Mutex
-		connCount   int
-		lastVersion string // Version of the latest AuthRequest
+		connCount     int
+		lastVersion   string // Version of the latest AuthRequest
+		retryRefusals int    // logins still to be refused with Retry set
 	}
 }
 
@@ -303,7 +304,17 @@ func (ms *mockServer) handleAuth(frame *proto.Frame, writer *proto.FrameWriter) 
 
 	ms.mu.Lock()
 	ms.mu.lastVersion = authReq.Version
+	refuse := ms.mu.retryRefusals > 0
+	if refuse {
+		ms.mu.retryRefusals--
+	}
 	ms.mu.Unlock()
+	if refuse {
+		refusal, _ := proto.EncodeJSONPayload(proto.FrameAuthRes, proto.ControlStreamID,
+			&proto.AuthResponse{OK: false, Error: "session limit reached for this account", Retry: true})
+		writer.Write(refusal)
+		return
+	}
 
 	authRes := &proto.AuthResponse{
 		OK:         authReq.Token == ms.token,
@@ -2693,4 +2704,45 @@ func TestClientReportsItsVersionAtLogin(t *testing.T) {
 			t.Errorf("Version %q: server saw %q, want %q", tc.set, got, tc.want)
 		}
 	}
+}
+
+// A refusal that is not about the credentials (session limit, throttled IP) is
+// retried: after a network drop the server may still hold the old session.
+func TestReconnectKeepsTryingAfterARetryableRefusal(t *testing.T) {
+	server := newMockServer(t)
+	defer server.Close()
+
+	cfg := DefaultConfig()
+	cfg.ServerAddr = server.addr
+	cfg.Token = server.token
+	cfg.Reconnect = true
+	cfg.ReconnectInterval = 20 * time.Millisecond
+	cfg.MaxReconnectInterval = 40 * time.Millisecond
+	c := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := c.Connect(); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer c.Close()
+
+	server.mu.Lock()
+	server.mu.retryRefusals = 2
+	server.mu.Unlock()
+	_ = c.currentMux().Close()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case <-c.Failed():
+			t.Fatalf("client gave up on a retryable refusal: %v", c.Err())
+		default:
+		}
+		server.mu.Lock()
+		left := server.mu.retryRefusals
+		server.mu.Unlock()
+		if left == 0 && c.IsConnected() {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("client did not reconnect after the refusals")
 }

@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Releases publish a Docker image to `ghcr.io/wirerift/wirerift` (version tag and `latest`), and CI builds the Dockerfile and starts both binaries from it on every push
 
 ### Fixed
+- Client: a refusal that is not about the credentials (the account is at its `max_sessions`, or the source IP is throttled after failed logins) is retried instead of ending the client as "authentication failed"; after a network drop the server may still hold the dead session for a while, and a `max_sessions: 1` client used to give up for good
 - Client: the login now reports the client's real build version instead of a hard-coded `1.0.0`
 
 ## [1.12.0] - 2026-10-27

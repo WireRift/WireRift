@@ -24,6 +24,11 @@ type AuthResponse struct {
 	MaxTunnels          int    `json:"max_tunnels,omitempty"`
 	MaxStreamsPerTunnel int    `json:"max_streams_per_tunnel,omitempty"`
 	Error               string `json:"error,omitempty"`
+
+	// Retry marks a refusal that is not about the credentials (the account is at
+	// its session limit, the source IP is throttled): the client keeps trying
+	// instead of treating the token as rejected.
+	Retry bool `json:"retry,omitempty"`
 }
 
 // TunnelType represents the type of tunnel.
