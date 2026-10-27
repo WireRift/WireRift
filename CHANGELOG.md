@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- A client that loses its connection keeps its HTTP URL: the server holds the subdomains of the dropped session for its account for `-offline-grace` (default 2m, 0 = release at once). Visitors get `503 Tunnel offline` with `Retry-After` meanwhile, no other account can claim the name, and the reconnecting client gets the same name back. A tunnel without an explicit `-subdomain` now asks for the name the server picked, so its URL no longer changes on every reconnect; if somebody else took the name in the meantime it settles for a new one. A tunnel closed on purpose, or one that expired, is released at once.
+- `TunnelResponse.Subdomain` carries the assigned name to the client.
 - The server sends GO_AWAY to every client when it is stopped, and the client logs "server closed the connection" with the reason instead of "connection lost". A client that does not read is not waited for longer than 2 seconds.
 
 ### Fixed

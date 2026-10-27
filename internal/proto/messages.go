@@ -75,6 +75,10 @@ type TunnelResponse struct {
 	PublicURL string     `json:"public_url,omitempty"`
 	Error     string     `json:"error,omitempty"`
 
+	// Subdomain is the name an HTTP tunnel was given, so a client that asked
+	// for a random one can ask for the same name after a reconnect.
+	Subdomain string `json:"subdomain,omitempty"`
+
 	// ExpiresAt is set when the tunnel has a time limit.
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }

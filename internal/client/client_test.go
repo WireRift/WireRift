@@ -2804,3 +2804,71 @@ func TestConcurrentTunnelRequestsGetTheirOwnResponses(t *testing.T) {
 		t.Errorf("max tunnel requests in flight = %d, want 1", got)
 	}
 }
+
+// A tunnel whose name the server picked asks for the same name after a
+// reconnect, and settles for a new one when somebody else has taken it.
+func TestAutoSubdomainIsKeptAcrossReconnectAndFallsBackWhenTaken(t *testing.T) {
+	old := tunnelRetryBase
+	tunnelRetryBase = time.Millisecond
+	defer func() { tunnelRetryBase = old }()
+	client, serverMux := makeConnectedClient(t)
+
+	var mu sync.Mutex
+	var asked []string
+	taken := false
+	go func() {
+		for {
+			select {
+			case frame, ok := <-serverMux.ControlFrame():
+				if !ok {
+					return
+				}
+				if frame.Type != proto.FrameTunnelReq {
+					continue
+				}
+				var req proto.TunnelRequest
+				_ = proto.DecodeJSONPayload(frame, &req)
+				mu.Lock()
+				asked = append(asked, req.Subdomain)
+				isTaken := taken && req.Subdomain != ""
+				mu.Unlock()
+				resp := &proto.TunnelResponse{OK: true, TunnelID: fmt.Sprintf("tun-%d", len(asked)), Type: proto.TunnelTypeHTTP}
+				if isTaken {
+					resp = &proto.TunnelResponse{Error: "subdomain already taken"}
+				} else if req.Subdomain != "" {
+					resp.Subdomain = req.Subdomain
+				} else {
+					resp.Subdomain = fmt.Sprintf("auto%d", len(asked))
+				}
+				resp.PublicURL = "https://" + resp.Subdomain + ".example.com"
+				respFrame, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, proto.ControlStreamID, resp)
+				_ = serverMux.GetFrameWriter().Write(respFrame)
+			case <-serverMux.Done():
+				return
+			}
+		}
+	}()
+
+	tun, err := client.openTunnel(&proto.TunnelRequest{Type: proto.TunnelTypeHTTP, LocalAddr: "localhost:3000"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tun.Subdomain != "auto1" {
+		t.Fatalf("Subdomain = %q, want the server's pick auto1", tun.Subdomain)
+	}
+
+	client.recreateTunnels()
+	mu.Lock()
+	if got := asked[len(asked)-1]; got != "auto1" {
+		t.Errorf("reconnect asked for %q, want the same name auto1", got)
+	}
+	taken = true
+	mu.Unlock()
+
+	client.recreateTunnels()
+	var urls []string
+	client.tunnels.Range(func(_, v any) bool { urls = append(urls, v.(*Tunnel).PublicURL); return true })
+	if len(urls) != 1 || strings.Contains(urls[0], "auto1") {
+		t.Errorf("tunnel after the name was taken = %v, want one tunnel on a new name", urls)
+	}
+}

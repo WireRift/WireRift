@@ -119,6 +119,10 @@ type Tunnel struct {
 	ExpiresAt time.Time // zero when the tunnel has no time limit
 	client    *Client
 	request   *proto.TunnelRequest // original creation request for reconnect
+
+	// autoSubdomain marks a name the server picked: a reconnect asks for the
+	// same one so the URL survives, and falls back to a new one if it is gone.
+	autoSubdomain bool
 }
 
 // New creates a new client.
@@ -472,6 +476,13 @@ func (c *Client) openTunnel(req *proto.TunnelRequest) (*Tunnel, error) {
 		client:    c,
 		request:   req,
 	}
+	if req.Subdomain == "" && res.Subdomain != "" && res.Type == proto.TunnelTypeHTTP {
+		tunnel.Subdomain = res.Subdomain
+		tunnel.autoSubdomain = true
+		pinned := *req
+		pinned.Subdomain = res.Subdomain
+		tunnel.request = &pinned
+	}
 
 	if res.ExpiresAt != nil {
 		tunnel.ExpiresAt = *res.ExpiresAt
@@ -742,6 +753,16 @@ func (c *Client) recreateTunnels() {
 			case <-c.ctx.Done():
 				return
 			}
+		}
+		// The name the server picked is gone (someone else got it): a tunnel the
+		// user never named is better off with a new URL than without one.
+		if err != nil && !expired && !lost && t.autoSubdomain && errors.Is(err, ErrTunnelFailed) && strings.Contains(err.Error(), "taken") {
+			c.logger.Warn("previous subdomain is taken, asking for a new one", "id", t.ID, "subdomain", request.Subdomain)
+			request.Subdomain = ""
+			newTunnel, err = c.openTunnel(&request)
+		}
+		if newTunnel != nil && err == nil && t.autoSubdomain {
+			newTunnel.autoSubdomain = true // a pinned reconnect request does not set it itself
 		}
 		if expired {
 			c.logger.Info("tunnel expired, not re-creating", "id", t.ID)

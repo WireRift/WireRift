@@ -816,6 +816,8 @@ wirerift-server --control :8443 --http :8080 --dashboard-port 9090
 ### Auto-reconnect
 Client automatically reconnects with exponential backoff (1s → 30s max) and re-creates all tunnels. No action needed.
 
+The URL survives the drop: the server keeps a lost connection's subdomains reserved for its account for `-offline-grace` (default 2 minutes; `0` releases them at once). Visitors see `503 Tunnel offline` meanwhile, nobody else can take the name, and a tunnel you did not name yourself asks for the same random name again, so the public URL stays the same. If the name was taken after the grace period, the client falls back to a new one.
+
 ---
 
 ## License

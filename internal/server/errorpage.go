@@ -17,6 +17,8 @@ func defaultHint(status int, message string) string {
 	switch {
 	case message == "Tunnel not found":
 		return "No tunnel is registered for this address. Check the URL, or start the tunnel again."
+	case status == http.StatusServiceUnavailable && strings.HasPrefix(message, "Tunnel offline"):
+		return "The client behind this address lost its connection and is expected to come back shortly. Refresh in a few seconds."
 	case message == "Session not found":
 		return "The client that owned this tunnel has disconnected. Start it again to bring the tunnel back."
 	case status == http.StatusBadGateway:

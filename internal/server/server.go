@@ -78,6 +78,11 @@ type Config struct {
 	// SessionTimeout is the timeout for inactive sessions.
 	SessionTimeout time.Duration
 
+	// OfflineGrace is how long a dropped session's subdomains stay reserved for
+	// its account: visitors get 503 "tunnel offline" and only that account can
+	// claim the name again. Zero disables the reservation.
+	OfflineGrace time.Duration
+
 	// HalfCloseTimeout is passed to each session's mux (mux.Config.HalfCloseTimeout).
 	// Zero disables it.
 	HalfCloseTimeout time.Duration
@@ -112,6 +117,7 @@ func DefaultConfig() Config {
 		HeartbeatInterval:    30 * time.Second,
 		SessionTimeout:       5 * time.Minute,
 		MaxTunnelsPerSession: 10,
+		OfflineGrace:         2 * time.Minute,
 	}
 }
 
@@ -149,6 +155,9 @@ type Server struct {
 	// acctMu serialises the session-count check with registering a session so
 	// the per-account session limit cannot be overshot by parallel logins.
 	acctMu sync.Mutex
+
+	// held maps a subdomain to the account that lost it with its session.
+	held sync.Map
 
 	// Port allocation
 	tcpPortStart int
@@ -947,10 +956,15 @@ func (s *Server) createHTTPTunnel(m *mux.Mux, session *Session, req *proto.Tunne
 		tunnel.PublicURL = s.publicURLForHost(customDomain)
 	}
 
+	if owner, held := s.heldBy(subdomain); held && owner != session.AccountID {
+		sendTunnelError(m, "subdomain already taken")
+		return
+	}
 	if _, loaded := s.tunnels.LoadOrStore(subdomain, tunnel); loaded {
 		sendTunnelError(m, "subdomain already taken")
 		return
 	}
+	s.held.Delete(subdomain)
 	if customDomain != "" {
 		if _, loaded := s.tunnels.LoadOrStore(customKeyPrefix+customDomain, tunnel); loaded {
 			s.tunnels.Delete(subdomain)
@@ -974,6 +988,7 @@ func (s *Server) createHTTPTunnel(m *mux.Mux, session *Session, req *proto.Tunne
 		TunnelID:  tunnelID,
 		Type:      proto.TunnelTypeHTTP,
 		PublicURL: tunnel.PublicURL,
+		Subdomain: subdomain,
 		ExpiresAt: expiresAtPtr(tunnel.ExpiresAt),
 	}
 	respFrame, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, 0, resp)
@@ -1181,6 +1196,18 @@ func (s *Server) removeSession(sessionID string) {
 	// Clean up all tunnels
 	for _, tunnel := range tunnels {
 		s.teardownTunnel(tunnel)
+		if tunnel.Type == proto.TunnelTypeHTTP && tunnel.CustomDomain == "" && !s.shuttingDown() {
+			s.holdSubdomain(tunnel.Subdomain, tunnel.AccountID)
+		}
+	}
+}
+
+func (s *Server) shuttingDown() bool {
+	select {
+	case <-s.ctx.Done():
+		return true
+	default:
+		return false
 	}
 }
 
@@ -1559,6 +1586,7 @@ func (s *Server) startSessionCleanup() {
 			return
 		case <-ticker.C:
 			s.cleanupInactiveSessions()
+			s.sweepHeld()
 		}
 	}
 }

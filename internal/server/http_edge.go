@@ -66,6 +66,11 @@ func (s *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
 		}
 		subdomain = tunnel.Subdomain
 	} else if tunnel, ok = s.getTunnelBySubdomain(subdomain); !ok {
+		if _, held := s.heldBy(subdomain); held {
+			w.Header().Set("Retry-After", "10")
+			writeEdgeError(w, r, http.StatusServiceUnavailable, "Tunnel offline: its client is reconnecting")
+			return
+		}
 		writeEdgeError(w, r, http.StatusBadGateway, "Tunnel not found")
 		return
 	}
