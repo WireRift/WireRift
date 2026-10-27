@@ -100,6 +100,7 @@ func run(parentCtx context.Context, args []string) error {
 	domain := fs.String("domain", "wirerift.com", "Base domain for tunnels")
 	tcpPortRange := fs.String("tcp-ports", "20000-29999", "TCP tunnel port range")
 	offlineGrace := fs.Duration("offline-grace", 2*time.Minute, "keep a dropped client's subdomains reserved for it this long, showing visitors 503 (0 = release at once)")
+	tcpIdle := fs.Duration("tcp-idle-timeout", 0, "close a TCP tunnel connection that moved no data for this long (0 = never)")
 	halfClose := fs.Duration("half-close-timeout", 0, "reset a stream the server closed once the client sends nothing for this long (0 = never)")
 
 	// Local development mode
@@ -267,6 +268,7 @@ Environment Variables:
 	srvConfig.HTTPSAddr = *httpsAddr
 	srvConfig.TCPAddrRange = *tcpPortRange
 	srvConfig.HalfCloseTimeout = *halfClose
+	srvConfig.TCPIdleTimeout = *tcpIdle
 	srvConfig.OfflineGrace = *offlineGrace
 	srvConfig.AuthManager = authMgr
 

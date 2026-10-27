@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `-tcp-idle-timeout`: closes a TCP tunnel connection that has moved no data in either direction for that long, freeing its port slot and stream. Off by default, so quiet sessions such as SSH are never cut; a connection that keeps trading data is never cut however long it lives.
 ## [1.14.0] - 2026-10-27
 
 ### Added

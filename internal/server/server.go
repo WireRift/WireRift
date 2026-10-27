@@ -83,6 +83,11 @@ type Config struct {
 	// claim the name again. Zero disables the reservation.
 	OfflineGrace time.Duration
 
+	// TCPIdleTimeout closes a TCP tunnel connection that has moved no data in
+	// either direction for this long. Zero (the default) never does, so a quiet
+	// SSH session is not cut.
+	TCPIdleTimeout time.Duration
+
 	// HalfCloseTimeout is passed to each session's mux (mux.Config.HalfCloseTimeout).
 	// Zero disables it.
 	HalfCloseTimeout time.Duration
@@ -1296,17 +1301,28 @@ func (s *Server) proxyTCPConnection(conn net.Conn, tunnel *Tunnel, session *Sess
 	defer stopWatch()
 
 	// Bidirectional copy with bytes tracking
+	var toStream io.Writer = stream
+	var toConn io.Writer = conn
+	if s.config.TCPIdleTimeout > 0 {
+		idle := newIdleWatch(s.config.TCPIdleTimeout, func() {
+			s.logger.Info("closing idle TCP connection", "tunnel", tunnel.ID, "idle", s.config.TCPIdleTimeout)
+			conn.Close()
+			_ = stream.Reset()
+		})
+		defer idle.stop()
+		toStream, toConn = touchWriter{stream, idle}, touchWriter{conn, idle}
+	}
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		n, _ := io.Copy(stream, conn)
+		n, _ := io.Copy(toStream, conn)
 		s.bytesIn.Add(n)
 		stream.Close()
 	}()
 	go func() {
 		defer wg.Done()
-		n, _ := io.Copy(conn, stream)
+		n, _ := io.Copy(toConn, stream)
 		s.bytesOut.Add(n)
 		conn.Close()
 	}()
