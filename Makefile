@@ -2,7 +2,7 @@
 
 BINARY_SERVER=wirerift-server
 BINARY_CLIENT=wirerift
-VERSION?=1.11.0
+VERSION?=1.12.0
 GO=go
 GOFLAGS=-v
 # Same package set as CI (the website/ and standalone test/advanced, test/benchmark
