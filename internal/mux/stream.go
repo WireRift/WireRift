@@ -5,6 +5,7 @@ import (
 	"io"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // Stream states.
@@ -40,6 +41,10 @@ type Stream struct {
 	windowCh  chan struct{} // signals window update
 	state     atomic.Int32
 	closeOnce sync.Once
+
+	// Half-close idle reaper (see Config.HalfCloseTimeout).
+	lastActive atomic.Int64 // unix nanos of the last frame received
+	idleTimer  atomic.Pointer[time.Timer]
 
 	// Metadata (protected by metaMu)
 	metaMu     sync.RWMutex
@@ -236,9 +241,38 @@ func (s *Stream) Close() error {
 		// once the remote side closes as well.
 		if fullyClosed {
 			s.cleanup()
+		} else if final == streamStateHalfClosedLocal {
+			s.armIdleReaper()
 		}
 	})
 	return err
+}
+
+// armIdleReaper resets a stream whose local side is closed and whose remote
+// side has sent nothing for Config.HalfCloseTimeout, so a peer that never
+// closes its side cannot pin the stream until the mux dies. Any frame from the
+// peer postpones the reset.
+func (s *Stream) armIdleReaper() {
+	d := s.mux.config.HalfCloseTimeout
+	if d <= 0 {
+		return
+	}
+	s.lastActive.Store(time.Now().UnixNano())
+	var fire func()
+	fire = func() {
+		if s.state.Load() != streamStateHalfClosedLocal {
+			return
+		}
+		idle := time.Since(time.Unix(0, s.lastActive.Load()))
+		if idle < d {
+			if t := s.idleTimer.Load(); t != nil {
+				t.Reset(d - idle)
+			}
+			return
+		}
+		_ = s.Reset()
+	}
+	s.idleTimer.Store(time.AfterFunc(d, fire))
 }
 
 // Reset immediately aborts the stream.
@@ -263,11 +297,15 @@ func (s *Stream) Reset() error {
 
 // cleanup releases resources.
 func (s *Stream) cleanup() {
+	if t := s.idleTimer.Load(); t != nil {
+		t.Stop()
+	}
 	s.mux.removeStream(s.id)
 }
 
 // onDataFrame handles incoming data.
 func (s *Stream) onDataFrame(data []byte) error {
+	s.lastActive.Store(time.Now().UnixNano())
 	// A conforming peer never has more than one window of unread data in
 	// flight; anything beyond that is a protocol violation, not data to drop.
 	if s.readBuf.Len()+len(data) > int(s.maxWindow) {
@@ -289,6 +327,7 @@ func (s *Stream) onDataFrame(data []byte) error {
 
 // onWindowUpdate handles window update.
 func (s *Stream) onWindowUpdate(delta uint32) {
+	s.lastActive.Store(time.Now().UnixNano())
 	// Saturating add: a hostile peer must not be able to wrap the window
 	// negative (stalling the stream) or inflate it without bound.
 	limit := int64(s.maxWindow)

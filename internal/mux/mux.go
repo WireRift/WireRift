@@ -37,6 +37,11 @@ type Config struct {
 	// a write times out the connection is closed, since a partly written frame
 	// cannot be recovered. Zero means DefaultWriteTimeout, negative disables it.
 	WriteTimeout time.Duration
+
+	// HalfCloseTimeout resets a stream whose local side is closed once the
+	// peer has sent nothing for this long, freeing streams a peer never
+	// closes. Zero (the default) disables it, so slow replies are never cut.
+	HalfCloseTimeout time.Duration
 }
 
 // DefaultWriteTimeout is the WriteTimeout used when the config leaves it zero.

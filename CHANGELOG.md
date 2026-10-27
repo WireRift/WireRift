@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `-half-close-timeout` (mux `HalfCloseTimeout`): resets a stream the server closed once the client has sent nothing for that long. Off by default, so slow responses are never cut.
+
 ### Fixed
 - `max_tunnels` is now enforced atomically, so parallel tunnel requests from one account's sessions can no longer overshoot the limit.
 

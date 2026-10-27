@@ -99,6 +99,7 @@ func run(parentCtx context.Context, args []string) error {
 	dashboardBind := fs.String("dashboard-bind", "127.0.0.1", "Dashboard bind address (use 0.0.0.0 to expose; the dashboard is plain HTTP)")
 	domain := fs.String("domain", "wirerift.com", "Base domain for tunnels")
 	tcpPortRange := fs.String("tcp-ports", "20000-29999", "TCP tunnel port range")
+	halfClose := fs.Duration("half-close-timeout", 0, "reset a stream the server closed once the client sends nothing for this long (0 = never)")
 
 	// Local development mode
 	devMode := fs.Bool("dev", false, "Local development: trusted HTTPS for *.localhost via a local CA (see 'wirerift-server ca trust')")
@@ -264,6 +265,7 @@ Environment Variables:
 	srvConfig.HTTPAddr = *httpAddr
 	srvConfig.HTTPSAddr = *httpsAddr
 	srvConfig.TCPAddrRange = *tcpPortRange
+	srvConfig.HalfCloseTimeout = *halfClose
 	srvConfig.AuthManager = authMgr
 
 	if err := checkCertPair("dashboard-tls", *dashCert, *dashKey); err != nil {

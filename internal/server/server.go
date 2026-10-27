@@ -78,6 +78,10 @@ type Config struct {
 	// SessionTimeout is the timeout for inactive sessions.
 	SessionTimeout time.Duration
 
+	// HalfCloseTimeout is passed to each session's mux (mux.Config.HalfCloseTimeout).
+	// Zero disables it.
+	HalfCloseTimeout time.Duration
+
 	// MaxTunnelsPerSession is the maximum tunnels per session.
 	MaxTunnelsPerSession int
 
@@ -539,6 +543,7 @@ func (s *Server) handleControlConnection(conn net.Conn) {
 
 	// Create mux
 	muxCfg := mux.DefaultConfig()
+	muxCfg.HalfCloseTimeout = s.config.HalfCloseTimeout
 	m := mux.New(conn, muxCfg)
 	m.SetMaxStreams(0) // no streams before authentication
 	go func() { _ = m.Run() }()
