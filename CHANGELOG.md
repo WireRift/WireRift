@@ -7,18 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.13.0] - 2026-10-27
+
 ### Added
 - `-half-close-timeout` (mux `HalfCloseTimeout`): resets a stream the server closed once the client has sent nothing for that long. Off by default, so slow responses are never cut.
-
-### Fixed
-- `max_tunnels` is now enforced atomically, so parallel tunnel requests from one account's sessions can no longer overshoot the limit.
-
-## [1.12.1] - 2026-10-27
-
-### Added
 - Releases publish a Docker image to `ghcr.io/wirerift/wirerift` (version tag and `latest`), and CI builds the Dockerfile and starts both binaries from it on every push
 
 ### Fixed
+- `max_tunnels` is now enforced atomically, so parallel tunnel requests from one account's sessions can no longer overshoot the limit.
 - Client: a refusal that is not about the credentials (the account is at its `max_sessions`, or the source IP is throttled after failed logins) is retried instead of ending the client as "authentication failed"; after a network drop the server may still hold the dead session for a while, and a `max_sessions: 1` client used to give up for good
 - Client: the login now reports the client's real build version instead of a hard-coded `1.0.0`
 
