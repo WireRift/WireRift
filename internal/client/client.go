@@ -602,7 +602,11 @@ func (c *Client) heartbeatLoop(m *mux.Mux) {
 			}
 		case <-m.Done():
 			c.connected.Store(false)
-			c.logger.Warn("connection lost")
+			if ga := m.GoAway(); ga != nil {
+				c.logger.Warn("server closed the connection", "reason", ga.Reason, "message", ga.Message)
+			} else {
+				c.logger.Warn("connection lost")
+			}
 			return
 		}
 	}

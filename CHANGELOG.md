@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- The server sends GO_AWAY to every client when it is stopped, and the client logs "server closed the connection" with the reason instead of "connection lost". A client that does not read is not waited for longer than 2 seconds.
+
 ### Fixed
 - Client: concurrent `HTTP()`/`TCP()` calls could receive each other's tunnel response because the control channel has no request ID; tunnel requests are now sent one at a time.
 - The Docker image reports its commit and build date (`wirerift version`) instead of `commit: none, built: unknown`.

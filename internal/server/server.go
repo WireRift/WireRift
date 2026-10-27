@@ -414,8 +414,33 @@ func (s *Server) Start() error {
 	return nil
 }
 
+// goAwayGrace bounds how long Stop waits for GO_AWAY notices to be written.
+const goAwayGrace = 2 * time.Second
+
 // Stop stops the server.
 func (s *Server) Stop() error {
+	// Tell every client the stop is intentional before cancelling the context
+	// (which makes the sessions close their connections on their own), but
+	// never let a peer that stopped reading hold up the shutdown: the notice
+	// gets goAwayGrace.
+	var notified sync.WaitGroup
+	s.sessions.Range(func(_, value any) bool {
+		if session, ok := value.(*Session); ok {
+			notified.Add(1)
+			go func() {
+				defer notified.Done()
+				_ = session.Mux.SendGoAway("shutdown", "server is shutting down")
+			}()
+		}
+		return true
+	})
+	sent := make(chan struct{})
+	go func() { notified.Wait(); close(sent) }()
+	select {
+	case <-sent:
+	case <-time.After(goAwayGrace):
+	}
+
 	s.cancel()
 
 	// Graceful shutdown of HTTP servers

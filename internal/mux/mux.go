@@ -81,6 +81,7 @@ type Mux struct {
 	controlCh chan *proto.Frame // control frames (auth, tunnel)
 	done      chan struct{}
 	err       atomic.Value // error that caused shutdown
+	goAway    atomic.Pointer[proto.GoAway]
 
 	streamCount   atomic.Int32 // number of registered streams
 	maxStreams    atomic.Int64 // current stream limit (see SetMaxStreams)
@@ -451,7 +452,27 @@ func (m *Mux) LastHeartbeat() time.Time {
 
 // handleGoAway handles a GO_AWAY frame.
 func (m *Mux) handleGoAway(frame *proto.Frame) error {
+	var ga proto.GoAway
+	if err := proto.DecodeJSONPayload(frame, &ga); err == nil {
+		m.goAway.Store(&ga)
+	}
 	return m.closeWithError(ErrMuxClosed)
+}
+
+// SendGoAway tells the peer this side is shutting down on purpose, so it can
+// tell a planned stop from a dropped connection. It does not close the mux.
+func (m *Mux) SendGoAway(reason, message string) error {
+	frame, err := proto.EncodeJSONPayload(proto.FrameGoAway, proto.ControlStreamID, &proto.GoAway{Reason: reason, Message: message})
+	if err != nil {
+		return err
+	}
+	return m.frameWriter.Write(frame)
+}
+
+// GoAway returns the GO_AWAY the peer sent before closing, or nil if the
+// connection ended without one.
+func (m *Mux) GoAway() *proto.GoAway {
+	return m.goAway.Load()
 }
 
 // handleError handles an ERROR frame.
