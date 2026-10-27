@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `TunnelResponse.Subdomain` carries the assigned name to the client.
 - The server sends GO_AWAY to every client when it is stopped, and the client logs "server closed the connection" with the reason instead of "connection lost". A client that does not read is not waited for longer than 2 seconds.
 
+### Changed
+- Release workflow: refuses to publish unless CI passed on the tagged commit, and runs the tests with the race detector.
+
 ### Fixed
 - Client: concurrent `HTTP()`/`TCP()` calls could receive each other's tunnel response because the control channel has no request ID; tunnel requests are now sent one at a time.
 - The Docker image reports its commit and build date (`wirerift version`) instead of `commit: none, built: unknown`.

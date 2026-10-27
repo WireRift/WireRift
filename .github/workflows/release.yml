@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   release:
@@ -24,10 +25,22 @@ jobs:
           go-version: '1.23'
           cache: false
 
+      # CI (lint, race, fuzz, coverage, three OSes, Docker build) has to have
+      # passed on exactly the commit being released.
+      - name: Require green CI on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ok=$(gh run list --workflow CI --commit "$GITHUB_SHA" --json conclusion -q '[.[]|select(.conclusion=="success")]|length')
+          if [ "${ok:-0}" -lt 1 ]; then
+            echo "::error::CI has not passed on $GITHUB_SHA; wait for it (or fix it), then re-run this workflow"
+            exit 1
+          fi
+
       - name: Run tests
         run: |
           go vet ./cmd/... ./internal/...
-          go test ./cmd/... ./internal/... ./test/integration/ -timeout 180s
+          go test -race ./cmd/... ./internal/... ./test/integration/ -timeout 300s
 
       - name: Get version
         id: version
