@@ -969,7 +969,6 @@ func (s *Server) createHTTPTunnel(m *mux.Mux, session *Session, req *proto.Tunne
 		sendTunnelError(m, "subdomain already taken")
 		return
 	}
-	s.held.Delete(subdomain)
 	if customDomain != "" {
 		if _, loaded := s.tunnels.LoadOrStore(customKeyPrefix+customDomain, tunnel); loaded {
 			s.tunnels.Delete(subdomain)
@@ -986,6 +985,9 @@ func (s *Server) createHTTPTunnel(m *mux.Mux, session *Session, req *proto.Tunne
 		sendTunnelError(m, refusal)
 		return
 	}
+	// Only now is the name really the owner's again; a refused reclaim must
+	// leave the hold in place.
+	s.held.Delete(subdomain)
 	s.armExpiry(session, tunnel)
 
 	resp := &proto.TunnelResponse{
@@ -1198,12 +1200,17 @@ func (s *Server) removeSession(sessionID string) {
 	session.Tunnels = nil
 	session.mu.Unlock()
 
+	// A client that closed on purpose (GO_AWAY) or a server that is stopping
+	// has nobody coming back for the names. Otherwise reserve them before the
+	// tunnels are torn down, so there is no moment when the name is free.
+	keep := !s.shuttingDown() && (session.Mux == nil || session.Mux.GoAway() == nil)
+
 	// Clean up all tunnels
 	for _, tunnel := range tunnels {
-		s.teardownTunnel(tunnel)
-		if tunnel.Type == proto.TunnelTypeHTTP && tunnel.CustomDomain == "" && !s.shuttingDown() {
+		if keep && tunnel.Type == proto.TunnelTypeHTTP && tunnel.CustomDomain == "" {
 			s.holdSubdomain(tunnel.Subdomain, tunnel.AccountID)
 		}
+		s.teardownTunnel(tunnel)
 	}
 }
 

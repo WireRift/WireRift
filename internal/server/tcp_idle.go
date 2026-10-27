@@ -13,6 +13,8 @@ type idleWatch struct {
 	last   atomic.Int64 // unix nanos of the last transfer
 	timer  *time.Timer
 	onIdle func()
+
+	stopped atomic.Bool
 }
 
 func newIdleWatch(d time.Duration, onIdle func()) *idleWatch {
@@ -24,9 +26,15 @@ func newIdleWatch(d time.Duration, onIdle func()) *idleWatch {
 
 func (w *idleWatch) touch() { w.last.Store(time.Now().UnixNano()) }
 
-func (w *idleWatch) stop() { w.timer.Stop() }
+func (w *idleWatch) stop() {
+	w.stopped.Store(true)
+	w.timer.Stop()
+}
 
 func (w *idleWatch) check() {
+	if w.stopped.Load() {
+		return
+	}
 	idle := time.Since(time.Unix(0, w.last.Load()))
 	if idle < w.d {
 		w.timer.Reset(w.d - idle)

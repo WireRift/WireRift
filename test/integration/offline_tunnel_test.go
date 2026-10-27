@@ -156,3 +156,79 @@ func TestDroppedClientKeepsItsURLAndNobodyElseCanTakeIt(t *testing.T) {
 	proxy.unblock()
 	waitFor(t, func() bool { return get() == 200 }, "the tunnel to come back")
 }
+
+type offlineEnv struct {
+	srv     *server.Server
+	cfg     server.Config
+	secrets map[string]string
+	local   string
+}
+
+func newOfflineEnv(t *testing.T, maxTunnels map[string]int) *offlineEnv {
+	t.Helper()
+	ls := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "ok") }))
+	t.Cleanup(ls.Close)
+	tf := &auth.TokenFile{}
+	secrets := map[string]string{}
+	for _, name := range []string{"alice", "bob"} {
+		s, _, err := tf.CreateToken(auth.CreateOptions{Account: name, Name: "t", MaxTunnels: maxTunnels[name]})
+		if err != nil {
+			t.Fatal(err)
+		}
+		secrets[name] = s
+	}
+	authMgr := auth.NewManager()
+	authMgr.ApplyTokenFile(tf)
+	cfg := server.DefaultConfig()
+	cfg.ControlAddr = "127.0.0.1:0"
+	cfg.HTTPAddr = "127.0.0.1:0"
+	cfg.AuthManager = authMgr
+	srv := server.New(cfg, nil)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { srv.Stop() })
+	return &offlineEnv{srv: srv, cfg: cfg, secrets: secrets, local: strings.TrimPrefix(ls.URL, "http://")}
+}
+
+func (e *offlineEnv) connect(t *testing.T, account, addr string, reconnect bool) *client.Client {
+	t.Helper()
+	cc := client.DefaultConfig()
+	cc.ServerAddr = addr
+	cc.Token = e.secrets[account]
+	cc.Reconnect = reconnect
+	cc.ReconnectInterval = 200 * time.Millisecond
+	c := client.New(cc, nil)
+	if err := c.Connect(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	return c
+}
+
+// A client that exits on purpose says so, and its names are free at once
+// instead of showing visitors "reconnecting" for the whole grace period.
+func TestClientThatClosesOnPurposeReleasesItsSubdomain(t *testing.T) {
+	e := newOfflineEnv(t, nil)
+	alice := e.connect(t, "alice", e.srv.ControlAddr(), false)
+	if _, err := alice.HTTP(e.local, client.WithSubdomain("goodbye")); err != nil {
+		t.Fatal(err)
+	}
+	alice.Close()
+
+	req, _ := http.NewRequest("GET", "http://"+e.srv.HTTPAddr()+"/", nil)
+	req.Host = "goodbye." + e.cfg.Domain
+	waitFor(t, func() bool {
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusBadGateway // not 503: nothing is held
+	}, "the name to be released")
+
+	bob := e.connect(t, "bob", e.srv.ControlAddr(), false)
+	if _, err := bob.HTTP(e.local, client.WithSubdomain("goodbye")); err != nil {
+		t.Fatalf("bob could not take a name its owner released: %v", err)
+	}
+}

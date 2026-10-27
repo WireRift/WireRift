@@ -380,6 +380,18 @@ func (c *Client) Close() error {
 	m, conn := c.mux, c.conn
 	c.connMu.RUnlock()
 	if m != nil {
+		// Say goodbye so the server releases this client's subdomains at once
+		// instead of holding them for a reconnect that will not come. A dead
+		// peer must not delay Close, so the notice gets one second.
+		sent := make(chan struct{})
+		go func() {
+			_ = m.SendGoAway("client_exit", "client is closing")
+			close(sent)
+		}()
+		select {
+		case <-sent:
+		case <-time.After(time.Second):
+		}
 		m.Close()
 	}
 	if conn != nil {

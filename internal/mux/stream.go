@@ -274,7 +274,11 @@ func (s *Stream) reapIfIdle(d time.Duration) {
 		}
 		return
 	}
-	_ = s.Reset()
+	// The peer may have closed its side since the check above; only a stream
+	// that is still half-closed is reset.
+	if s.state.CompareAndSwap(streamStateHalfClosedLocal, streamStateReset) {
+		_ = s.Reset()
+	}
 }
 
 // Reset immediately aborts the stream.
