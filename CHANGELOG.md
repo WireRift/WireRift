@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- The Docker image reports its commit and build date (`wirerift version`) instead of `commit: none, built: unknown`.
+
 ## [1.13.0] - 2026-10-27
 
 ### Added

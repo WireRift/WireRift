@@ -11,9 +11,13 @@ RUN go mod download
 COPY . .
 
 ARG VERSION=dev
+ARG COMMIT=none
+ARG BUILD_DATE=unknown
 
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X main.version=${VERSION}" -o /wirerift-server ./cmd/wirerift-server
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X main.version=${VERSION}" -o /wirerift ./cmd/wirerift
+ENV LDFLAGS="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${BUILD_DATE}"
+
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="${LDFLAGS}" -o /wirerift-server ./cmd/wirerift-server
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="${LDFLAGS}" -o /wirerift ./cmd/wirerift
 
 # Runtime stage — minimal image with CA certs for ACME/TLS
 FROM alpine:3.20

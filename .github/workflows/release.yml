@@ -157,12 +157,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Short commit
+        id: meta
+        run: echo "COMMIT=${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          build-args: VERSION=${{ steps.version.outputs.VERSION }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.VERSION }}
+            COMMIT=${{ steps.meta.outputs.COMMIT }}
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
           tags: |
             ghcr.io/wirerift/wirerift:${{ steps.version.outputs.VERSION }}
             ghcr.io/wirerift/wirerift:latest
