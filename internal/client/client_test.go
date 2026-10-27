@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2745,4 +2746,61 @@ func TestReconnectKeepsTryingAfterARetryableRefusal(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("client did not reconnect after the refusals")
+}
+
+// The control channel has no request ID, so concurrent tunnel requests must not
+// overlap on the wire: each caller has to get the response to its own request.
+func TestConcurrentTunnelRequestsGetTheirOwnResponses(t *testing.T) {
+	client, serverMux := makeConnectedClient(t)
+
+	var maxInFlight atomic.Int32
+	go func() {
+		for {
+			select {
+			case frame, ok := <-serverMux.ControlFrame():
+				if !ok || frame.Type != proto.FrameTunnelReq {
+					return
+				}
+				var req proto.TunnelRequest
+				_ = proto.DecodeJSONPayload(frame, &req)
+				time.Sleep(30 * time.Millisecond)
+				// Another request already waiting means the client sent it
+				// without waiting for this one's response.
+				if n := int32(len(serverMux.ControlFrame())) + 1; n > maxInFlight.Load() {
+					maxInFlight.Store(n)
+				}
+				resp := &proto.TunnelResponse{OK: true, TunnelID: "tun-" + req.Subdomain, Type: proto.TunnelTypeHTTP, PublicURL: "https://" + req.Subdomain + ".example.com"}
+				respFrame, _ := proto.EncodeJSONPayload(proto.FrameTunnelRes, proto.ControlStreamID, resp)
+				_ = serverMux.GetFrameWriter().Write(respFrame)
+			case <-serverMux.Done():
+				return
+			}
+		}
+	}()
+
+	var wg sync.WaitGroup
+	errs := make(chan string, 8)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			sub := fmt.Sprintf("app%d", i)
+			tun, err := client.openTunnel(&proto.TunnelRequest{Type: proto.TunnelTypeHTTP, LocalAddr: "localhost:3000", Subdomain: sub})
+			if err != nil {
+				errs <- err.Error()
+				return
+			}
+			if want := "https://" + sub + ".example.com"; tun.PublicURL != want {
+				errs <- fmt.Sprintf("%s got %s", sub, tun.PublicURL)
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for e := range errs {
+		t.Error(e)
+	}
+	if got := maxInFlight.Load(); got != 1 {
+		t.Errorf("max tunnel requests in flight = %d, want 1", got)
+	}
 }

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Client: concurrent `HTTP()`/`TCP()` calls could receive each other's tunnel response because the control channel has no request ID; tunnel requests are now sent one at a time.
 - The Docker image reports its commit and build date (`wirerift version`) instead of `commit: none, built: unknown`.
 
 ## [1.13.0] - 2026-10-27

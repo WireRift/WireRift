@@ -88,6 +88,11 @@ type Client struct {
 	// Tunnels
 	tunnels sync.Map // map[string]*Tunnel
 
+	// openMu keeps one tunnel request in flight: the control channel carries
+	// no request ID, so with two outstanding requests the responses could be
+	// handed to the wrong callers.
+	openMu sync.Mutex
+
 	// HTTP client for proxying (shared for connection reuse)
 	httpClient *http.Client
 
@@ -419,6 +424,9 @@ func (c *Client) TCP(localAddr string, port int, opts ...TCPOption) (*Tunnel, er
 
 // openTunnel sends a tunnel request.
 func (c *Client) openTunnel(req *proto.TunnelRequest) (*Tunnel, error) {
+	c.openMu.Lock()
+	defer c.openMu.Unlock()
+
 	// EncodeJSONPayload cannot fail for TunnelRequest (simple JSON-serializable fields)
 	frame, _ := proto.EncodeJSONPayload(proto.FrameTunnelReq, proto.ControlStreamID, req)
 
