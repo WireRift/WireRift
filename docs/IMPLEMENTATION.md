@@ -1,14 +1,20 @@
 # WireRift — Implementation Guide
 
 > **Note (2026-10):** this is the original design document, not a description of
-> the current code. Known differences: there is a single shared token and account
-> (no `tk_` tokens, `token create|list|revoke` or `authtoken`); the dashboard is an
-> inline page in `internal/dashboard` (no `dist/` embed, no SSE stream); config is
-> `wirerift.yaml`/`.json` in the current directory (no TOML); certificate renewal is
-> a 12-hourly background check with a 14-day window; sessions are torn down at once
-> (no resume grace period or "503 Tunnel Offline"); no `GO_AWAY` is sent. Tunnels
-> cannot claim a small reserved set of subdomains (`www`, `api`, `admin`, ...).
-> See README.md and CHANGELOG.md for what is current.
+> the current code. Known differences: tokens are `wr_...` (not `tk_...`), kept as
+> SHA-256 digests in `<cert-dir>/tokens.json` and managed with `wirerift-server
+> token create|list|revoke` (the file is reloaded live); there is no `wirerift
+> authtoken`, and the client takes its token from `-token`, `WIRERIFT_TOKEN` or the
+> config file. The dashboard is served from `internal/dashboard` (no `dashboard/dist`
+> embed, no SSE `/api/requests/stream`) and shows a file account only its own
+> tunnels, sessions and requests. Client config is `wirerift.yaml` or `.json` in the
+> current directory (no TOML). Certificates are renewed by a 12-hourly background
+> check with a 14-day window. A dropped session's HTTP subdomains are held for its
+> account for `-offline-grace` (default 2 minutes) and visitors get
+> `503 Tunnel offline`; the server sends `GO_AWAY` when it stops. Tunnels cannot
+> claim a small reserved set of subdomains (`www`, `api`, `admin`, ...). Account
+> limits (`max_tunnels`, `max_sessions`, `rate_limit`) are enforced. See README.md
+> and CHANGELOG.md for what is current.
 
 > **Companion to:** SPECIFICATION.md v1.0.0-draft  
 > **Purpose:** Defines build order, code patterns, implementation strategies, and technical recipes  
