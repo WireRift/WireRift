@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.14.0] - 2026-10-27
+
 ### Added
 - A client that loses its connection keeps its HTTP URL: the server holds the subdomains of the dropped session for its account for `-offline-grace` (default 2m, 0 = release at once). Visitors get `503 Tunnel offline` with `Retry-After` meanwhile, no other account can claim the name, and the reconnecting client gets the same name back. A tunnel without an explicit `-subdomain` now asks for the name the server picked, so its URL no longer changes on every reconnect; if somebody else took the name in the meantime it settles for a new one. A tunnel closed on purpose, or one that expired, is released at once.
 - `TunnelResponse.Subdomain` carries the assigned name to the client.
@@ -16,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Release workflow: refuses to publish unless CI passed on the tagged commit, and runs the tests with the race detector.
 
 ### Fixed
+- Docs: the notes at the top of `docs/SPECIFICATION.md` and `docs/IMPLEMENTATION.md` match the current code again.
 - Client: concurrent `HTTP()`/`TCP()` calls could receive each other's tunnel response because the control channel has no request ID; tunnel requests are now sent one at a time.
 - The Docker image reports its commit and build date (`wirerift version`) instead of `commit: none, built: unknown`.
 
