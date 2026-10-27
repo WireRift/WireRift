@@ -258,21 +258,23 @@ func (s *Stream) armIdleReaper() {
 		return
 	}
 	s.lastActive.Store(time.Now().UnixNano())
-	var fire func()
-	fire = func() {
-		if s.state.Load() != streamStateHalfClosedLocal {
-			return
-		}
-		idle := time.Since(time.Unix(0, s.lastActive.Load()))
-		if idle < d {
-			if t := s.idleTimer.Load(); t != nil {
-				t.Reset(d - idle)
-			}
-			return
-		}
-		_ = s.Reset()
+	s.idleTimer.Store(time.AfterFunc(d, func() { s.reapIfIdle(d) }))
+}
+
+// reapIfIdle resets the stream if it is still half-closed and the peer has been
+// silent for d; otherwise it re-arms the timer for the remaining time.
+func (s *Stream) reapIfIdle(d time.Duration) {
+	if s.state.Load() != streamStateHalfClosedLocal {
+		return
 	}
-	s.idleTimer.Store(time.AfterFunc(d, fire))
+	idle := time.Since(time.Unix(0, s.lastActive.Load()))
+	if idle < d {
+		if t := s.idleTimer.Load(); t != nil {
+			t.Reset(d - idle)
+		}
+		return
+	}
+	_ = s.Reset()
 }
 
 // Reset immediately aborts the stream.
