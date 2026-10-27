@@ -591,6 +591,9 @@ curl -X POST -H "Authorization: Bearer TOKEN" http://localhost:4040/api/requests
 
 ### Docker Run
 
+Tagged releases publish an image to GitHub Container Registry
+(`ghcr.io/wirerift/wirerift:<version>` and `:latest`; from v1.13.0 on). To build it yourself:
+
 ```bash
 docker build -t wirerift-server .
 

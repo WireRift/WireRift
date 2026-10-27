@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Releases publish a Docker image to `ghcr.io/wirerift/wirerift` (version tag and `latest`), and CI builds the Dockerfile and starts both binaries from it on every push
+
 ### Fixed
 - Client: the login now reports the client's real build version instead of a hard-coded `1.0.0`
 
