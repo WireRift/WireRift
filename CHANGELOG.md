@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `max_tunnels` is now enforced atomically, so parallel tunnel requests from one account's sessions can no longer overshoot the limit.
+
 ## [1.12.1] - 2026-10-27
 
 ### Added

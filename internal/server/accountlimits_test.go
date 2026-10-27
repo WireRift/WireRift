@@ -1,7 +1,10 @@
 package server
 
 import (
+	"fmt"
 	"net"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -250,5 +253,32 @@ func TestStatsForAccount(t *testing.T) {
 	all := s.Stats()
 	if all["active_tunnels"] != 3 || all["active_sessions"] != 2 {
 		t.Errorf("server stats = %v, want 3 tunnels and 2 sessions", all)
+	}
+}
+
+func TestAddTunnelEnforcesAccountLimitUnderLock(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+	acct := &auth.Account{ID: "acc", MaxTunnels: 2}
+	var sessions []*Session
+	for i := 0; i < 2; i++ {
+		sess := &Session{ID: fmt.Sprintf("s%d", i), AccountID: "acc", Account: acct, Tunnels: map[string]*Tunnel{}}
+		s.sessions.Store(sess.ID, sess)
+		sessions = append(sessions, sess)
+	}
+
+	var wg sync.WaitGroup
+	var ok atomic.Int32
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if s.addTunnel(sessions[i%2], &Tunnel{ID: fmt.Sprintf("t%d", i)}) == "" {
+				ok.Add(1)
+			}
+		}(i)
+	}
+	wg.Wait()
+	if got := ok.Load(); got != 2 {
+		t.Fatalf("accepted %d tunnels, want exactly 2", got)
 	}
 }

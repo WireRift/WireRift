@@ -683,6 +683,22 @@ func (s *Server) accountSessionCount(accountID string) int {
 	return n
 }
 
+// addTunnel registers a tunnel on its session and returns "" or the reason it
+// was refused. The account limit is re-checked under acctMu so parallel
+// requests from one account's sessions cannot all pass the early check in
+// handleTunnelRequest and overshoot max_tunnels.
+func (s *Server) addTunnel(session *Session, t *Tunnel) string {
+	s.acctMu.Lock()
+	defer s.acctMu.Unlock()
+	if acct := session.Account; acct != nil && acct.MaxTunnels > 0 && s.accountTunnelCount(acct.ID) >= acct.MaxTunnels {
+		return "account tunnel limit reached"
+	}
+	if !session.addTunnel(t, s.config.MaxTunnelsPerSession) {
+		return "session closed"
+	}
+	return ""
+}
+
 // accountTunnelCount counts the tunnels of every live session of an account.
 func (s *Server) accountTunnelCount(accountID string) int {
 	n := 0
@@ -913,12 +929,12 @@ func (s *Server) createHTTPTunnel(m *mux.Mux, session *Session, req *proto.Tunne
 		}
 	}
 
-	if !session.addTunnel(tunnel, s.config.MaxTunnelsPerSession) {
+	if refusal := s.addTunnel(session, tunnel); refusal != "" {
 		s.tunnels.Delete(subdomain)
 		if customDomain != "" {
 			s.tunnels.Delete(customKeyPrefix + customDomain)
 		}
-		sendTunnelError(m, "session closed")
+		sendTunnelError(m, refusal)
 		return
 	}
 	s.armExpiry(session, tunnel)
@@ -969,11 +985,11 @@ func (s *Server) createTCPTunnel(m *mux.Mux, session *Session, req *proto.Tunnel
 	portKey := "tcp:" + strconv.Itoa(port)
 	s.tunnels.Store(portKey, tunnel)
 
-	if !session.addTunnel(tunnel, s.config.MaxTunnelsPerSession) {
+	if refusal := s.addTunnel(session, tunnel); refusal != "" {
 		s.tunnels.Delete(portKey)
 		listener.Close()
 		s.releasePort(port)
-		sendTunnelError(m, "session closed")
+		sendTunnelError(m, refusal)
 		return
 	}
 
