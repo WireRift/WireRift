@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Subdomains reserved for connected or recently dropped clients now survive a server restart (saved to `<cert-dir>/held.json` on stop, loaded on start), so a restart no longer lets someone else take a name before its client reconnects.
+
 ## [1.14.1] - 2026-10-27
 
 ### Added

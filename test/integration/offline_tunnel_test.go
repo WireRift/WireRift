@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -97,6 +98,7 @@ func TestDroppedClientKeepsItsURLAndNobodyElseCanTakeIt(t *testing.T) {
 	cfg.ControlAddr = "127.0.0.1:0"
 	cfg.HTTPAddr = "127.0.0.1:0"
 	cfg.AuthManager = authMgr
+	cfg.HeldFile = filepath.Join(t.TempDir(), "held.json")
 	srv := server.New(cfg, nil)
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
@@ -183,6 +185,7 @@ func newOfflineEnv(t *testing.T, maxTunnels map[string]int) *offlineEnv {
 	cfg.ControlAddr = "127.0.0.1:0"
 	cfg.HTTPAddr = "127.0.0.1:0"
 	cfg.AuthManager = authMgr
+	cfg.HeldFile = filepath.Join(t.TempDir(), "held.json")
 	srv := server.New(cfg, nil)
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
@@ -230,5 +233,33 @@ func TestClientThatClosesOnPurposeReleasesItsSubdomain(t *testing.T) {
 	bob := e.connect(t, "bob", e.srv.ControlAddr(), false)
 	if _, err := bob.HTTP(e.local, client.WithSubdomain("goodbye")); err != nil {
 		t.Fatalf("bob could not take a name its owner released: %v", err)
+	}
+}
+
+// A restart of the server must not open a window in which someone else takes
+// the name of a client that was connected when it stopped.
+func TestRestartKeepsConnectedClientsNames(t *testing.T) {
+	e := newOfflineEnv(t, nil)
+	alice := e.connect(t, "alice", e.srv.ControlAddr(), false)
+	if _, err := alice.HTTP(e.local, client.WithSubdomain("keepme")); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.srv.Stop(); err != nil {
+		t.Fatal(err)
+	}
+
+	next := server.New(e.cfg, nil)
+	if err := next.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { next.Stop() })
+
+	bob := e.connect(t, "bob", next.ControlAddr(), false)
+	if _, err := bob.HTTP(e.local, client.WithSubdomain("keepme")); err == nil {
+		t.Fatal("bob took a name that alice held across the restart")
+	}
+	alice2 := e.connect(t, "alice", next.ControlAddr(), false)
+	if _, err := alice2.HTTP(e.local, client.WithSubdomain("keepme")); err != nil {
+		t.Fatalf("alice could not reclaim her name after the restart: %v", err)
 	}
 }

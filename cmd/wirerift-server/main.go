@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -270,6 +271,7 @@ Environment Variables:
 	srvConfig.HalfCloseTimeout = *halfClose
 	srvConfig.TCPIdleTimeout = *tcpIdle
 	srvConfig.OfflineGrace = *offlineGrace
+	srvConfig.HeldFile = filepath.Join(*certDir, "held.json")
 	srvConfig.AuthManager = authMgr
 
 	if err := checkCertPair("dashboard-tls", *dashCert, *dashKey); err != nil {

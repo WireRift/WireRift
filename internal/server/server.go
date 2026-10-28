@@ -83,6 +83,11 @@ type Config struct {
 	// claim the name again. Zero disables the reservation.
 	OfflineGrace time.Duration
 
+	// HeldFile, when set, is where Stop saves the reserved subdomains (those
+	// on hold plus the ones of connected clients) and Start loads them back,
+	// so a restart does not open a window for others to take a client's name.
+	HeldFile string
+
 	// TCPIdleTimeout closes a TCP tunnel connection that has moved no data in
 	// either direction for this long. Zero (the default) never does, so a quiet
 	// SSH session is not cut.
@@ -388,6 +393,7 @@ func New(config Config, logger *slog.Logger) *Server {
 // Start starts the server.
 func (s *Server) Start() error {
 	s.startTime = time.Now()
+	s.loadHeld()
 
 	// Start control plane listener
 	if err := s.startControlListener(); err != nil {
@@ -433,6 +439,8 @@ const goAwayGrace = 2 * time.Second
 
 // Stop stops the server.
 func (s *Server) Stop() error {
+	s.saveHeld()
+
 	// Tell every client the stop is intentional before cancelling the context
 	// (which makes the sessions close their connections on their own), but
 	// never let a peer that stopped reading hold up the shutdown: the notice
