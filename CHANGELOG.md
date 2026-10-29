@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Client: a tunnel whose subdomain stays taken no longer waits a useless 16 s after its last attempt, and the fallback request keeps the original deadline of a time-limited tunnel instead of reusing a stale TTL.
+
 ## [1.14.2] - 2026-10-29
 
 ### Fixed

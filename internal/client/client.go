@@ -759,6 +759,9 @@ func (c *Client) recreateTunnels() {
 			if lost {
 				break
 			}
+			if attempt == 4 {
+				break // out of attempts: nothing left to wait for
+			}
 			c.logger.Warn("failed to re-create tunnel, will retry", "id", t.ID, "attempt", attempt+1, "error", err)
 			select {
 			case <-time.After(delay):
@@ -771,7 +774,19 @@ func (c *Client) recreateTunnels() {
 		if err != nil && !expired && !lost && t.autoSubdomain && errors.Is(err, ErrTunnelFailed) && strings.Contains(err.Error(), "taken") {
 			c.logger.Warn("previous subdomain is taken, asking for a new one", "id", t.ID, "subdomain", request.Subdomain)
 			request.Subdomain = ""
-			newTunnel, err = c.openTunnel(&request)
+			// The retries took time: the deadline of a time-limited tunnel has
+			// not moved, so recompute what is left before asking again.
+			if !t.ExpiresAt.IsZero() {
+				remaining := time.Until(t.ExpiresAt)
+				if remaining < time.Second {
+					expired = true
+				} else {
+					request.TTLSeconds = int(remaining / time.Second)
+				}
+			}
+			if !expired {
+				newTunnel, err = c.openTunnel(&request)
+			}
 		}
 		if newTunnel != nil && err == nil && t.autoSubdomain {
 			newTunnel.autoSubdomain = true // a pinned reconnect request does not set it itself
