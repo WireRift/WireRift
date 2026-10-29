@@ -973,7 +973,7 @@ func (s *Server) createHTTPTunnel(m *mux.Mux, session *Session, req *proto.Tunne
 		sendTunnelError(m, "subdomain already taken")
 		return
 	}
-	if _, loaded := s.tunnels.LoadOrStore(subdomain, tunnel); loaded {
+	if _, loaded := s.tunnels.LoadOrStore(subdomain, tunnel); loaded && !(req.Reconnect && s.takeOver(subdomain, session, tunnel)) {
 		sendTunnelError(m, "subdomain already taken")
 		return
 	}
@@ -1010,6 +1010,36 @@ func (s *Server) createHTTPTunnel(m *mux.Mux, session *Session, req *proto.Tunne
 	_ = m.GetFrameWriter().Write(respFrame)
 
 	s.logger.Info("tunnel created", "id", tunnelID, "type", "http", "subdomain", subdomain, "custom_domain", customDomain)
+}
+
+// takeOver gives the subdomain to fresh when it belongs to a tunnel of the same
+// account in another session. A client that reconnects after a network drop
+// finds its previous session still registered until the server notices the
+// silence; waiting for that would cost it its URL. The old tunnel is detached
+// from its session, so ending that session later neither tears down nor holds
+// the name again.
+func (s *Server) takeOver(subdomain string, session *Session, fresh *Tunnel) bool {
+	v, ok := s.tunnels.Load(subdomain)
+	if !ok {
+		return false
+	}
+	old, ok := v.(*Tunnel)
+	if !ok || old.Type != proto.TunnelTypeHTTP || old.CustomDomain != "" ||
+		old.AccountID != session.AccountID || old.SessionID == session.ID {
+		return false
+	}
+	if !s.tunnels.CompareAndSwap(subdomain, old, fresh) {
+		return false
+	}
+	old.cancelExpiry()
+	old.markClosed()
+	if sv, ok := s.sessions.Load(old.SessionID); ok {
+		prev := sv.(*Session)
+		prev.mu.Lock()
+		delete(prev.Tunnels, old.ID)
+		prev.mu.Unlock()
+	}
+	return true
 }
 
 // createTCPTunnel handles TCP tunnel creation.

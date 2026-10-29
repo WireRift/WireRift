@@ -65,6 +65,11 @@ type TunnelRequest struct {
 	// TTLSeconds asks the server to close the tunnel automatically after this
 	// many seconds (0 = no limit).
 	TTLSeconds int `json:"ttl_seconds,omitempty"`
+
+	// Reconnect marks a request that re-creates a tunnel after the client lost
+	// its connection. The server may then hand the name over from the same
+	// account's previous session, which it has not noticed is dead yet.
+	Reconnect bool `json:"reconnect,omitempty"`
 }
 
 // TunnelResponse is sent by the server after tunnel allocation.

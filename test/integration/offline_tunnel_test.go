@@ -24,11 +24,13 @@ import (
 // cutter forwards TCP to target and can sever every connection and refuse new
 // ones, which is how a network drop looks to both ends.
 type cutter struct {
-	ln      net.Listener
-	target  string
-	mu      sync.Mutex
-	blocked bool
-	conns   []net.Conn
+	ln       net.Listener
+	target   string
+	mu       sync.Mutex
+	blocked  bool
+	stranded bool // client side cut, server side left open (a half-open link)
+	conns    []net.Conn
+	ins      []net.Conn
 }
 
 func newCutter(t *testing.T, target string) *cutter {
@@ -56,8 +58,14 @@ func newCutter(t *testing.T, target string) *cutter {
 				continue
 			}
 			c.conns = append(c.conns, in, out)
+			c.ins = append(c.ins, in)
 			c.mu.Unlock()
-			go func() { io.Copy(out, in); out.Close() }()
+			go func() {
+				io.Copy(out, in)
+				if !c.isStranded() {
+					out.Close()
+				}
+			}()
 			go func() { io.Copy(in, out); in.Close() }()
 		}
 	}()
@@ -74,6 +82,21 @@ func (c *cutter) cut(block bool) {
 	}
 	c.conns = nil
 }
+
+// strand cuts the client's side and refuses new connections, but leaves the
+// server's side open: the server cannot tell the client is gone, as after a
+// wifi drop.
+func (c *cutter) strand() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.stranded, c.blocked = true, true
+	for _, cn := range c.ins {
+		cn.Close()
+	}
+	c.ins = nil
+}
+
+func (c *cutter) isStranded() bool { c.mu.Lock(); defer c.mu.Unlock(); return c.stranded }
 
 func (c *cutter) unblock() { c.mu.Lock(); c.blocked = false; c.mu.Unlock() }
 
@@ -262,4 +285,29 @@ func TestRestartKeepsConnectedClientsNames(t *testing.T) {
 	if _, err := alice2.HTTP(e.local, client.WithSubdomain("keepme")); err != nil {
 		t.Fatalf("alice could not reclaim her name after the restart: %v", err)
 	}
+}
+
+// After a drop the server still has the old session registered. The client
+// that reconnects must get its subdomain back anyway instead of a new name.
+func TestReconnectTakesOverItsOwnStaleSession(t *testing.T) {
+	e := newOfflineEnv(t, nil)
+	proxy := newCutter(t, e.srv.ControlAddr())
+	alice := e.connect(t, "alice", proxy.ln.Addr().String(), true)
+	if _, err := alice.HTTP(e.local, client.WithSubdomain("sticky")); err != nil {
+		t.Fatal(err)
+	}
+
+	proxy.strand()
+	proxy.unblock()
+
+	req, _ := http.NewRequest("GET", "http://"+e.srv.HTTPAddr()+"/", nil)
+	req.Host = "sticky." + e.cfg.Domain
+	waitFor(t, func() bool {
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, "the tunnel to come back on the same name")
 }

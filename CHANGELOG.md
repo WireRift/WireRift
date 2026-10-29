@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- A client that reconnects after a network drop (wifi loss, a half-open link) now gets its subdomain back from the server even while the previous session is still registered: tunnel requests sent while re-creating tunnels carry a new `reconnect` flag, and the server hands the name over from the same account's other session. Before, the name stayed "taken" and the client fell back to a random URL. Other accounts, and clients without the flag, are refused as before.
 - Client: a tunnel whose subdomain stays taken no longer waits a useless 16 s after its last attempt, and the fallback request keeps the original deadline of a time-limited tunnel instead of reusing a stale TTL.
 
 ## [1.14.2] - 2026-10-29

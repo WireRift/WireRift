@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/wirerift/wirerift/internal/proto"
 )
 
 func TestHeldSubdomainExpiresAndCanBeDisabled(t *testing.T) {
@@ -56,5 +58,30 @@ func TestHeldNamesSurviveARestart(t *testing.T) {
 	}
 	if _, err := os.Stat(cfg.HeldFile); !os.IsNotExist(err) {
 		t.Fatalf("held file should be removed after loading, stat err = %v", err)
+	}
+}
+
+func TestTakeOverOnlyFromTheSameAccountsOtherSession(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+	old := &Tunnel{ID: "t1", Type: proto.TunnelTypeHTTP, SessionID: "s1", AccountID: "alice", Subdomain: "app", closed: make(chan struct{})}
+	prev := &Session{ID: "s1", AccountID: "alice", Tunnels: map[string]*Tunnel{"t1": old}}
+	s.sessions.Store("s1", prev)
+	s.tunnels.Store("app", old)
+	fresh := &Tunnel{ID: "t2", Type: proto.TunnelTypeHTTP, SessionID: "s2", AccountID: "alice", Subdomain: "app", closed: make(chan struct{})}
+
+	if s.takeOver("app", &Session{ID: "s3", AccountID: "bob"}, fresh) {
+		t.Fatal("another account took the name over")
+	}
+	if s.takeOver("app", &Session{ID: "s1", AccountID: "alice"}, fresh) {
+		t.Fatal("a session took over from itself")
+	}
+	if !s.takeOver("app", &Session{ID: "s2", AccountID: "alice"}, fresh) {
+		t.Fatal("same account, other session: expected takeover")
+	}
+	if v, _ := s.tunnels.Load("app"); v != fresh {
+		t.Fatal("the name does not point at the new tunnel")
+	}
+	if len(prev.Tunnels) != 0 {
+		t.Fatal("old tunnel is still attached to its session")
 	}
 }

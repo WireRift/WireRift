@@ -728,6 +728,7 @@ func (c *Client) recreateTunnels() {
 			continue
 		}
 		request := *t.request
+		request.Reconnect = true
 		// The server may still hold the previous session (and its subdomain or
 		// port) for a moment, so retry with backoff before giving up.
 		var newTunnel *Tunnel
