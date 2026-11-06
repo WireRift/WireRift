@@ -2,7 +2,7 @@
 
 BINARY_SERVER=wirerift-server
 BINARY_CLIENT=wirerift
-VERSION?=1.16.0
+VERSION?=1.16.1
 COMMIT?=$(shell git rev-parse --short=8 HEAD 2>/dev/null || echo none)
 BUILD_DATE?=$(shell git show -s --format=%cI HEAD 2>/dev/null || echo unknown)
 GO=go
@@ -12,13 +12,16 @@ LDFLAGS=-s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$
 # programs are not part of it).
 PACKAGES=./cmd/... ./internal/...
 
-build: build-server build-client
+build: build-server build-client build-backup
 
 build-server:
 	$(GO) build $(GOFLAGS) -ldflags="$(LDFLAGS)" -o bin/$(BINARY_SERVER) ./cmd/wirerift-server
 
 build-client:
 	$(GO) build $(GOFLAGS) -ldflags="$(LDFLAGS)" -o bin/$(BINARY_CLIENT) ./cmd/wirerift
+
+build-backup:
+	$(GO) build $(GOFLAGS) -ldflags="$(LDFLAGS)" -o bin/wirerift-backup ./cmd/wirerift-backup
 
 test:
 	$(GO) test $(GOFLAGS) $(PACKAGES) ./test/integration/ -timeout 120s
@@ -63,4 +66,6 @@ release:
 			-o dist/$(BINARY_SERVER)-$$GOOS-$$GOARCH$$EXT ./cmd/wirerift-server; \
 		GOOS=$$GOOS GOARCH=$$GOARCH $(GO) build -ldflags="$(LDFLAGS)" \
 			-o dist/$(BINARY_CLIENT)-$$GOOS-$$GOARCH$$EXT ./cmd/wirerift; \
+		GOOS=$$GOOS GOARCH=$$GOARCH $(GO) build -ldflags="$(LDFLAGS)" \
+			-o dist/wirerift-backup-$$GOOS-$$GOARCH$$EXT ./cmd/wirerift-backup; \
 	done

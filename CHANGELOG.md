@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.16.1] - 2026-11-06
+
+### Fixed
+- Release binaries and `make build` / `make release` now include `wirerift-backup` (it was only in the Docker image), so a bare-metal install can back up and restore its state.
+- Tests: the dashboard port-conflict test no longer hangs on macOS and Windows.
+
 ## [1.16.0] - 2026-11-06
 
 ### Security

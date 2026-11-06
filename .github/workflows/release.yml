@@ -92,6 +92,11 @@ jobs:
             go build -ldflags="$LDFLAGS" \
               -o "dist/wirerift-server-${target_os}-${target_arch}${ext}" \
               ./cmd/wirerift-server
+
+            # Build the encrypted state backup/restore tool
+            go build -ldflags="$LDFLAGS" \
+              -o "dist/wirerift-backup-${target_os}-${target_arch}${ext}" \
+              ./cmd/wirerift-backup
           done
 
       - name: Create archives
