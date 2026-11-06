@@ -17,6 +17,7 @@ func TestSerializeRequestDedupesForwardedHeaders(t *testing.T) {
 	req.Host = "app.example.com"
 	req.Header.Set("X-Forwarded-Proto", "https")
 	req.Header.Set("X-Forwarded-Host", "evil.com")
+	req.Header.Set("X-Forwarded-For", "198.51.100.99")
 	req.Header.Set("X-WireRift-PIN", "1234")
 
 	data, err := SerializeRequest(req)
@@ -29,6 +30,9 @@ func TestSerializeRequestDedupesForwardedHeaders(t *testing.T) {
 	}
 	if strings.Contains(s, "evil.com") {
 		t.Errorf("client-supplied X-Forwarded-Host leaked:\n%s", s)
+	}
+	if strings.Contains(s, "198.51.100.99") {
+		t.Errorf("client-supplied X-Forwarded-For leaked:\n%s", s)
 	}
 	if !strings.Contains(s, "X-Forwarded-Proto: http\r\n") {
 		t.Errorf("trusted X-Forwarded-Proto missing:\n%s", s)

@@ -1,8 +1,19 @@
 services:
   wirerift-server:
-    build: .
-    image: wirerift-server:latest
+    image: ${WIRERIFT_IMAGE:?Set WIRERIFT_IMAGE to an approved immutable image@sha256 digest}
     container_name: wirerift-server
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    stop_grace_period: 30s
+    cpus: ${WIRERIFT_CPUS:-2.0}
+    mem_limit: ${WIRERIFT_MEMORY_LIMIT:-1g}
+    pids_limit: ${WIRERIFT_PIDS_LIMIT:-512}
     ports:
       - "4443:4443"       # Control plane
       - "80:80"           # HTTP edge
@@ -10,18 +21,22 @@ services:
       - "127.0.0.1:4040:4040"  # Dashboard (localhost only; plain HTTP)
       - "20000-20099:20000-20099"  # TCP tunnel port range (subset)
     environment:
-      - WIRERIFT_DOMAIN=localtunnel.dev
+      WIRERIFT_DOMAIN: ${WIRERIFT_DOMAIN:?Set WIRERIFT_DOMAIN to your public tunnel domain}
+      WIRERIFT_TOKEN_FILE: /run/secrets/wirerift_token
     command:
       - "-domain"
-      - "localtunnel.dev"
+      - "${WIRERIFT_DOMAIN}"
+      - "-acme-email"
+      - "${WIRERIFT_ACME_EMAIL:?Set WIRERIFT_ACME_EMAIL for ACME certificates}"
       - "-tcp-ports"
       - "20000-20099"
-      - "-auto-cert"
     volumes:
       - certs:/data/certs
+    secrets:
+      - wirerift_token
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:80/healthz"]
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:80/health/ready"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -31,8 +46,13 @@ services:
   webapp:
     image: nginx:alpine
     container_name: wirerift-webapp
+    profiles: ["example"]
     ports:
-      - "8080:80"
+      - "127.0.0.1:8080:80"
 
 volumes:
   certs:
+
+secrets:
+  wirerift_token:
+    file: ${WIRERIFT_TOKEN_FILE:?Set WIRERIFT_TOKEN_FILE to a strong token file}

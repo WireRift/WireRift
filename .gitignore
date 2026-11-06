@@ -51,3 +51,5 @@ website/dist/
 !/.wrongstack/
 /.wrongstack/*
 !/.wrongstack/project.json
+
+.dfmt/

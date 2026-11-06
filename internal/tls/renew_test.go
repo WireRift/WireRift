@@ -66,6 +66,7 @@ func newRenewalManager(t *testing.T) *Manager {
 		t.Fatal(err)
 	}
 	m.acme = acme
+	m.acmeReady.Store(true)
 	return m
 }
 

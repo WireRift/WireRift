@@ -20,11 +20,9 @@ func (s *Server) hostHasTunnel(host string) bool { return s.IsHostServed(host) }
 
 // handleHTTPRequest handles incoming HTTP requests.
 func (s *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
-	// Health check endpoint. A tunnel's own /healthz (and its PIN/auth/IP
-	// checks) must not be shadowed, so only answer for hosts without a tunnel.
-	if r.URL.Path == "/healthz" && !s.hostHasTunnel(r.Host) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"ok"}`))
+	// A tunnel's own operational-looking paths must not be shadowed. Serve the
+	// server endpoints only on hosts that do not resolve to an active tunnel.
+	if !s.hostHasTunnel(r.Host) && s.handleOperationalEndpoint(w, r) {
 		return
 	}
 
@@ -33,6 +31,13 @@ func (s *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
 		s.config.ACMEChallengeHandler(w, r)
 		return
 	}
+
+	// Measure tunnel-edge traffic only. Operational scrapes and ACME probes are
+	// intentionally excluded so monitoring cannot inflate its own counters.
+	requestStarted := time.Now()
+	metricWriter := newEdgeMetricWriter(w)
+	w = metricWriter
+	defer func() { s.observeHTTPRequest(metricWriter.status, time.Since(requestStarted)) }()
 
 	// Add request ID for tracing
 	if r.Header.Get("X-Request-ID") == "" {
@@ -43,10 +48,7 @@ func (s *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Request-ID", r.Header.Get("X-Request-ID"))
 
 	// Rate limit by client IP
-	clientIP := r.RemoteAddr
-	if host, _, err := net.SplitHostPort(clientIP); err == nil {
-		clientIP = host
-	}
+	clientIP := s.clientIP(r)
 	if !s.rateLimiter.Allow(clientIP) {
 		writeEdgeError(w, r, http.StatusTooManyRequests, "Rate limit exceeded")
 		return
@@ -142,6 +144,7 @@ func (s *Server) forwardHTTPRequest(w http.ResponseWriter, r *http.Request, sess
 		s.forwardWebSocket(w, r, session, tunnel)
 		return
 	}
+	clientIP := s.clientIP(r)
 
 	// 1. Open a new mux stream
 	stream, err := session.Mux.OpenStream()
@@ -152,7 +155,7 @@ func (s *Server) forwardHTTPRequest(w http.ResponseWriter, r *http.Request, sess
 	defer stream.Close()
 
 	// 2. Send STREAM_OPEN frame with metadata
-	openFrame, _ := StreamOpenForHTTP(tunnel.ID, stream.ID(), r.RemoteAddr)
+	openFrame, _ := StreamOpenForHTTP(tunnel.ID, stream.ID(), clientIP)
 	if err := session.Mux.GetFrameWriter().Write(openFrame); err != nil {
 		writeEdgeError(w, r, http.StatusBadGateway, "Failed to send stream open")
 		return
@@ -191,7 +194,7 @@ func (s *Server) forwardHTTPRequest(w http.ResponseWriter, r *http.Request, sess
 			held.release()
 		}
 	}
-	head, body, err := serializeRequestParts(r)
+	head, body, err := s.serializeRequestParts(r)
 	bodyLen := int64(len(body))
 	if err != nil {
 		releaseBody()
@@ -274,6 +277,8 @@ func (c *countingReader) Read(p []byte) (int, error) {
 // forwardWebSocket handles WebSocket upgrade requests by hijacking the connection
 // and performing bidirectional copy between the client and the tunnel stream.
 func (s *Server) forwardWebSocket(w http.ResponseWriter, r *http.Request, session *Session, tunnel *Tunnel) {
+	clientIP := s.clientIP(r)
+
 	// Hijack the HTTP connection to get raw TCP access
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
@@ -290,14 +295,14 @@ func (s *Server) forwardWebSocket(w http.ResponseWriter, r *http.Request, sessio
 	defer stream.Close()
 
 	// Send STREAM_OPEN
-	openFrame, _ := StreamOpenForHTTP(tunnel.ID, stream.ID(), r.RemoteAddr)
+	openFrame, _ := StreamOpenForHTTP(tunnel.ID, stream.ID(), clientIP)
 	if err := session.Mux.GetFrameWriter().Write(openFrame); err != nil {
 		writeEdgeError(w, r, http.StatusBadGateway, "Failed to send stream open")
 		return
 	}
 
 	// Serialize and send the upgrade request
-	reqData, err := SerializeRequest(r)
+	reqData, err := s.serializeRequest(r)
 	if err != nil {
 		if errors.Is(err, ErrRequestTooLarge) {
 			writeEdgeError(w, r, http.StatusRequestEntityTooLarge, "Request body too large")

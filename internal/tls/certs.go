@@ -43,6 +43,11 @@ type Config struct {
 	// UseStaging uses Let's Encrypt staging server.
 	UseStaging bool
 
+	// RequireACME makes ACME initialization failure fatal instead of falling
+	// back to a self-signed certificate. Production entry points should enable
+	// this whenever Email is configured.
+	RequireACME bool
+
 	// AutoCert enables automatic certificate generation.
 	AutoCert bool
 }
@@ -52,8 +57,9 @@ type Manager struct {
 	config Config
 
 	// Certificate cache (bounded by maxCachedCerts)
-	certs     sync.Map // map[string]*tls.Certificate
-	certCount atomic.Int64
+	certs             sync.Map // map[string]*tls.Certificate
+	certCount         atomic.Int64
+	persistenceErrors atomic.Uint64
 
 	// retryAfter holds, per host, the earliest time ACME may be tried again
 	// after a failure. While it is in the future the host is served a
@@ -74,7 +80,9 @@ type Manager struct {
 	caOnce sync.Once
 
 	// ACME (Let's Encrypt)
-	acme *ACMEManager
+	acme       *ACMEManager
+	acmeReady  atomic.Bool
+	acmeInitMu sync.Mutex
 
 	// allowHost, when set, decides which host names may get a certificate:
 	// every name except the base domain itself must pass it (custom domains
@@ -113,6 +121,42 @@ func (m *Manager) dropCert(host string) {
 	if _, loaded := m.certs.LoadAndDelete(host); loaded {
 		m.certCount.Add(-1)
 	}
+}
+
+// EarliestCertificateExpiry returns the earliest expiry already present in the
+// in-memory certificate cache. It never loads or issues a certificate, making
+// it safe to call from a metrics scrape.
+func (m *Manager) EarliestCertificateExpiry() time.Time {
+	var earliest time.Time
+	m.certs.Range(func(_, value any) bool {
+		cert, ok := value.(*tls.Certificate)
+		if !ok || cert == nil {
+			return true
+		}
+		var expiry time.Time
+		if cert.Leaf != nil {
+			expiry = cert.Leaf.NotAfter
+		} else if len(cert.Certificate) > 0 {
+			if leaf, err := x509.ParseCertificate(cert.Certificate[0]); err == nil {
+				expiry = leaf.NotAfter
+			}
+		}
+		if !expiry.IsZero() && (earliest.IsZero() || expiry.Before(earliest)) {
+			earliest = expiry
+		}
+		return true
+	})
+	return earliest
+}
+
+// PersistenceErrors returns certificate/account write failures observed by
+// this manager and its ACME backend.
+func (m *Manager) PersistenceErrors() uint64 {
+	errors := m.persistenceErrors.Load()
+	if m.acme != nil {
+		errors += m.acme.PersistenceErrors()
+	}
+	return errors
 }
 
 // SetHostAllower sets the callback that decides whether a host outside the base
@@ -170,14 +214,62 @@ func NewManager(config Config) (*Manager, error) {
 			return nil, fmt.Errorf("ACME init: %w", err)
 		}
 		if err := acmeMgr.Initialize(); err != nil {
-			slog.Warn("ACME initialization failed, falling back to self-signed", "error", err)
+			if config.RequireACME {
+				if cachedErr := m.startWithCachedACME(acmeMgr); cachedErr != nil {
+					return nil, fmt.Errorf("ACME initialization: %w (cached startup unavailable: %v)", err, cachedErr)
+				}
+				slog.Warn("ACME initialization failed; serving cached base-domain certificate while retrying", "error", err)
+			} else {
+				slog.Warn("ACME initialization failed, falling back to self-signed", "error", err)
+			}
 		} else {
 			m.acme = acmeMgr
+			m.acmeReady.Store(true)
 			slog.Info("ACME enabled (Let's Encrypt)", "staging", config.UseStaging)
 		}
 	}
 
 	return m, nil
+}
+
+// startWithCachedACME permits a controlled degraded start only when both the
+// durable ACME identity and a currently valid base-domain certificate exist.
+// A missing or corrupt account key remains fatal and is never rotated here.
+func (m *Manager) startWithCachedACME(acmeMgr *ACMEManager) error {
+	keyPath := filepath.Join(m.config.CertDir, "acme-account.key")
+	key, err := loadExistingAccountKey(keyPath)
+	if err != nil {
+		return fmt.Errorf("load existing account identity: %w", err)
+	}
+	acmeMgr.account = &acmeAccount{Key: key}
+
+	host := strings.ToLower(strings.TrimSuffix(m.config.Domain, "."))
+	cert, err := m.loadCertificate(host)
+	if err != nil {
+		return fmt.Errorf("load cached certificate for %s: %w", host, err)
+	}
+	leaf := cert.Leaf
+	if leaf == nil {
+		if len(cert.Certificate) == 0 {
+			return errors.New("cached certificate has no leaf")
+		}
+		leaf, err = x509.ParseCertificate(cert.Certificate[0])
+		if err != nil {
+			return fmt.Errorf("parse cached certificate: %w", err)
+		}
+		cert.Leaf = leaf
+	}
+	now := time.Now()
+	if now.Before(leaf.NotBefore) || !now.Before(leaf.NotAfter) {
+		return errors.New("cached certificate is not currently valid")
+	}
+	if err := leaf.VerifyHostname(host); err != nil {
+		return fmt.Errorf("cached certificate hostname: %w", err)
+	}
+
+	m.acme = acmeMgr
+	m.storeCert(host, cert)
+	return nil
 }
 
 // GetCertificate returns a certificate for the given host.
@@ -210,7 +302,15 @@ func (m *Manager) issueCoalesced(parent context.Context, host string) (*tls.Cert
 	m.issueMu.Lock()
 	if call, ok := m.inflight[host]; ok {
 		m.issueMu.Unlock()
-		<-call.done
+		if parent == nil {
+			<-call.done
+		} else {
+			select {
+			case <-call.done:
+			case <-parent.Done():
+				return nil, parent.Err()
+			}
+		}
 		if call.err != nil {
 			return nil, call.err
 		}
@@ -259,17 +359,44 @@ func (m *Manager) StartRenewal(ctx context.Context, every time.Duration) {
 		return
 	}
 	go func() {
-		t := time.NewTicker(every)
-		defer t.Stop()
+		renewTicker := time.NewTicker(every)
+		defer renewTicker.Stop()
+		initTicker := time.NewTicker(acmeRetryDelay)
+		defer initTicker.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-t.C:
-				m.renewDue(ctx)
+			case <-initTicker.C:
+				if !m.acmeReady.Load() {
+					if err := m.retryACMEInitialization(); err != nil {
+						slog.Warn("ACME reinitialization failed", "error", err)
+					}
+				}
+			case <-renewTicker.C:
+				if m.acmeReady.Load() {
+					m.renewDue(ctx)
+				}
 			}
 		}
 	}()
+}
+
+func (m *Manager) retryACMEInitialization() error {
+	if m.acme == nil || m.acmeReady.Load() {
+		return nil
+	}
+	m.acmeInitMu.Lock()
+	defer m.acmeInitMu.Unlock()
+	if m.acmeReady.Load() {
+		return nil
+	}
+	if err := m.acme.Initialize(); err != nil {
+		return err
+	}
+	m.acmeReady.Store(true)
+	slog.Info("ACME connectivity restored")
+	return nil
 }
 
 // renewDue renews every cached certificate that is inside the renewal window.
@@ -340,7 +467,7 @@ func (m *Manager) issueCertificate(ctx context.Context, host string) (*tls.Certi
 	}
 
 	// Try ACME (Let's Encrypt) first, unless it failed recently.
-	if m.acme != nil {
+	if m.acme != nil && m.acmeReady.Load() {
 		if until, ok := m.retryAfter.Load(host); !ok || time.Now().After(until.(time.Time)) {
 			bundle, err := m.acme.ObtainCertificate(ctx, []string{host})
 			if err == nil {
@@ -546,34 +673,49 @@ func (m *Manager) saveCertificate(host string, certDER, keyDER []byte) error {
 	if err := writeFileAtomic(certPath, func(f *os.File) error {
 		return pem.Encode(f, &pem.Block{Type: "CERTIFICATE", Bytes: certDER})
 	}); err != nil {
+		m.persistenceErrors.Add(1)
 		return fmt.Errorf("write certificate: %w", err)
 	}
 
 	// Write key
 	if err := writeFileAtomic(keyPath, func(f *os.File) error {
-		return pem.Encode(f, &pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+		return pem.Encode(f, &pem.Block{Type: ecPrivateKeyPEMType, Bytes: keyDER})
 	}); err != nil {
+		m.persistenceErrors.Add(1)
 		return fmt.Errorf("write private key: %w", err)
 	}
 
 	return nil
 }
 
-// writeFileAtomic opens a file for writing, calls the writer function,
-// then checks the Close error to ensure data is flushed to disk.
+// writeFileAtomic writes a sibling temporary file and renames it into place
+// only after the complete contents have been flushed and closed. A failed
+// write therefore leaves the last known-good certificate untouched.
 func writeFileAtomic(path string, writer func(*os.File) error) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	f, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
 	if err != nil {
+		return err
+	}
+	tmpPath := f.Name()
+	defer os.Remove(tmpPath)
+	if err := f.Chmod(0o600); err != nil {
+		_ = f.Close()
 		return err
 	}
 
 	writeErr := writer(f)
-	closeErr := f.Close()
-
 	if writeErr != nil {
+		_ = f.Close()
 		return writeErr
 	}
-	return closeErr
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 // TLSConfig returns a TLS configuration for the server.

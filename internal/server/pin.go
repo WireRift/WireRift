@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"mime"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -15,8 +14,9 @@ import (
 )
 
 const (
-	pinMaxFailures = 5
-	pinLockout     = 5 * time.Minute
+	pinMaxFailures      = 5
+	pinMaxTrackedGuards = 10000
+	pinLockout          = 5 * time.Minute
 )
 
 // pinGuard throttles PIN guessing per tunnel and client IP.
@@ -46,14 +46,20 @@ func (g *pinGuard) fail(key string) bool {
 		g.failures = make(map[string]*pinFailure)
 	}
 	now := time.Now()
-	if len(g.failures) > 10000 { // bound memory: drop stale entries
+	f := g.failures[key]
+	if f == nil && len(g.failures) >= pinMaxTrackedGuards {
+		// Make room from expired entries. If all slots are active, fail closed for
+		// an untracked key instead of letting a distributed guessing attack grow
+		// this map without bound.
 		for k, f := range g.failures {
 			if now.Sub(f.last) > pinLockout {
 				delete(g.failures, k)
 			}
 		}
+		if len(g.failures) >= pinMaxTrackedGuards {
+			return true
+		}
 	}
-	f := g.failures[key]
 	if f == nil || now.Sub(f.last) > pinLockout {
 		f = &pinFailure{}
 		g.failures[key] = f
@@ -89,10 +95,7 @@ func pinMatch(submitted, expected string) bool {
 // Returns true if access is allowed, false if response was written (PIN page or error).
 func (s *Server) checkPIN(w http.ResponseWriter, r *http.Request, pin, subdomain string) bool {
 	cookieName := "wirerift_pin_" + subdomain
-	ip := r.RemoteAddr
-	if host, _, err := net.SplitHostPort(ip); err == nil {
-		ip = host
-	}
+	ip := s.clientIP(r)
 	guardKey := subdomain + "|" + ip
 	expectedMAC := s.pinMAC(pin, subdomain)
 

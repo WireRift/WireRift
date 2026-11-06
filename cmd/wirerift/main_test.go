@@ -172,9 +172,8 @@ func TestLoadConfigEmptyFile(t *testing.T) {
 func TestLoadConfigInvalidLine(t *testing.T) {
 	f := filepath.Join(t.TempDir(), "inv.yaml")
 	os.WriteFile(f, []byte("server: test.server\nno_colon_here\ntoken: test-token\n"), 0644)
-	cfg, _ := loadConfig(f)
-	if cfg.Server != "test.server" || cfg.Token != "test-token" {
-		t.Errorf("cfg = %+v", cfg)
+	if _, err := loadConfig(f); err == nil || !strings.Contains(err.Error(), "line 2") {
+		t.Fatalf("loadConfig error = %v, want malformed line 2", err)
 	}
 }
 

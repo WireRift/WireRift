@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -35,6 +36,21 @@ func TestPINLockoutAfterRepeatedFailures(t *testing.T) {
 	r.Header.Set("X-WireRift-PIN", "1234")
 	if !s.checkPIN(httptest.NewRecorder(), r, "1234", "app") {
 		t.Error("other IP should not be locked out")
+	}
+}
+
+func TestPINFailureTrackingIsBounded(t *testing.T) {
+	var g pinGuard
+	for i := 0; i < pinMaxTrackedGuards; i++ {
+		if g.fail(fmt.Sprintf("tunnel|192.0.2.%d", i)) {
+			t.Fatalf("key %d was locked below capacity", i)
+		}
+	}
+	if !g.fail("tunnel|capacity-overflow") {
+		t.Fatal("a new key must fail closed when tracking is at capacity")
+	}
+	if got := len(g.failures); got != pinMaxTrackedGuards {
+		t.Fatalf("tracked failures = %d, want %d", got, pinMaxTrackedGuards)
 	}
 }
 

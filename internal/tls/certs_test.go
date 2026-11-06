@@ -957,6 +957,7 @@ func TestGetCertificate_ACMEPath(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 	m.acme = mgr
+	m.acmeReady.Store(true)
 
 	// GetCertificate should use ACME path
 	hello := &tls.ClientHelloInfo{ServerName: "acmetest.test.local"}
@@ -1154,6 +1155,7 @@ func TestGetCertificate_ACMEFails_FallsBackToSelfSigned(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 	m.acme = brokenACME
+	m.acmeReady.Store(true)
 
 	// Should fall back to self-signed when ACME fails
 	hello := &tls.ClientHelloInfo{ServerName: "broken.test.local"}
@@ -1452,6 +1454,7 @@ func TestNewManager_ACMEInitializeSuccess(t *testing.T) {
 
 	// Inject it into the manager
 	m.acme = acmeMgr
+	m.acmeReady.Store(true)
 
 	if !m.IsACMEEnabled() {
 		t.Error("ACME should be enabled")
@@ -1584,6 +1587,7 @@ func TestNewManager_WithMockACME_FullPath(t *testing.T) {
 	acmeMgr.account = &acmeAccount{Key: key}
 	acmeMgr.registerAccount()
 	m.acme = acmeMgr
+	m.acmeReady.Store(true)
 
 	if !m.IsACMEEnabled() {
 		t.Error("ACME should be enabled after injection")
@@ -1942,6 +1946,7 @@ func TestACMEFailureBacksOffAndFallbackIsTemporary(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.acme = broken
+	m.acmeReady.Store(true) // configured but deliberately unable to place orders
 	hello := &tls.ClientHelloInfo{ServerName: "a.test.local"}
 
 	first, err := m.GetCertificate(hello)
@@ -1974,6 +1979,7 @@ func TestACMEFailureWithoutAutoCertIsRefusedFast(t *testing.T) {
 	broken, _ := NewACMEManager("test@example.com", dir, true, nil)
 	m, _ := NewManager(Config{Domain: "test.local", CertDir: dir, AutoCert: false})
 	m.acme = broken
+	m.acmeReady.Store(true)
 	hello := &tls.ClientHelloInfo{ServerName: "b.test.local"}
 	if _, err := m.GetCertificate(hello); err != ErrCertificateNotFound {
 		t.Fatalf("err = %v, want ErrCertificateNotFound", err)
@@ -2004,6 +2010,7 @@ func TestCertificateCacheIsBounded(t *testing.T) {
 func TestGetCertificateReleasesWaitersWhenIssuingPanics(t *testing.T) {
 	m, _ := NewManager(Config{Domain: "test.local", CertDir: t.TempDir(), AutoCert: true})
 	m.acme = &ACMEManager{} // zero value: ObtainCertificate dereferences nil state and panics
+	m.acmeReady.Store(true)
 	hello := &tls.ClientHelloInfo{ServerName: "p.test.local"}
 
 	func() {
@@ -2030,6 +2037,7 @@ func TestGetCertificate_ACMEFails_ServesValidCertInRenewalWindow(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 	m.acme = brokenACME
+	m.acmeReady.Store(true)
 
 	host := "soon.test.local"
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

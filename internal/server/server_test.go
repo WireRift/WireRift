@@ -862,9 +862,36 @@ func TestStartHTTPListenerError(t *testing.T) {
 	if !strings.Contains(err.Error(), "start HTTP listener") {
 		t.Errorf("Expected 'start HTTP listener' in error, got: %v", err)
 	}
-	// Clean up the control listener that was successfully started
-	if s.controlListener != nil {
-		s.controlListener.Close()
+	// A failed Start must roll back the control listener it already opened.
+	conn, dialErr := net.DialTimeout("tcp", s.controlListener.Addr().String(), 100*time.Millisecond)
+	if dialErr == nil {
+		conn.Close()
+		t.Fatal("control listener remained reachable after Start failed")
+	}
+}
+
+func TestStartRejectsInvalidTCPPortRange(t *testing.T) {
+	for _, spec := range []string{
+		"50000-invalid",
+		"50001-50000",
+		"0-10",
+		"1-70000",
+		"garbage",
+	} {
+		t.Run(spec, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.ControlAddr = "127.0.0.1:0"
+			cfg.HTTPAddr = "127.0.0.1:0"
+			cfg.TCPAddrRange = spec
+			s := New(cfg, nil)
+			if err := s.Start(); err == nil {
+				_ = s.Stop()
+				t.Fatalf("Start accepted invalid TCP port range %q", spec)
+			}
+			if s.controlListener != nil || s.httpListener != nil {
+				t.Fatal("invalid configuration acquired listeners before being rejected")
+			}
+		})
 	}
 }
 
@@ -2577,7 +2604,8 @@ func TestStartHTTPSListenerWithoutTLSConfig(t *testing.T) {
 	}
 }
 
-// TestStartHTTPSListenerBadAddress tests that a bad HTTPS address is handled gracefully.
+// TestStartHTTPSListenerBadAddress tests that a bad HTTPS address rolls back
+// every listener instead of leaving a partially started plaintext service.
 func TestStartHTTPSListenerBadAddress(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.ControlAddr = "127.0.0.1:0"
@@ -2586,15 +2614,81 @@ func TestStartHTTPSListenerBadAddress(t *testing.T) {
 	cfg.TLSConfig = &tls.Config{}
 
 	s := New(cfg, nil)
-	// Start should succeed -- HTTPS failure is logged as warning, not fatal
+	if err := s.Start(); err == nil || !strings.Contains(err.Error(), "start HTTPS listener") {
+		t.Fatalf("Start error = %v, want HTTPS listener failure", err)
+	}
+
+	if s.httpsListener != nil {
+		t.Error("HTTPS listener should be nil when address is invalid")
+	}
+	for name, addr := range map[string]string{"control": s.ControlAddr(), "HTTP": s.HTTPAddr()} {
+		if conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond); err == nil {
+			_ = conn.Close()
+			t.Errorf("%s listener remained reachable after HTTPS startup failure", name)
+		}
+	}
+}
+
+// TestStartHTTPSEdgeWithoutAddressFailsLoudly tests that enabling the HTTPS
+// edge (TLSConfig set) without an HTTPS address fails startup instead of
+// silently binding net.Listen("tcp","") — a random port on ALL interfaces
+// that no banner or accessor reports. Seen red before the guard: the
+// listener bound "[::]:<random>" and startHTTPSListener returned nil.
+func TestStartHTTPSEdgeWithoutAddressFailsLoudly(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.ControlAddr = "127.0.0.1:0"
+	cfg.HTTPAddr = "127.0.0.1:0"
+	cfg.HTTPSAddr = ""
+	cfg.TLSConfig = &tls.Config{}
+
+	s := New(cfg, nil)
+	if err := s.Start(); err == nil || !strings.Contains(err.Error(), "start HTTPS listener") {
+		t.Fatalf("Start error = %v, want HTTPS listener failure", err)
+	}
+	if s.httpsListener != nil {
+		t.Fatalf("no HTTPS listener may be bound without an address, got %q", s.httpsListener.Addr().String())
+	}
+}
+
+// TestStartControlPlaneWithoutAddressFailsLoudly tests that the mandatory
+// control plane refuses to start with an empty address instead of silently
+// binding net.Listen("tcp","") — a random port on ALL interfaces carrying
+// the auth token. Seen red before the guard: Start succeeded with a
+// "[::]:<random>" control listener.
+func TestStartControlPlaneWithoutAddressFailsLoudly(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.ControlAddr = ""
+	cfg.HTTPAddr = "127.0.0.1:0"
+	cfg.HTTPSAddr = "127.0.0.1:0"
+	cfg.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+
+	s := New(cfg, nil)
+	if err := s.Start(); err == nil || !strings.Contains(err.Error(), "start control listener") {
+		t.Fatalf("Start error = %v, want control listener failure", err)
+	}
+	if s.controlListener != nil {
+		t.Fatalf("no control listener may be bound without an address, got %q", s.controlListener.Addr().String())
+	}
+}
+
+// TestStartHTTPEdgeWithoutAddressIsSkipped pins the in-tree "Don't start
+// HTTP" contract (server_test.go TestAcceptControlConnections and the
+// capacity harness both configure an empty HTTPAddr expecting no HTTP
+// edge). Seen red before the skip: Start bound a "[::]:<random>" HTTP edge.
+func TestStartHTTPEdgeWithoutAddressIsSkipped(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.ControlAddr = "127.0.0.1:0"
+	cfg.HTTPAddr = ""
+	cfg.HTTPSAddr = ""
+	cfg.TLSConfig = nil
+
+	s := New(cfg, nil)
 	if err := s.Start(); err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
 	defer s.Stop()
-
-	// HTTPS listener should be nil since it failed
-	if s.httpsListener != nil {
-		t.Error("HTTPS listener should be nil when address is invalid")
+	if s.httpListener != nil {
+		t.Fatalf("empty HTTPAddr must start no HTTP edge, got %q", s.httpListener.Addr().String())
 	}
 }
 
@@ -4470,6 +4564,108 @@ func TestHealthzEndpoint(t *testing.T) {
 	}
 }
 
+func TestReadinessEndpointTracksLifecycle(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.ControlAddr = "127.0.0.1:0"
+	cfg.HTTPAddr = "127.0.0.1:0"
+	cfg.HeartbeatInterval = time.Hour
+	cfg.SessionTimeout = time.Hour
+
+	s := New(cfg, nil)
+	before := httptest.NewRecorder()
+	s.handleHTTPRequest(before, httptest.NewRequest(http.MethodGet, "/health/ready", nil))
+	if before.Code != http.StatusServiceUnavailable {
+		t.Fatalf("pre-start status = %d, want 503", before.Code)
+	}
+	if body := before.Body.String(); !strings.Contains(body, `"status":"not_ready"`) {
+		t.Fatalf("pre-start body = %q, want not_ready", body)
+	}
+
+	if err := s.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer s.Stop()
+
+	resp, err := http.Get("http://" + s.HTTPAddr() + "/health/ready")
+	if err != nil {
+		t.Fatalf("GET /health/ready: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("started status = %d, want 200", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), `"status":"ready"`) {
+		t.Fatalf("started body = %q, want ready", body)
+	}
+}
+
+func TestMetricsEndpointExportsRuntimeState(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+	s.ready.Store(true)
+	s.startTime = time.Now().Add(-2 * time.Second)
+	s.sessions.Store("session-1", &Session{})
+	httpTunnel := &Tunnel{Type: proto.TunnelTypeHTTP}
+	s.tunnels.Store("web", httpTunnel)
+	s.tunnels.Store(customKeyPrefix+"custom.test", httpTunnel)
+	s.tunnels.Store("tcp:20000", &Tunnel{Type: proto.TunnelTypeTCP})
+	s.bytesIn.Store(123)
+	s.bytesOut.Store(456)
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	s.handleHTTPRequest(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != prometheusContentType {
+		t.Fatalf("Content-Type = %q, want %q", got, prometheusContentType)
+	}
+	for _, want := range []string{
+		"wirerift_server_ready 1",
+		"wirerift_sessions_active 1",
+		`wirerift_tunnels_active{type="http"} 1`,
+		`wirerift_tunnels_active{type="tcp"} 1`,
+		`wirerift_edge_bytes_total{direction="in"} 123`,
+		`wirerift_edge_bytes_total{direction="out"} 456`,
+	} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("metrics body missing %q:\n%s", want, rec.Body.String())
+		}
+	}
+}
+
+func TestOperationalEndpointsMethodsAndTunnelPrecedence(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+
+	post := httptest.NewRecorder()
+	s.handleHTTPRequest(post, httptest.NewRequest(http.MethodPost, "/metrics", nil))
+	if post.Code != http.StatusMethodNotAllowed {
+		t.Errorf("POST /metrics status = %d, want 405", post.Code)
+	}
+	if got := post.Header().Get("Allow"); got != "GET, HEAD" {
+		t.Errorf("Allow = %q, want GET, HEAD", got)
+	}
+
+	head := httptest.NewRecorder()
+	s.handleHTTPRequest(head, httptest.NewRequest(http.MethodHead, "/healthz", nil))
+	if head.Code != http.StatusOK || head.Body.Len() != 0 {
+		t.Errorf("HEAD /healthz = status %d body %q, want 200 and empty body", head.Code, head.Body.String())
+	}
+
+	s.tunnels.Store("shadow", &Tunnel{Type: proto.TunnelTypeHTTP, Subdomain: "shadow", SessionID: "missing"})
+	for _, path := range []string{"/healthz", "/health/ready", "/metrics"} {
+		req := httptest.NewRequest(http.MethodGet, "http://shadow.wirerift.com"+path, nil)
+		req.Host = "shadow.wirerift.com"
+		rec := httptest.NewRecorder()
+		s.handleHTTPRequest(rec, req)
+		if rec.Code != http.StatusBadGateway {
+			t.Errorf("tunnel path %s status = %d, want 502 from tunnel routing", path, rec.Code)
+		}
+	}
+}
+
 func TestRequestIDHeader(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Domain = "test.local"
@@ -4733,7 +4929,7 @@ func TestSerializeRequestWithTLS(t *testing.T) {
 	}
 }
 
-func TestSerializeRequestExistingXForwardedFor(t *testing.T) {
+func TestSerializeRequestRejectsUntrustedXForwardedFor(t *testing.T) {
 	req := httptest.NewRequest("GET", "/test", nil)
 	req.Header.Set("X-Forwarded-For", "10.0.0.1")
 	req.RemoteAddr = "192.168.1.1:12345"
@@ -4744,9 +4940,11 @@ func TestSerializeRequestExistingXForwardedFor(t *testing.T) {
 	}
 
 	s := string(data)
-	// Should append the new IP to the existing X-Forwarded-For
-	if !strings.Contains(s, "X-Forwarded-For: 10.0.0.1, 192.168.1.1") {
-		t.Errorf("Expected appended X-Forwarded-For, got: %s", s)
+	if strings.Contains(s, "10.0.0.1") {
+		t.Errorf("client-supplied X-Forwarded-For leaked to the backend: %s", s)
+	}
+	if !strings.Contains(s, "X-Forwarded-For: 192.168.1.1") {
+		t.Errorf("socket peer missing from X-Forwarded-For: %s", s)
 	}
 }
 

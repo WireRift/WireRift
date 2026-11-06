@@ -3,6 +3,7 @@
 package tls
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -23,6 +24,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -30,6 +32,7 @@ import (
 const (
 	LetsEncryptProduction = "https://acme-v02.api.letsencrypt.org/directory"
 	LetsEncryptStaging    = "https://acme-staging-v02.api.letsencrypt.org/directory"
+	ecPrivateKeyPEMType   = "EC PRIVATE KEY"
 )
 
 // ACME errors
@@ -94,8 +97,9 @@ type ACMEManager struct {
 	// account is read-only after init, nonces are fetched per request, challenge
 	// tokens are unique), so one host's slow HTTP-01 challenge must not make
 	// every other first handshake wait behind it.
-	orderSlotsOnce sync.Once
-	orderSlots     chan struct{}
+	orderSlotsOnce    sync.Once
+	orderSlots        chan struct{}
+	persistenceErrors atomic.Uint64
 
 	httpClient *http.Client
 }
@@ -330,7 +334,7 @@ type CertificateBundle struct {
 // TLSCertificate converts the bundle to a crypto/tls.Certificate.
 func (b *CertificateBundle) TLSCertificate() (*cryptotls.Certificate, error) {
 	keyDER, _ := x509.MarshalECPrivateKey(b.PrivateKey)
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: ecPrivateKeyPEMType, Bytes: keyDER})
 	cert, err := cryptotls.X509KeyPair(b.CertPEM, keyPEM)
 	if err != nil {
 		return nil, err
@@ -395,7 +399,7 @@ func (m *ACMEManager) processAuthorization(ctx context.Context, authzURL string)
 
 	m.logger.Info("responding to challenge",
 		"domain", authz.Identifier.Value,
-		"token", challenge.Token[:8]+"...",
+		"token", abbreviatedToken(challenge.Token),
 	)
 
 	// Tell ACME server we're ready
@@ -432,6 +436,13 @@ func (m *ACMEManager) processAuthorization(ctx context.Context, authzURL string)
 	}
 
 	return fmt.Errorf("%w: challenge timeout for %s", ErrACMEChallengeFailed, authz.Identifier.Value)
+}
+
+func abbreviatedToken(token string) string {
+	if len(token) <= 8 {
+		return token
+	}
+	return token[:8] + "..."
 }
 
 // ServeChallenge handles HTTP-01 challenge requests.
@@ -528,7 +539,10 @@ func (m *ACMEManager) signedPostOnce(ctx context.Context, url string, payload []
 	jwsJSON, _ := json.Marshal(jws)
 
 	// POST
-	req, _ := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(string(jwsJSON)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(string(jwsJSON)))
+	if err != nil {
+		return nil, fmt.Errorf("create ACME request: %w", err)
+	}
 	req.Header.Set("Content-Type", "application/jose+json")
 
 	resp, err := m.httpClient.Do(req)
@@ -615,31 +629,59 @@ func (m *ACMEManager) jwkThumbprint() string {
 // ─── Key Management ─────────────────────────────────────
 
 func (m *ACMEManager) loadOrCreateKey(path string) (*ecdsa.PrivateKey, error) {
-	// Try to load existing
-	data, err := os.ReadFile(path)
+	key, err := loadExistingAccountKey(path)
 	if err == nil {
-		block, _ := pem.Decode(data)
-		if block != nil {
-			key, err := x509.ParseECPrivateKey(block.Bytes)
-			if err == nil {
-				return key, nil
-			}
-		}
+		return key, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
 	}
 
-	// Generate new
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	// Generate only when no identity exists yet.
+	key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, err
 	}
 
-	// Save
-	keyDER, _ := x509.MarshalECPrivateKey(key)
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
-	if err := os.WriteFile(path, keyPEM, 0600); err != nil {
+	// Save atomically so a crash cannot leave a truncated identity behind.
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		return nil, fmt.Errorf("marshal account key: %w", err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: ecPrivateKeyPEMType, Bytes: keyDER})
+	if err := writeFileAtomicMode(path, keyPEM, 0600); err != nil {
+		m.persistenceErrors.Add(1)
 		return nil, fmt.Errorf("save account key: %w", err)
 	}
 
+	return key, nil
+}
+
+func loadExistingAccountKey(path string) (*ecdsa.PrivateKey, error) {
+	// An existing account key is durable ACME identity. Never silently rotate it
+	// because the file is malformed or unreadable: doing so can orphan the
+	// account and make recovery/rate-limit behavior unpredictable.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read existing account key: %w", err)
+	}
+	block, rest := pem.Decode(data)
+	if block == nil {
+		return nil, errors.New("existing account key is not valid PEM")
+	}
+	if block.Type != "EC PRIVATE KEY" {
+		return nil, fmt.Errorf("existing account key has unexpected PEM type %q", block.Type)
+	}
+	if len(bytes.TrimSpace(rest)) != 0 {
+		return nil, errors.New("existing account key contains trailing data")
+	}
+	key, err := x509.ParseECPrivateKey(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse existing account key: %w", err)
+	}
+	if key.Curve != elliptic.P256() {
+		return nil, errors.New("existing account key must use P-256")
+	}
 	return key, nil
 }
 
@@ -651,13 +693,15 @@ func (m *ACMEManager) saveCertBundle(domain string, bundle *CertificateBundle) e
 
 	// Save cert chain
 	if err := writeFileAtomicMode(certPath, bundle.CertPEM, 0600); err != nil {
+		m.persistenceErrors.Add(1)
 		return err
 	}
 
 	// Save private key
 	keyDER, _ := x509.MarshalECPrivateKey(bundle.PrivateKey)
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: ecPrivateKeyPEMType, Bytes: keyDER})
 	if err := writeFileAtomicMode(keyPath, keyPEM, 0600); err != nil {
+		m.persistenceErrors.Add(1)
 		return err
 	}
 
@@ -669,11 +713,15 @@ func (m *ACMEManager) saveCertBundle(domain string, bundle *CertificateBundle) e
 	}
 	metaJSON, _ := json.MarshalIndent(meta, "", "  ")
 	if err := writeFileAtomicMode(filepath.Join(m.certDir, domain+".json"), metaJSON, 0600); err != nil {
+		m.persistenceErrors.Add(1)
 		m.logger.Warn("failed to save certificate metadata", "domain", domain, "error", err)
 	}
 
 	return nil
 }
+
+// PersistenceErrors returns ACME identity/certificate write failures.
+func (m *ACMEManager) PersistenceErrors() uint64 { return m.persistenceErrors.Load() }
 
 // ─── Helpers ────────────────────────────────────────────
 

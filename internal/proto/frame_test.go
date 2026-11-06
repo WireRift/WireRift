@@ -248,6 +248,52 @@ func TestMagicReadWrite(t *testing.T) {
 	}
 }
 
+type oneByteWriter struct{ bytes.Buffer }
+
+func (w *oneByteWriter) Write(p []byte) (int, error) {
+	if len(p) > 1 {
+		p = p[:1]
+	}
+	return w.Buffer.Write(p)
+}
+
+func TestProtocolWritesHandleShortNilWrites(t *testing.T) {
+	frame := &Frame{Version: Version, Type: FrameStreamData, StreamID: 7, Payload: []byte("payload")}
+	w := &oneByteWriter{}
+	if err := frame.Encode(w); err != nil {
+		t.Fatalf("Encode returned an error while short writes made progress: %v", err)
+	}
+	if got, want := w.Len(), HeaderSize+len(frame.Payload); got != want {
+		t.Fatalf("encoded %d bytes, want %d", got, want)
+	}
+	decoded, err := ReadFrame(bytes.NewReader(w.Bytes()))
+	if err != nil || !bytes.Equal(decoded.Payload, frame.Payload) {
+		t.Fatalf("short-write frame did not round-trip: frame=%v err=%v", decoded, err)
+	}
+
+	magic := &oneByteWriter{}
+	if err := WriteMagic(magic); err != nil {
+		t.Fatalf("WriteMagic returned an error while short writes made progress: %v", err)
+	}
+	if !bytes.Equal(magic.Bytes(), Magic) {
+		t.Fatalf("magic = %x, want %x", magic.Bytes(), Magic)
+	}
+}
+
+type zeroWriter struct{}
+
+func (zeroWriter) Write([]byte) (int, error) { return 0, nil }
+
+func TestProtocolWritesRejectZeroProgress(t *testing.T) {
+	frame := &Frame{Version: Version, Type: FrameHeartbeat}
+	if err := frame.Encode(zeroWriter{}); !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("Encode error = %v, want io.ErrShortWrite", err)
+	}
+	if err := WriteMagic(zeroWriter{}); !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("WriteMagic error = %v, want io.ErrShortWrite", err)
+	}
+}
+
 func TestReadMagicInvalid(t *testing.T) {
 	buf := bytes.NewBuffer([]byte{0x00, 0x00, 0x00, 0x00})
 	err := ReadMagic(buf)

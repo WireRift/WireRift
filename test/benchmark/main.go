@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bufio"
 	"crypto/rand"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
+	"os"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -16,13 +20,23 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "benchmark failed: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	fmt.Println("╔══════════════════════════════════════════════╗")
 	fmt.Println("║         WireRift Benchmark Suite             ║")
 	fmt.Println("╚══════════════════════════════════════════════╝")
 	fmt.Println()
 
 	// Setup: local service + server + client + tunnel
-	env := setup()
+	env, err := setup()
+	if err != nil {
+		return fmt.Errorf("setup: %w", err)
+	}
 	defer env.cleanup()
 
 	fmt.Printf("  Server:  %s\n", env.srv.ControlAddr())
@@ -32,16 +46,23 @@ func main() {
 	fmt.Println()
 
 	// Benchmarks
-	benchHealthz(env)
-	benchHTTPLatency(env)
-	benchHTTPThroughput(env)
-	benchHTTPConcurrency(env)
-	benchTCPThroughput(env)
-	benchTunnelCreation(env)
+	for _, bench := range []func(*benchEnv) error{
+		benchHealthz,
+		benchHTTPLatency,
+		benchHTTPThroughput,
+		benchHTTPConcurrency,
+		benchTCPThroughput,
+		benchTunnelCreation,
+	} {
+		if err := bench(env); err != nil {
+			return err
+		}
+	}
 
 	fmt.Println("╔══════════════════════════════════════════════╗")
 	fmt.Println("║              Benchmark Complete              ║")
 	fmt.Println("╚══════════════════════════════════════════════╝")
+	return nil
 }
 
 type benchEnv struct {
@@ -54,9 +75,11 @@ type benchEnv struct {
 	domain    string
 	httpBase  string
 	cleanup   func()
+	visitorID atomic.Uint64
+	quick     bool
 }
 
-func setup() *benchEnv {
+func setup() (*benchEnv, error) {
 	// Local HTTP service
 	mux := http.NewServeMux()
 	mux.HandleFunc("/small", func(w http.ResponseWriter, r *http.Request) {
@@ -75,8 +98,16 @@ func setup() *benchEnv {
 		io.Copy(w, r.Body)
 	})
 
-	ln, _ := net.Listen("tcp", "127.0.0.1:0")
-	go http.Serve(ln, mux)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, fmt.Errorf("listen for local HTTP service: %w", err)
+	}
+	localServer := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		if err := localServer.Serve(ln); err != nil && err != http.ErrServerClosed {
+			fmt.Fprintf(os.Stderr, "benchmark local service failed: %v\n", err)
+		}
+	}()
 
 	// Server
 	authMgr := auth.NewManager()
@@ -86,24 +117,45 @@ func setup() *benchEnv {
 	cfg.TCPAddrRange = "30000-30100"
 	cfg.AuthManager = authMgr
 	cfg.MaxTunnelsPerSession = 100
-	srv := server.New(cfg, nil)
-	srv.Start()
+	// Capacity uses a bounded pool of synthetic RFC 2544 visitor addresses.
+	// Production's per-visitor abuse limit remains enabled and unchanged.
+	cfg.TrustedProxyCIDRs = []string{"127.0.0.0/8"}
+	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv := server.New(cfg, quiet)
+	if err := srv.Start(); err != nil {
+		_ = localServer.Close()
+		return nil, fmt.Errorf("start server: %w", err)
+	}
 
 	// Client
 	cc := client.DefaultConfig()
 	cc.ServerAddr = srv.ControlAddr()
 	cc.Token = authMgr.DevToken()
 	cc.Reconnect = false
-	c := client.New(cc, nil)
-	c.Connect()
+	c := client.New(cc, quiet)
+	if err := c.Connect(); err != nil {
+		_ = srv.Stop()
+		_ = localServer.Close()
+		return nil, fmt.Errorf("connect client: %w", err)
+	}
 
 	// HTTP tunnel
-	t, _ := c.HTTP(ln.Addr().String(), client.WithSubdomain("bench"))
+	t, err := c.HTTP(ln.Addr().String(), client.WithSubdomain("bench"))
+	if err != nil {
+		_ = c.Close()
+		_ = srv.Stop()
+		_ = localServer.Close()
+		return nil, fmt.Errorf("create HTTP tunnel: %w", err)
+	}
 
 	// TCP tunnel
-	tcpT, _ := c.TCP(ln.Addr().String(), 0)
-
-	time.Sleep(100 * time.Millisecond)
+	tcpT, err := c.TCP(ln.Addr().String(), 0)
+	if err != nil {
+		_ = c.Close()
+		_ = srv.Stop()
+		_ = localServer.Close()
+		return nil, fmt.Errorf("create TCP tunnel: %w", err)
+	}
 
 	return &benchEnv{
 		srv:       srv,
@@ -114,37 +166,60 @@ func setup() *benchEnv {
 		localAddr: ln.Addr().String(),
 		domain:    cfg.Domain,
 		httpBase:  "http://" + srv.HTTPAddr(),
+		quick:     os.Getenv("WIRERIFT_BENCH_QUICK") == "1",
 		cleanup: func() {
-			c.Close()
-			srv.Stop()
-			ln.Close()
+			_ = c.Close()
+			_ = srv.Stop()
+			_ = localServer.Close()
 		},
-	}
+	}, nil
 }
 
-func benchHealthz(env *benchEnv) {
+func (env *benchEnv) tunneledRequest(method, path string, body io.Reader) (*http.Request, error) {
+	req, err := http.NewRequest(method, env.httpBase+path, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Host = "bench." + env.domain
+	// 198.18.0.0/15 is reserved for benchmark tests. Reuse a fixed pool so the
+	// rate-limiter map is bounded while each synthetic visitor stays below the
+	// production per-IP threshold.
+	id := env.visitorID.Add(1) % 4096
+	req.Header.Set("X-Forwarded-For", fmt.Sprintf("198.18.%d.%d", id/256, id%256))
+	return req, nil
+}
+
+func benchHealthz(env *benchEnv) error {
 	fmt.Println("── Healthz Endpoint Latency ──────────────────")
 
 	hc := &http.Client{Timeout: 5 * time.Second}
-	latencies := make([]time.Duration, 1000)
-	for i := 0; i < 1000; i++ {
+	samples := 1000
+	if env.quick {
+		samples = 20
+	}
+	latencies := make([]time.Duration, 0, samples)
+	for i := 0; i < samples; i++ {
 		start := time.Now()
 		resp, err := hc.Get(env.httpBase + "/healthz")
 		if err != nil {
-			continue
+			return fmt.Errorf("healthz request %d: %w", i, err)
 		}
-		io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
-		latencies[i] = time.Since(start)
+		_, copyErr := io.Copy(io.Discard, resp.Body)
+		closeErr := resp.Body.Close()
+		if copyErr != nil || closeErr != nil || resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("healthz request %d: status=%d copy=%v close=%v", i, resp.StatusCode, copyErr, closeErr)
+		}
+		latencies = append(latencies, time.Since(start))
 	}
 	avg := avgDuration(latencies)
 	p50 := percentile(latencies, 50)
 	p99 := percentile(latencies, 99)
-	fmt.Printf("  1000 requests:  avg=%-10s p50=%-10s p99=%-10s\n", avg, p50, p99)
+	fmt.Printf("  %d requests:  avg=%-10s p50=%-10s p99=%-10s\n", samples, avg, p50, p99)
 	fmt.Println()
+	return nil
 }
 
-func benchHTTPLatency(env *benchEnv) {
+func benchHTTPLatency(env *benchEnv) error {
 	fmt.Println("── HTTP Latency (single request round-trip) ──")
 
 	hc := &http.Client{Timeout: 10 * time.Second}
@@ -161,134 +236,144 @@ func benchHTTPLatency(env *benchEnv) {
 	// Direct baseline
 	fmt.Println()
 	fmt.Println("  Direct (no tunnel):")
+	samples := 100
+	if env.quick {
+		samples = 10
+	}
+	directP95 := make(map[string]time.Duration, len(sizes))
 	for _, s := range sizes {
-		latencies := make([]time.Duration, 100)
-		for i := 0; i < 100; i++ {
+		latencies := make([]time.Duration, 0, samples)
+		for i := 0; i < samples; i++ {
 			start := time.Now()
 			resp, err := hc.Get("http://" + env.localAddr + s.path)
 			if err != nil {
-				continue
+				return fmt.Errorf("direct latency %s request %d: %w", s.name, i, err)
 			}
-			io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
-			latencies[i] = time.Since(start)
+			_, copyErr := io.Copy(io.Discard, resp.Body)
+			closeErr := resp.Body.Close()
+			if copyErr != nil || closeErr != nil || resp.StatusCode != http.StatusOK {
+				return fmt.Errorf("direct latency %s request %d: status=%d copy=%v close=%v", s.name, i, resp.StatusCode, copyErr, closeErr)
+			}
+			latencies = append(latencies, time.Since(start))
 		}
 		avg := avgDuration(latencies)
 		p50 := percentile(latencies, 50)
+		p95 := percentile(latencies, 95)
 		p99 := percentile(latencies, 99)
-		fmt.Printf("    %-16s avg=%-10s p50=%-10s p99=%-10s\n", s.name, avg, p50, p99)
+		directP95[s.path] = p95
+		fmt.Printf("    %-16s avg=%-10s p50=%-10s p95=%-10s p99=%-10s\n", s.name, avg, p50, p95, p99)
 	}
 
 	// Through tunnel
 	fmt.Println()
 	fmt.Println("  Through tunnel:")
 	for _, s := range sizes {
-		latencies := make([]time.Duration, 100)
-		n := 0
-		limited := 0
-		for i := 0; i < 100; i++ {
-			req, _ := http.NewRequest("GET", env.httpBase+s.path, nil)
-			req.Host = "bench." + env.domain
+		latencies := make([]time.Duration, 0, samples)
+		for i := 0; i < samples; i++ {
+			req, err := env.tunneledRequest(http.MethodGet, s.path, nil)
+			if err != nil {
+				return fmt.Errorf("build tunneled latency request: %w", err)
+			}
 			start := time.Now()
 			resp, err := hc.Do(req)
 			if err != nil {
-				continue
+				return fmt.Errorf("tunneled latency %s request %d: %w", s.name, i, err)
 			}
-			io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
-			// Only successful transfers measure latency: rate-limit
-			// rejections round-trip in microseconds and would poison the
-			// table with impossible numbers (e.g. 1MB faster than 2B).
-			if resp.StatusCode != http.StatusOK {
-				limited++
-				continue
+			_, copyErr := io.Copy(io.Discard, resp.Body)
+			closeErr := resp.Body.Close()
+			if copyErr != nil || closeErr != nil || resp.StatusCode != http.StatusOK {
+				return fmt.Errorf("tunneled latency %s request %d: status=%d copy=%v close=%v", s.name, i, resp.StatusCode, copyErr, closeErr)
 			}
-			latencies[n] = time.Since(start)
-			n++
+			latencies = append(latencies, time.Since(start))
 		}
-		if n == 0 {
-			fmt.Printf("    %-16s (no successful requests; %d rate-limited)\n", s.name, limited)
-			continue
+		avg := avgDuration(latencies)
+		p50 := percentile(latencies, 50)
+		p95 := percentile(latencies, 95)
+		p99 := percentile(latencies, 99)
+		overheadP95 := p95 - directP95[s.path]
+		if overheadP95 < 0 {
+			overheadP95 = 0
 		}
-		avg := avgDuration(latencies[:n])
-		p50 := percentile(latencies[:n], 50)
-		p99 := percentile(latencies[:n], 99)
-		skipped := ""
-		if limited > 0 {
-			skipped = fmt.Sprintf("  [%d rate-limited skipped]", limited)
-		}
-		fmt.Printf("    %-16s avg=%-10s p50=%-10s p99=%-10s%s\n", s.name, avg, p50, p99, skipped)
+		fmt.Printf("    %-16s avg=%-10s p50=%-10s p95=%-10s p99=%-10s overhead_p95=%s\n",
+			s.name, avg, p50, p95, p99, overheadP95.Round(time.Microsecond))
 	}
 	fmt.Println()
+	return nil
 }
 
-func benchHTTPThroughput(env *benchEnv) {
+func benchHTTPThroughput(env *benchEnv) error {
 	fmt.Println("── HTTP Throughput (sustained transfer) ──────")
 
 	hc := &http.Client{Timeout: 30 * time.Second}
 	duration := 3 * time.Second
+	if env.quick {
+		duration = 300 * time.Millisecond
+	}
 
 	// Upload throughput
 	payload := make([]byte, 64*1024)
-	rand.Read(payload)
+	if _, err := rand.Read(payload); err != nil {
+		return fmt.Errorf("generate throughput payload: %w", err)
+	}
 
 	var uploaded int64
-	uploadLimited := 0
 	start := time.Now()
 	for time.Since(start) < duration {
-		req, _ := http.NewRequest("POST", env.httpBase+"/echo", io.NopCloser(
-			io.LimitReader(newRepeatReader(payload), 64*1024),
-		))
-		req.Host = "bench." + env.domain
-		req.ContentLength = 64 * 1024
+		req, err := env.tunneledRequest(http.MethodPost, "/echo",
+			io.LimitReader(newRepeatReader(payload), 1<<20))
+		if err != nil {
+			return fmt.Errorf("build upload request: %w", err)
+		}
+		req.ContentLength = 1 << 20
 		resp, err := hc.Do(req)
 		if err != nil {
-			continue
+			return fmt.Errorf("upload request: %w", err)
 		}
-		n, _ := io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
-		// Rate-limit rejections are not upload throughput: counting their
-		// tiny bodies (or ignoring them silently) corrupts the number.
-		if resp.StatusCode != http.StatusOK {
-			uploadLimited++
-			continue
+		n, copyErr := io.Copy(io.Discard, resp.Body)
+		closeErr := resp.Body.Close()
+		if copyErr != nil || closeErr != nil || resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("upload response: status=%d copy=%v close=%v", resp.StatusCode, copyErr, closeErr)
 		}
 		uploaded += n
 	}
-	elapsed := time.Since(start)
-	uploadMBps := float64(uploaded) / elapsed.Seconds() / 1024 / 1024
+	uploadElapsed := time.Since(start)
+	uploadMBps := float64(uploaded) / uploadElapsed.Seconds() / 1024 / 1024
 
 	// Download throughput
 	var downloaded int64
-	downloadLimited := 0
 	start = time.Now()
 	for time.Since(start) < duration {
-		req, _ := http.NewRequest("GET", env.httpBase+"/1m", nil)
-		req.Host = "bench." + env.domain
+		req, err := env.tunneledRequest(http.MethodGet, "/1m", nil)
+		if err != nil {
+			return fmt.Errorf("build download request: %w", err)
+		}
 		resp, err := hc.Do(req)
 		if err != nil {
-			continue
+			return fmt.Errorf("download request: %w", err)
 		}
-		n, _ := io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			downloadLimited++
-			continue
+		n, copyErr := io.Copy(io.Discard, resp.Body)
+		closeErr := resp.Body.Close()
+		if copyErr != nil || closeErr != nil || resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("download response: status=%d copy=%v close=%v", resp.StatusCode, copyErr, closeErr)
 		}
 		downloaded += n
 	}
-	elapsed = time.Since(start)
-	downloadMBps := float64(downloaded) / elapsed.Seconds() / 1024 / 1024
+	downloadElapsed := time.Since(start)
+	downloadMBps := float64(downloaded) / downloadElapsed.Seconds() / 1024 / 1024
 
-	fmt.Printf("  Upload:   %.1f MB/s (%.1f MB in %s, %d rate-limited)\n", uploadMBps, float64(uploaded)/1024/1024, elapsed.Round(time.Millisecond), uploadLimited)
-	fmt.Printf("  Download: %.1f MB/s (%.1f MB in %s, %d rate-limited)\n", downloadMBps, float64(downloaded)/1024/1024, elapsed.Round(time.Millisecond), downloadLimited)
+	fmt.Printf("  Upload:   %.1f MB/s (%.0f Mbps; %.1f MB in %s)\n", uploadMBps, uploadMBps*8, float64(uploaded)/1024/1024, uploadElapsed.Round(time.Millisecond))
+	fmt.Printf("  Download: %.1f MB/s (%.0f Mbps; %.1f MB in %s)\n", downloadMBps, downloadMBps*8, float64(downloaded)/1024/1024, downloadElapsed.Round(time.Millisecond))
 	fmt.Println()
+	return nil
 }
 
-func benchHTTPConcurrency(env *benchEnv) {
+func benchHTTPConcurrency(env *benchEnv) error {
 	fmt.Println("── HTTP Concurrency (parallel requests) ──────")
 
 	concurrencies := []int{1, 10, 50}
+	if env.quick {
+		concurrencies = []int{1, 10}
+	}
 
 	// Shared HTTP client with connection pool to avoid thread exhaustion on Windows
 	sharedClient := &http.Client{
@@ -299,13 +384,19 @@ func benchHTTPConcurrency(env *benchEnv) {
 			IdleConnTimeout:     30 * time.Second,
 		},
 	}
+	defer sharedClient.CloseIdleConnections()
 
 	for _, conc := range concurrencies {
-		var totalRequests int64
-		var totalErrors int64
-		var totalLatency int64
+		var successful atomic.Int64
+		var rejected atomic.Int64
+		var transportErrors atomic.Int64
+		var latencyMu sync.Mutex
+		latencies := make([]time.Duration, 0, conc*100)
 
 		duration := 3 * time.Second
+		if env.quick {
+			duration = 300 * time.Millisecond
+		}
 		start := time.Now()
 		var wg sync.WaitGroup
 
@@ -313,96 +404,123 @@ func benchHTTPConcurrency(env *benchEnv) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				hc := sharedClient
 				for time.Since(start) < duration {
-					req, _ := http.NewRequest("GET", env.httpBase+"/small", nil)
-					req.Host = "bench." + env.domain
-					t0 := time.Now()
-					resp, err := hc.Do(req)
+					req, err := env.tunneledRequest(http.MethodGet, "/small", nil)
 					if err != nil {
-						atomic.AddInt64(&totalErrors, 1)
+						transportErrors.Add(1)
 						continue
 					}
-					io.Copy(io.Discard, resp.Body)
-					resp.Body.Close()
-					atomic.AddInt64(&totalLatency, int64(time.Since(t0)))
-					atomic.AddInt64(&totalRequests, 1)
+					t0 := time.Now()
+					resp, err := sharedClient.Do(req)
+					if err != nil {
+						transportErrors.Add(1)
+						continue
+					}
+					_, copyErr := io.Copy(io.Discard, resp.Body)
+					closeErr := resp.Body.Close()
+					if copyErr != nil || closeErr != nil {
+						transportErrors.Add(1)
+						continue
+					}
+					if !successfulStatus(resp.StatusCode) {
+						rejected.Add(1)
+						continue
+					}
+					latency := time.Since(t0)
+					latencyMu.Lock()
+					latencies = append(latencies, latency)
+					latencyMu.Unlock()
+					successful.Add(1)
 				}
 			}()
 		}
 		wg.Wait()
 
 		elapsed := time.Since(start)
-		rps := float64(totalRequests) / elapsed.Seconds()
-		avgLat := time.Duration(0)
-		if totalRequests > 0 {
-			avgLat = time.Duration(totalLatency / totalRequests)
+		rps := float64(successful.Load()) / elapsed.Seconds()
+		if successful.Load() == 0 || rejected.Load() > 0 || transportErrors.Load() > 0 {
+			return fmt.Errorf("concurrency %d produced success=%d rejected=%d transport_errors=%d",
+				conc, successful.Load(), rejected.Load(), transportErrors.Load())
 		}
 
-		fmt.Printf("  %3d concurrent:  %6.0f req/s  avg_latency=%-10s  errors=%d\n",
-			conc, rps, avgLat.Round(time.Microsecond), totalErrors)
+		fmt.Printf("  %3d concurrent:  %6.0f successful req/s  avg=%-10s p95=%-10s p99=%-10s rejected=0 errors=0\n",
+			conc, rps, avgDuration(latencies), percentile(latencies, 95), percentile(latencies, 99))
 	}
 	fmt.Println()
+	return nil
 }
 
-func benchTCPThroughput(env *benchEnv) {
+func benchTCPThroughput(env *benchEnv) error {
 	fmt.Println("── TCP Tunnel Throughput ──────────────────────")
 
 	// Connect through TCP tunnel port
 	port := env.tcpTunnel.Port
 	if port == 0 {
-		fmt.Println("  (skipped - no TCP tunnel port)")
-		fmt.Println()
-		return
+		return fmt.Errorf("TCP tunnel has no assigned port")
 	}
 
 	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 5*time.Second)
 	if err != nil {
-		fmt.Printf("  (skipped - connect error: %v)\n", err)
-		fmt.Println()
-		return
+		return fmt.Errorf("connect TCP tunnel: %w", err)
 	}
 	defer conn.Close()
 
 	// Send HTTP request through raw TCP tunnel
 	req := "GET /1m HTTP/1.1\r\nHost: localhost\r\n\r\n"
-	conn.Write([]byte(req))
-	// Bound the read: the tunneled HTTP server keeps the connection alive
-	// after the response (no EOF), so an unbounded copy here hangs forever.
-	// Read exactly the requested 1MB payload.
-	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
-	start := time.Now()
-	n, err := io.CopyN(io.Discard, conn, 1<<20)
-	elapsed := time.Since(start)
-
-	if n > 0 {
-		mbps := float64(n) / elapsed.Seconds() / 1024 / 1024
-		fmt.Printf("  Download: %.1f MB/s (%d bytes in %s)\n", mbps, n, elapsed.Round(time.Millisecond))
-	} else {
-		fmt.Printf("  (no data received: %v)\n", err)
+	if _, err := io.WriteString(conn, req); err != nil {
+		return fmt.Errorf("write TCP request: %w", err)
 	}
+	if err := conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		return fmt.Errorf("set TCP read deadline: %w", err)
+	}
+	start := time.Now()
+	resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodGet})
+	if err != nil {
+		return fmt.Errorf("read TCP response headers: %w", err)
+	}
+	n, copyErr := io.Copy(io.Discard, resp.Body)
+	closeErr := resp.Body.Close()
+	elapsed := time.Since(start)
+	if copyErr != nil || closeErr != nil || resp.StatusCode != http.StatusOK || n != 1<<20 {
+		return fmt.Errorf("TCP response: status=%d bytes=%d copy=%v close=%v", resp.StatusCode, n, copyErr, closeErr)
+	}
+	mbps := float64(n) / elapsed.Seconds() / 1024 / 1024
+	fmt.Printf("  Download: %.1f MB/s (%.0f Mbps; %d bytes in %s)\n", mbps, mbps*8, n, elapsed.Round(time.Millisecond))
 	fmt.Println()
+	return nil
 }
 
-func benchTunnelCreation(env *benchEnv) {
+func benchTunnelCreation(env *benchEnv) error {
 	fmt.Println("── Tunnel Creation Speed ─────────────────────")
 
 	count := 50
+	if env.quick {
+		count = 5
+	}
+	succeeded := 0
+	latencies := make([]time.Duration, 0, count)
 	start := time.Now()
 	for i := 0; i < count; i++ {
+		requestStart := time.Now()
 		t, err := env.client.HTTP(env.localAddr, client.WithSubdomain(fmt.Sprintf("benchcreate%d", i)))
 		if err != nil {
-			fmt.Printf("  Error at tunnel %d: %v\n", i, err)
-			break
+			return fmt.Errorf("create tunnel %d after %d successes: %w", i, succeeded, err)
 		}
 		_ = t
+		latencies = append(latencies, time.Since(requestStart))
+		succeeded++
 	}
 	elapsed := time.Since(start)
-	rate := float64(count) / elapsed.Seconds()
+	rate := float64(succeeded) / elapsed.Seconds()
 
-	fmt.Printf("  %d tunnels in %s (%.0f tunnels/sec, %.1fms each)\n",
-		count, elapsed.Round(time.Millisecond), rate, float64(elapsed.Milliseconds())/float64(count))
+	fmt.Printf("  %d tunnels in %s (%.0f tunnels/sec, avg=%s p95=%s p99=%s)\n",
+		succeeded, elapsed.Round(time.Millisecond), rate, avgDuration(latencies), percentile(latencies, 95), percentile(latencies, 99))
 	fmt.Println()
+	return nil
+}
+
+func successfulStatus(status int) bool {
+	return status >= http.StatusOK && status < http.StatusMultipleChoices
 }
 
 // Helpers
@@ -444,22 +562,10 @@ func percentile(ds []time.Duration, pct int) time.Duration {
 	if len(valid) == 0 {
 		return 0
 	}
-	// Simple sort
-	for i := range valid {
-		for j := i + 1; j < len(valid); j++ {
-			if valid[j] < valid[i] {
-				valid[i], valid[j] = valid[j], valid[i]
-			}
-		}
-	}
+	sort.Slice(valid, func(i, j int) bool { return valid[i] < valid[j] })
 	idx := len(valid) * pct / 100
 	if idx >= len(valid) {
 		idx = len(valid) - 1
 	}
 	return valid[idx].Round(time.Microsecond)
-}
-
-func init() {
-	// Suppress server logs during benchmark
-	// Logs go to stderr, benchmark output to stdout
 }

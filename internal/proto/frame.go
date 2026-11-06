@@ -59,17 +59,37 @@ func (f *Frame) Encode(w io.Writer) error {
 	binary.BigEndian.PutUint32(header[5:9], uint32(len(f.Payload))) //nolint:gosec // payload length is bounded by MaxPayloadSize
 
 	// Write header
-	if _, err := w.Write(header); err != nil {
+	if err := writeFull(w, header); err != nil {
 		return err
 	}
 
 	// Write payload (if any)
 	if len(f.Payload) > 0 {
-		if _, err := w.Write(f.Payload); err != nil {
+		if err := writeFull(w, f.Payload); err != nil {
 			return err
 		}
 	}
 
+	return nil
+}
+
+// writeFull writes all of p or returns the first error. io.Writer permits a
+// short write with a nil error, which must not be reported as a complete
+// protocol frame.
+func writeFull(w io.Writer, p []byte) error {
+	for len(p) > 0 {
+		n, err := w.Write(p)
+		if n < 0 || n > len(p) {
+			return io.ErrShortWrite
+		}
+		p = p[n:]
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+	}
 	return nil
 }
 
@@ -170,8 +190,7 @@ func (fw *FrameWriter) Write(f *Frame) error {
 
 // WriteMagic writes the magic bytes to identify the protocol.
 func WriteMagic(w io.Writer) error {
-	_, err := w.Write(Magic)
-	return err
+	return writeFull(w, Magic)
 }
 
 // ReadMagic reads and validates magic bytes.

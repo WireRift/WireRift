@@ -13,3 +13,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+
+  # Keep immutable Docker base-image digests current while retaining readable
+  # version tags in the Dockerfile.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly

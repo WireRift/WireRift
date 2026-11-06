@@ -14,7 +14,8 @@
 > `503 Tunnel offline`; the server sends `GO_AWAY` when it stops. Tunnels cannot
 > claim a small reserved set of subdomains (`www`, `api`, `admin`, ...). Account
 > limits (`max_tunnels`, `max_sessions`, `rate_limit`) are enforced. See README.md
-> and CHANGELOG.md for what is current.
+> and CHANGELOG.md for what is current. Production deployment and incident
+> procedures are authoritative only in `docs/OPERATIONS.md`.
 
 > **Companion to:** SPECIFICATION.md v1.0.0-draft  
 > **Purpose:** Defines build order, code patterns, implementation strategies, and technical recipes  

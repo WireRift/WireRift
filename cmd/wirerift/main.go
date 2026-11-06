@@ -609,8 +609,13 @@ func loadConfig(path string) (*ConfigFile, error) {
 
 	// JSON files are parsed with stdlib encoder (reliable)
 	if strings.HasSuffix(path, ".json") {
-		if err := json.Unmarshal(data, cfg); err != nil {
+		dec := json.NewDecoder(strings.NewReader(string(data)))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(cfg); err != nil {
 			return nil, fmt.Errorf("parse JSON config: %w", err)
+		}
+		if err := dec.Decode(&struct{}{}); err != io.EOF {
+			return nil, fmt.Errorf("parse JSON config: trailing data")
 		}
 		// Apply env overrides
 		if cfg.Server == "" {
@@ -637,13 +642,13 @@ func loadYAMLConfig(data []byte, cfg *ConfigFile) (*ConfigFile, error) {
 	currentSection := ""
 	tunnelIdx := -1
 
-	for _, line := range lines {
+	for lineNo, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 
-		if strings.HasPrefix(line, "tunnels:") {
+		if line == "tunnels:" {
 			currentSection = "tunnels"
 			continue
 		}
@@ -656,7 +661,7 @@ func loadYAMLConfig(data []byte, cfg *ConfigFile) (*ConfigFile, error) {
 
 		parts := strings.SplitN(line, ":", 2)
 		if len(parts) != 2 {
-			continue
+			return nil, fmt.Errorf("line %d: expected key: value", lineNo+1)
 		}
 		key := strings.TrimSpace(parts[0])
 		value := stripYAMLValue(parts[1])
@@ -682,16 +687,27 @@ func loadYAMLConfig(data []byte, cfg *ConfigFile) (*ConfigFile, error) {
 			case "auth":
 				cfg.Tunnels[tunnelIdx].Auth = value
 			case "inspect":
-				cfg.Tunnels[tunnelIdx].Inspect = value == "true"
+				inspect, err := strconv.ParseBool(value)
+				if err != nil {
+					return nil, fmt.Errorf("line %d: invalid inspect value %q: want true or false", lineNo+1, value)
+				}
+				cfg.Tunnels[tunnelIdx].Inspect = inspect
 			case "headers":
 				cfg.Tunnels[tunnelIdx].Headers = value
+			default:
+				return nil, fmt.Errorf("line %d: unknown tunnel field %q", lineNo+1, key)
 			}
 		} else {
+			if currentSection == "tunnels" {
+				return nil, fmt.Errorf("line %d: tunnel field %q appears before a list item", lineNo+1, key)
+			}
 			switch key {
 			case "server":
 				cfg.Server = value
 			case "token":
 				cfg.Token = value
+			default:
+				return nil, fmt.Errorf("line %d: unknown top-level field %q", lineNo+1, key)
 			}
 		}
 	}

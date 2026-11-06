@@ -32,6 +32,7 @@ Open-source, zero-dependency tunnel server and client written in Go. Expose any 
 - [Docker](#docker)
 - [API Reference](#api-reference)
 - [Architecture](#architecture)
+- [Production Operations](#production-operations)
 - [Benchmarks](#benchmarks)
 - [Development](#development)
 - [License](#license)
@@ -44,8 +45,8 @@ Open-source, zero-dependency tunnel server and client written in Go. Expose any 
 |----------|----------|
 | **Tunneling** | HTTP tunnels, TCP tunnels, WebSocket passthrough, stream multiplexing, flow control |
 | **Security** | Let's Encrypt ACME, self-signed TLS, Basic Auth, IP whitelist (CIDR), PIN protection, HMAC cookies, CSP nonce |
-| **Monitoring** | Web dashboard (dark/light theme), traffic inspector, request replay, cURL export, JSON highlighting |
-| **Operations** | Health check (`/healthz`), X-Request-ID tracing, graceful shutdown, auto-reconnect, rate limiting |
+| **Monitoring** | Prometheus metrics, web dashboard (dark/light theme), traffic inspector, request replay, cURL export, JSON highlighting |
+| **Operations** | Liveness (`/healthz`), readiness (`/health/ready`), X-Request-ID tracing, graceful shutdown, auto-reconnect, rate limiting |
 | **Config** | YAML and JSON config files, CLI flags, environment variables, user-defined tokens |
 | **Platform** | Zero dependencies, single binary, Linux/macOS/Windows/FreeBSD, amd64/arm64 |
 
@@ -122,6 +123,17 @@ Download from [Releases](https://github.com/WireRift/WireRift/releases/latest):
 - `wirerift-server-windows-arm64.exe`
 - `wirerift-windows-arm64.exe`
 </details>
+
+Verify downloaded release files before installing them:
+
+```bash
+curl -LO https://github.com/WireRift/WireRift/releases/latest/download/checksums.txt
+sha256sum --ignore-missing -c checksums.txt
+gh attestation verify wirerift-linux-amd64 --repo WireRift/WireRift
+```
+
+Release checksums are published with every release, and release artifacts carry
+GitHub/Sigstore build-provenance attestations.
 
 ### Build from Source
 
@@ -218,6 +230,7 @@ Options:
   --dashboard-tls-cert  PEM certificate for the dashboard (with --dashboard-tls-key serves HTTPS)
   --dashboard-tls-key   PEM private key for the dashboard
   --dns-server string   DNS server for custom-domain TXT checks (default: system resolver)
+  --trusted-proxy-cidrs Comma-separated proxy CIDRs trusted to supply X-Forwarded-For (default: none)
   --dev                 Local development: loopback + trusted HTTPS for *.localhost (see "Local HTTPS development")
   --ca-dir str          Local CA directory for --dev (default: per-user config dir)
   --control-tls-cert    PEM certificate for the control plane (enables TLS on :4443)
@@ -259,7 +272,9 @@ wirerift-server --domain mytunnel.com --acme-email admin@mytunnel.com --token pr
 wirerift-server --control :8443 --http :8080 --dashboard-port 9090 --token mytoken
 
 # Via environment
-export WIRERIFT_TOKEN=my-secret
+openssl rand -hex 32 > .wirerift-token
+chmod 600 .wirerift-token
+export WIRERIFT_TOKEN_FILE="$PWD/.wirerift-token"
 export WIRERIFT_DOMAIN=tunnel.example.com
 wirerift-server --acme-email admin@example.com
 ```
@@ -471,7 +486,7 @@ The server notices changes to the file within five seconds (or immediately on `S
 
 ## Encrypted control plane
 
-By default the control plane (:4443) is plain TCP and the auth token is sent in cleartext. To encrypt it:
+Without ACME or an explicit control certificate, the control plane (:4443) is plain TCP and the auth token is sent in cleartext. `-acme-email` secures both the HTTPS edge and the control plane automatically; clients must use the `tls://` scheme. To supply a separate control certificate instead:
 
 ```bash
 # Server
@@ -596,42 +611,78 @@ Tagged releases publish an image to GitHub Container Registry
 
 ```bash
 docker build -t wirerift-server .
+openssl rand -hex 32 > .wirerift-token
+chmod 600 .wirerift-token
 
 # The dashboard serves plain HTTP inside the container, so publish it on
 # loopback only (or put TLS in front of it with -dashboard-tls-cert/-key).
 docker run -d \
+  --init \
+  --read-only \
+  --tmpfs /tmp:size=16m,mode=1777 \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
+  --stop-timeout 30 \
   -p 4443:4443 \
   -p 80:80 \
   -p 443:443 \
   -p 127.0.0.1:4040:4040 \
-  -e WIRERIFT_TOKEN=my-secret \
+  -e WIRERIFT_TOKEN_FILE=/run/secrets/wirerift_token \
+  -v "$PWD/.wirerift-token:/run/secrets/wirerift_token:ro" \
   -v wirerift-certs:/data/certs \
   wirerift-server \
-  -domain mytunnel.com -auto-cert
+  -domain mytunnel.com -acme-email admin@mytunnel.com
 ```
+
+With ACME enabled the control plane also requires TLS; clients connect to
+`tls://mytunnel.com:4443`. Port 80 must be publicly reachable for HTTP-01.
+The ACME identity (`acme-account.key`) is never rotated automatically when it
+is corrupt: restore it from backup or perform an explicit account recovery.
+During a temporary ACME directory outage, restart is allowed only when that
+identity and a currently valid base-domain certificate are already cached; the
+server logs degraded mode and retries ACME initialization every five minutes.
 
 ### Docker Compose
 
 ```bash
+export WIRERIFT_DOMAIN=mytunnel.com
+export WIRERIFT_ACME_EMAIL=admin@mytunnel.com
+export WIRERIFT_TOKEN_FILE=/etc/wirerift/token
+export WIRERIFT_IMAGE=ghcr.io/your-org/wirerift@sha256:<approved-digest>
+sh scripts/check-compose-security.sh
 docker compose up -d
 ```
 
 The included `docker-compose.yml` provides:
 - Server with control, HTTP, HTTPS, dashboard ports
 - TCP tunnel port range (20000-20099)
+- Example upstream published on loopback only when the `example` profile is enabled
 - Certificate volume persistence
-- Health check via `/healthz`
+- Container readiness check via `/health/ready`
 - Non-root container
+- Read-only root filesystem, dropped capabilities, and privilege escalation prevention
+- Measured default ceilings of 2 CPUs, 1 GiB memory, and 512 PIDs
+- Fail-closed required domain, ACME email, and read-only auth-token secret file
+- Required operator-supplied image reference; production uses an approved immutable digest
 
 ---
 
 ## API Reference
 
-All endpoints require `Authorization: Bearer TOKEN` header.
+Operational endpoints are served without authentication only when the request
+host does not belong to an active tunnel. Restrict `/metrics` at the network or
+reverse-proxy layer if runtime counts must not be publicly visible.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/healthz` | GET | Health check (no auth required) |
+| `/healthz` | GET, HEAD | Process liveness |
+| `/health/ready` | GET, HEAD | Listener and maintenance-loop readiness; returns 503 while draining/not started |
+| `/metrics` | GET, HEAD | Prometheus-format readiness/topology/bytes, fixed-cardinality HTTP status and latency, earliest loaded-certificate expiry, and persistence-write errors |
+
+Dashboard API endpoints require an `Authorization: Bearer TOKEN` header:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
 | `/api/stats` | GET | Server statistics |
 | `/api/tunnels` | GET | List active tunnels |
 | `/api/sessions` | GET | List connected sessions |
@@ -642,6 +693,15 @@ All endpoints require `Authorization: Bearer TOKEN` header.
 
 Every proxied request includes:
 - `X-Request-ID` — unique trace ID (preserved if sent by client)
+- canonical `X-Forwarded-For`, `X-Forwarded-Proto`, and `X-Forwarded-Host` values. By default visitor-supplied forwarding headers are discarded and the socket peer is the client. When WireRift is intentionally placed behind sanitizing L7 proxies, pass only their networks with `--trusted-proxy-cidrs 10.0.0.0/8,2001:db8:1234::/48`; the client chain is resolved right-to-left, while malformed or oversized chains fall back to the socket peer.
+
+---
+
+## Production Operations
+
+Use [the production operations runbook](docs/OPERATIONS.md) for release
+verification, firewall and DNS prerequisites, secret handling, staging/canary,
+monitoring, backup and restore, incident recovery, and rollback.
 
 ---
 
@@ -721,24 +781,22 @@ wirerift/
 
 ## Benchmarks
 
-Tested on AMD Ryzen 9 9950X3D, Windows 11, Go 1.23 (localhost):
-
-| Metric | Value |
-|--------|-------|
-| Healthz latency | **553 µs** avg |
-| HTTP latency overhead | ~0.5 ms (small), ~0 ms (1KB+) |
-| Download throughput | **99.6 MB/s** |
-| Single-thread RPS | **10,063 req/s** |
-| 10 concurrent | 10,335 req/s |
-| 50 concurrent | 6,303 req/s |
-| 100 concurrent | 4,143 req/s |
-| Tunnel creation | **3,163 tunnels/sec** (0.3 ms each) |
+Benchmark results are environment-specific and are therefore generated rather
+than copied into this README. The suite fails on setup errors, transport errors,
+or any non-2xx response; rate-limit responses are never counted as capacity.
 
 ```bash
-go run ./test/benchmark/       # Throughput & latency
-go run ./test/advanced/        # Security, stress, reconnect, soak (34 tests)
+go run ./test/benchmark/                         # Full local capacity baseline
+WIRERIFT_BENCH_QUICK=1 go run ./test/benchmark/ # CI integrity smoke
+go run ./test/advanced/        # Security, stress, and short load smokes
+go run ./test/fault/           # Latency, drop, partition, half-open recovery
+go run ./test/soak/ -duration 30m -window 1m    # Sustained tail/resource drift
 go test -bench=. ./internal/   # Micro-benchmarks
 ```
+
+See [docs/BENCHMARKING.md](docs/BENCHMARKING.md) for methodology, controlled
+runner requirements, covered targets, and the result-record template. Launch
+objectives and error-budget policy are in [docs/SLO.md](docs/SLO.md).
 
 ---
 
@@ -755,7 +813,9 @@ go test -bench=. ./internal/   # Micro-benchmarks
 go test ./cmd/... ./internal/... ./test/integration/   # All unit + integration tests
 go test -race ./cmd/... ./internal/...                 # With race detector
 go test -cover ./cmd/... ./internal/...                # With coverage
-go run ./test/advanced/          # Advanced E2E suite (34 tests)
+go run ./test/advanced/          # Security, stress, and short load smokes
+go run ./test/fault/             # Deterministic network fault recovery
+go run ./test/soak/ -duration 30m -window 1m   # Long soak (scheduled in CI)
 go run ./test/benchmark/         # Benchmark suite
 ```
 

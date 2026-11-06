@@ -16,12 +16,12 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: '1.23'
+          go-version: '1.27.x'
           cache: false
 
       - name: Build
@@ -30,6 +30,10 @@ jobs:
       - name: Vet
         run: go vet ./cmd/... ./internal/...
 
+      - name: Enforce zero external dependencies
+        if: runner.os == 'Linux'
+        run: bash scripts/check-deps.sh
+
       - name: Unit Tests
         run: go test ./cmd/... ./internal/... ./test/integration/ -timeout 120s
 
@@ -37,30 +41,30 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: '1.23'
+          go-version: '1.27.x'
           cache: false
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@db9de0fc1a667e1a49d2291a1a042dff081d78f6 # v9
         with:
-          version: v1.63.4
+          version: v2.15.0
           args: ./cmd/... ./internal/...
 
   race:
     name: Race Detector
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: '1.23'
+          go-version: '1.27.x'
           cache: false
 
       - name: Test with Race Detector
@@ -70,12 +74,12 @@ jobs:
     name: Fuzz Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: '1.23'
+          go-version: '1.27.x'
           cache: false
 
       - name: Fuzz Frame Parser
@@ -100,27 +104,41 @@ jobs:
     name: Advanced Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: '1.23'
+          go-version: '1.27.x'
           cache: false
 
-      - name: Security, Stress, Reconnect & Soak Tests
+      - name: Security, Stress & Short Load Smokes
         run: go run ./test/advanced/
+
+      - name: Deterministic network fault recovery
+        run: go run ./test/fault/
+
+      - name: Soak harness integrity smoke
+        run: go run ./test/soak/ -duration 5s -window 1s -workers 5
+
+      - name: Capacity benchmark integrity smoke
+        env:
+          WIRERIFT_BENCH_QUICK: '1'
+        run: go run ./test/benchmark/
+
+      - name: Scale profile harness smoke
+        run: go run ./test/capacity/ -profile all -streams 257 -tunnels 100
 
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: '1.23'
+          go-version: '1.27.x'
           cache: false
 
       - name: Test with Coverage
@@ -130,25 +148,58 @@ jobs:
         run: |
           total=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}' | sed 's/%//')
           echo "Total coverage: ${total}%"
-          if (( $(echo "$total < 90" | bc -l) )); then
+          if awk -v coverage="$total" 'BEGIN { exit !(coverage < 90) }'; then
             echo "::error::Coverage ${total}% is below 90% threshold"
             exit 1
           fi
 
       - name: Upload Coverage
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: coverage-report
           path: coverage.out
 
   docker:
-    name: Docker Build
+    name: Docker Build & Supply Chain
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Build image
         run: docker build --build-arg VERSION=ci -t wirerift-server:ci .
+
+      - name: Validate hardened Compose contract
+        run: sh scripts/check-compose-security.sh
+
+      - name: Fail on high or critical image vulnerabilities
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: wirerift-server:ci
+          format: table
+          exit-code: '1'
+          ignore-unfixed: false
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          scanners: vuln
+          version: v0.76.1
+
+      - name: Generate SPDX SBOM
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: wirerift-server:ci
+          format: spdx-json
+          output: wirerift-server.spdx.json
+          exit-code: '0'
+          scanners: vuln
+          skip-setup-trivy: true
+
+      - name: Upload SPDX SBOM
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: wirerift-server-sbom
+          path: wirerift-server.spdx.json
 
       - name: Image starts and reports its version
         run: |

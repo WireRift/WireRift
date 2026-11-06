@@ -1,18 +1,18 @@
 #!/bin/bash
 # test-coverage.sh — Runs tests with coverage and enforces minimum threshold
 
-set -e
+set -euo pipefail
 
-MIN_COVERAGE=${MIN_COVERAGE:-70}
+MIN_COVERAGE=${MIN_COVERAGE:-90}
 
 echo "Running tests with coverage..."
-PACKAGES=$(go list ./... | grep -v /website/)
-go test -coverprofile=coverage.out -covermode=atomic $PACKAGES
+PACKAGES=(./cmd/... ./internal/...)
+go test -coverprofile=coverage.out -covermode=atomic -timeout 120s "${PACKAGES[@]}"
 
-COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
+COVERAGE=$(go tool cover -func=coverage.out | awk '/^total:/ {gsub(/%/, "", $3); print $3}')
 echo "Total coverage: ${COVERAGE}%"
 
-if (( $(echo "$COVERAGE < $MIN_COVERAGE" | bc -l) )); then
+if awk -v coverage="$COVERAGE" -v minimum="$MIN_COVERAGE" 'BEGIN { exit !(coverage < minimum) }'; then
     echo "ERROR: Coverage ${COVERAGE}% is below minimum ${MIN_COVERAGE}%"
     exit 1
 fi

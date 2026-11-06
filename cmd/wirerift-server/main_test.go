@@ -25,6 +25,19 @@ func TestRun_Version(t *testing.T) {
 	}
 }
 
+func TestRun_VersionAcceptsTrustedProxyCIDRs(t *testing.T) {
+	err := run(context.Background(), []string{
+		"-trusted-proxy-cidrs", "10.0.0.0/8,2001:db8:1234::/48",
+		"-version",
+	})
+	if err != nil {
+		t.Fatalf("trusted proxy flag rejected: %v", err)
+	}
+	if got := splitCommaList(" 10.0.0.0/8,2001:db8:1234::/48 "); len(got) != 2 {
+		t.Fatalf("splitCommaList() = %q, want two CIDRs", got)
+	}
+}
+
 func TestRun_FlagParseError(t *testing.T) {
 	err := run(context.Background(), []string{"-unknown-flag"})
 	if err == nil {
@@ -420,28 +433,15 @@ func TestRun_DashboardPortConflict(t *testing.T) {
 	// Keep dashLn open to cause a port conflict for the dashboard
 	defer dashLn.Close()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- run(ctx, []string{
-			"-control", controlAddr,
-			"-http", httpAddr,
-			"-dashboard-port", dashPort,
-			"-tcp-ports", "31100-31199",
-		})
-	}()
-
-	// The dashboard will fail to start, but the server continues
-	time.Sleep(500 * time.Millisecond)
-	cancel()
-
-	select {
-	case err := <-errCh:
-		if err != nil {
-			t.Logf("run returned: %v", err)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("timeout")
+	err := run(context.Background(), []string{
+		"-control", controlAddr,
+		"-http", httpAddr,
+		"-dashboard-port", dashPort,
+		"-tcp-ports", "31100-31199",
+		"-cert-dir", t.TempDir(),
+	})
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "dashboard") {
+		t.Fatalf("run error = %v, want dashboard bind failure", err)
 	}
 }
 

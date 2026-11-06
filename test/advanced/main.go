@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -44,9 +45,9 @@ func main() {
 	time.Sleep(500 * time.Millisecond) // Port cooldown
 	testStress()
 	time.Sleep(1 * time.Second) // Port cooldown after 500 connections
-	testReconnect()
+	testManualServerReplacement()
 	time.Sleep(500 * time.Millisecond)
-	testSoak()
+	testShortLoadSmoke()
 
 	fmt.Println()
 	fmt.Printf("╔══════════════════════════════════════════════╗\n")
@@ -110,15 +111,18 @@ func testSecurity() {
 
 	// 3. Malformed magic bytes
 	conn, dialErr := net.DialTimeout("tcp", srv.ControlAddr(), 2*time.Second)
-	if dialErr == nil {
+	if dialErr != nil {
+		check("Malformed magic rejected", false, dialErr.Error())
+	} else {
 		conn.Write([]byte{0xDE, 0xAD, 0xBE, 0xEF})
 		buf := make([]byte, 100)
 		conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-		conn.Read(buf) // Server should close connection
+		n, readErr := conn.Read(buf)
 		conn.Close()
-		check("Malformed magic rejected", true, "")
-	} else {
-		check("Malformed magic rejected", false, dialErr.Error())
+		// The server closes the connection on bad magic (ReadMagic fails in
+		// handleControlConnection): a zero-byte read ending in EOF proves it.
+		check("Malformed magic rejected", n == 0 && readErr == io.EOF,
+			fmt.Sprintf("n=%d err=%v", n, readErr))
 	}
 
 	// 4. Subdomain injection attempts
@@ -207,10 +211,21 @@ func testSecurity() {
 		// Send auth with garbage
 		garbage := &proto.Frame{Version: proto.Version, Type: proto.FrameAuthReq, Payload: []byte("not-json")}
 		m.GetFrameWriter().Write(garbage)
-		time.Sleep(100 * time.Millisecond)
+		buf := make([]byte, 100)
+		rawConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		n, readErr := rawConn.Read(buf)
 		m.Close()
 		rawConn.Close()
-		check("Garbage auth payload handled", true, "")
+		// The server closes the connection on an undecodable AUTH_REQ
+		// (handleAuth fails and the mux closes) without crashing. The
+		// harness's own mux races that close, so termination shows up as
+		// either EOF or "use of closed network connection" — both prove the
+		// garbage was handled; only a read deadline means it was not.
+		check("Garbage auth payload handled",
+			n == 0 && readErr != nil && !errors.Is(readErr, os.ErrDeadlineExceeded),
+			fmt.Sprintf("n=%d err=%v", n, readErr))
+	} else {
+		check("Garbage auth payload handled", false, err.Error())
 	}
 
 	// 10. Health check endpoint
@@ -228,25 +243,28 @@ func testSecurity() {
 	reqWithHost, _ := http.NewRequest("GET", httpBase+"/", nil)
 	reqWithHost.Host = "normal." + cfg.Domain
 	respWithID, err := hc.Do(reqWithHost)
-	if err == nil {
+	reqID := ""
+	if err == nil && respWithID != nil {
 		io.Copy(io.Discard, respWithID.Body)
 		respWithID.Body.Close()
-		reqID := respWithID.Header.Get("X-Request-ID")
-		check("X-Request-ID header present", reqID != "", "missing")
+		reqID = respWithID.Header.Get("X-Request-ID")
 	}
+	check("X-Request-ID header present", err == nil && reqID != "",
+		fmt.Sprintf("err=%v reqID=%q", err, reqID))
 
 	// 12. X-Request-ID preservation
 	reqPreserve, _ := http.NewRequest("GET", httpBase+"/", nil)
 	reqPreserve.Host = "normal." + cfg.Domain
 	reqPreserve.Header.Set("X-Request-ID", "custom-trace-id")
 	respPreserve, err := hc.Do(reqPreserve)
-	if err == nil {
+	preserved := ""
+	if err == nil && respPreserve != nil {
 		io.Copy(io.Discard, respPreserve.Body)
 		respPreserve.Body.Close()
-		check("X-Request-ID preserved from client",
-			respPreserve.Header.Get("X-Request-ID") == "custom-trace-id",
-			respPreserve.Header.Get("X-Request-ID"))
+		preserved = respPreserve.Header.Get("X-Request-ID")
 	}
+	check("X-Request-ID preserved from client", err == nil && preserved == "custom-trace-id",
+		fmt.Sprintf("err=%v got=%q", err, preserved))
 }
 
 // ─── STRESS TEST ────────────────────────────────────────────
@@ -353,10 +371,10 @@ func testStress() {
 		memDeltaMB < 500, fmt.Sprintf("%.1f MB growth", memDeltaMB))
 }
 
-// ─── RECONNECT TEST ─────────────────────────────────────────
+// ─── MANUAL SERVER REPLACEMENT SMOKE ────────────────────────
 
-func testReconnect() {
-	fmt.Println("\n── Reconnect Test ────────────────────────────")
+func testManualServerReplacement() {
+	fmt.Println("\n── Manual Server Replacement Smoke ──────────")
 
 	authMgr := auth.NewManager()
 
@@ -366,11 +384,19 @@ func testReconnect() {
 	cfg.HTTPAddr = "127.0.0.1:0"
 	cfg.AuthManager = authMgr
 	srv1 := server.New(cfg, nil)
-	srv1.Start()
+	if err := srv1.Start(); err != nil {
+		check("Start initial server", false, err.Error())
+		return
+	}
 	controlAddr := srv1.ControlAddr()
 	fmt.Printf("  Server 1 started: %s\n", controlAddr)
 
-	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		check("Start replacement-smoke upstream", false, err.Error())
+		_ = srv1.Stop()
+		return
+	}
 	go http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("reconnect-ok"))
 	}))
@@ -382,14 +408,27 @@ func testReconnect() {
 	cc.Token = authMgr.DevToken()
 	cc.Reconnect = false
 	c := client.New(cc, nil)
-	err := c.Connect()
+	err = c.Connect()
 	check("Initial connect", err == nil, fmt.Sprintf("%v", err))
+	if err != nil {
+		_ = srv1.Stop()
+		return
+	}
 
 	_, err = c.HTTP(ln.Addr().String(), client.WithSubdomain("recon"))
 	check("Initial tunnel created", err == nil, fmt.Sprintf("%v", err))
+	if err != nil {
+		_ = c.Close()
+		_ = srv1.Stop()
+		return
+	}
 
 	// Kill server
-	srv1.Stop()
+	if err := srv1.Stop(); err != nil {
+		check("Stop initial server", false, err.Error())
+		_ = c.Close()
+		return
+	}
 	fmt.Println("  Server 1 stopped")
 	time.Sleep(1 * time.Second) // Wait for port release on Windows
 
@@ -399,7 +438,11 @@ func testReconnect() {
 	cfg2.HTTPAddr = "127.0.0.1:0"
 	cfg2.AuthManager = authMgr
 	srv2 := server.New(cfg2, nil)
-	srv2.Start()
+	if err := srv2.Start(); err != nil {
+		check("Start replacement server", false, err.Error())
+		_ = c.Close()
+		return
+	}
 	defer srv2.Stop()
 	fmt.Printf("  Server 2 started: %s\n", srv2.ControlAddr())
 
@@ -417,34 +460,50 @@ func testReconnect() {
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	check("Reconnect to new server", err == nil, fmt.Sprintf("%v", err))
+	check("Connect replacement client to new server", err == nil, fmt.Sprintf("%v", err))
+	if err != nil {
+		_ = c.Close()
+		return
+	}
 	defer c2.Close()
 
 	t, err := c2.HTTP(ln.Addr().String(), client.WithSubdomain("recon2"))
 	check("Tunnel on new server", err == nil && t != nil, fmt.Sprintf("%v", err))
+	if err != nil || t == nil {
+		_ = c.Close()
+		return
+	}
 
 	time.Sleep(300 * time.Millisecond)
 
 	// Verify data flows through new server
 	hc := &http.Client{Timeout: 10 * time.Second}
-	req, _ := http.NewRequest("GET", "http://"+srv2.HTTPAddr()+"/", nil)
+	req, err := http.NewRequest("GET", "http://"+srv2.HTTPAddr()+"/", nil)
+	if err != nil {
+		check("Build replacement request", false, err.Error())
+		_ = c.Close()
+		return
+	}
 	req.Host = "recon2." + cfg2.Domain
 	resp, err := hc.Do(req)
 	if err == nil {
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		check("Data through new server", string(body) == "reconnect-ok", string(body))
+		body, readErr := io.ReadAll(resp.Body)
+		closeErr := resp.Body.Close()
+		check("Data through new server", readErr == nil && closeErr == nil && resp.StatusCode == http.StatusOK && string(body) == "reconnect-ok",
+			fmt.Sprintf("status=%d body=%q read=%v close=%v", resp.StatusCode, body, readErr, closeErr))
 	} else {
 		check("Data through new server", false, err.Error())
 	}
 
-	c.Close()
+	if err := c.Close(); err != nil {
+		check("Close initial client", false, err.Error())
+	}
 }
 
-// ─── SOAK TEST ──────────────────────────────────────────────
+// ─── SHORT LOAD SMOKE ───────────────────────────────────────
 
-func testSoak() {
-	fmt.Println("\n── Soak Test (10 second sustained load) ──────")
+func testShortLoadSmoke() {
+	fmt.Println("\n── Short Load Smoke (5 seconds) ─────────────")
 
 	authMgr := auth.NewManager()
 	cfg := server.DefaultConfig()
@@ -452,10 +511,17 @@ func testSoak() {
 	cfg.HTTPAddr = "127.0.0.1:0"
 	cfg.AuthManager = authMgr
 	srv := server.New(cfg, nil)
-	srv.Start()
+	if err := srv.Start(); err != nil {
+		check("Start short-load server", false, err.Error())
+		return
+	}
 	defer srv.Stop()
 
-	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		check("Start short-load upstream", false, err.Error())
+		return
+	}
 	go http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("soak"))
 	}))
@@ -466,10 +532,16 @@ func testSoak() {
 	cc.Token = authMgr.DevToken()
 	cc.Reconnect = false
 	c := client.New(cc, nil)
-	c.Connect()
+	if err := c.Connect(); err != nil {
+		check("Connect short-load client", false, err.Error())
+		return
+	}
 	defer c.Close()
 
-	c.HTTP(ln.Addr().String(), client.WithSubdomain("soak"))
+	if _, err := c.HTTP(ln.Addr().String(), client.WithSubdomain("soak")); err != nil {
+		check("Create short-load tunnel", false, err.Error())
+		return
+	}
 	time.Sleep(100 * time.Millisecond)
 
 	fmt.Println()
@@ -496,7 +568,11 @@ func testSoak() {
 			defer wg.Done()
 			hc := &http.Client{Timeout: 5 * time.Second}
 			for time.Since(start) < duration {
-				req, _ := http.NewRequest("GET", "http://"+srv.HTTPAddr()+"/", nil)
+				req, err := http.NewRequest("GET", "http://"+srv.HTTPAddr()+"/", nil)
+				if err != nil {
+					atomic.AddInt64(&totalErrs, 1)
+					continue
+				}
 				req.Host = "soak." + cfg.Domain
 				t0 := time.Now()
 				resp, err := hc.Do(req)
@@ -505,11 +581,11 @@ func testSoak() {
 					atomic.AddInt64(&totalErrs, 1)
 					continue
 				}
-				io.Copy(io.Discard, resp.Body)
-				resp.Body.Close()
-				if resp.StatusCode == http.StatusTooManyRequests {
+				_, copyErr := io.Copy(io.Discard, resp.Body)
+				closeErr := resp.Body.Close()
+				if copyErr != nil || closeErr != nil || resp.StatusCode != http.StatusOK {
 					atomic.AddInt64(&totalErrs, 1)
-					time.Sleep(10 * time.Millisecond) // Back off on rate limit
+					time.Sleep(10 * time.Millisecond)
 					continue
 				}
 				atomic.AddInt64(&totalReqs, 1)
@@ -569,10 +645,11 @@ func testSoak() {
 	check(fmt.Sprintf("Total processed (%d ok + %d rate-limited)", totalReqs, totalErrs),
 		totalReqs+totalErrs > 100, "too few requests processed")
 
-	// Latency drift: max RPS should not be more than 3x min RPS
+	// Throughput stability: max RPS should not be more than 3x min RPS.
+	// Tail-latency stability lives in test/soak.
 	if maxRPS > 0 && minRPS > 0 {
 		drift := maxRPS / minRPS
-		check(fmt.Sprintf("Latency stability (max/min RPS ratio=%.1fx)", drift),
+		check(fmt.Sprintf("Throughput stability (max/min RPS ratio=%.1fx)", drift),
 			drift < 3.0, fmt.Sprintf("%.1fx drift", drift))
 	}
 
@@ -580,6 +657,6 @@ func testSoak() {
 	time.Sleep(2 * time.Second)
 	goroutineEnd := runtime.NumGoroutine()
 	delta := goroutineEnd - goroutineStart
-	check(fmt.Sprintf("Post-soak goroutine leak (delta=%d)", delta),
+	check(fmt.Sprintf("Post-load goroutine leak (delta=%d)", delta),
 		delta < 30, fmt.Sprintf("leaked %d", delta))
 }

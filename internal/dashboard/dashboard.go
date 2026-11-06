@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"container/list"
 	"context"
 	"crypto/rand"
 	"embed"
@@ -87,8 +88,9 @@ func (d *Dashboard) securityHeaders(next http.Handler) http.Handler {
 }
 
 const (
-	authMaxFailures = 10
-	authWindow      = 5 * time.Minute
+	authMaxFailures   = 10
+	authMaxTrackedIPs = 10000
+	authWindow        = 5 * time.Minute
 )
 
 // authGuard throttles token guessing per client IP: authMaxFailures bad
@@ -96,13 +98,14 @@ const (
 type authGuard struct {
 	mu    sync.Mutex
 	fails map[string]*authFailure
+	order list.List // least-recently-failed IP at the front
 }
 
 type authFailure struct {
 	count int
 	first time.Time
 	until time.Time
-	last  time.Time // most recent failure for this IP (eviction order)
+	elem  *list.Element
 }
 
 func (g *authGuard) locked(ip string) bool {
@@ -119,53 +122,47 @@ func (g *authGuard) fail(ip string) {
 		g.fails = make(map[string]*authFailure)
 	}
 	now := time.Now()
-	if len(g.fails) > 10000 { // bound memory
-		for k, f := range g.fails {
-			if now.Sub(f.first) > authWindow && now.After(f.until) {
-				delete(g.fails, k)
+	f := g.fails[ip]
+	if f != nil && now.Sub(f.first) > authWindow && now.After(f.until) {
+		g.remove(ip, f)
+		f = nil
+	}
+	if f == nil {
+		if len(g.fails) >= authMaxTrackedIPs {
+			if oldest := g.order.Front(); oldest != nil {
+				oldestIP, _ := oldest.Value.(string)
+				delete(g.fails, oldestIP)
+				g.order.Remove(oldest)
 			}
 		}
-	}
-	f := g.fails[ip]
-	if f == nil || (now.Sub(f.first) > authWindow && now.After(f.until)) {
 		f = &authFailure{first: now}
+		f.elem = g.order.PushBack(ip)
 		g.fails[ip] = f
+	} else if f.elem != nil {
+		g.order.MoveToBack(f.elem)
 	}
 	f.count++
-	f.last = now
 	if f.count >= authMaxFailures {
 		f.until = now.Add(authWindow)
 		f.count = 0
 		f.first = now
 	}
-	// A flood of distinct fresh IPs gives the sweep above nothing to
-	// expire — every entry is brand new, so the map would grow without
-	// bound for as long as the flood lasts. Enforce the cap by evicting
-	// the least-recently-failed entries: under a distributed flood those
-	// are attacker entries, and a guard that can exhaust the server's
-	// memory protects no one. Runs after the insert so the bound holds
-	// exactly after every call (the just-recorded entry is the newest
-	// and is never the eviction victim).
-	for len(g.fails) > 10000 {
-		oldestKey := ""
-		var oldest time.Time
-		first := true
-		for k, fc := range g.fails {
-			if first || fc.last.Before(oldest) {
-				oldestKey, oldest, first = k, fc.last, false
-			}
-		}
-		if first {
-			break
-		}
-		delete(g.fails, oldestKey)
-	}
 }
 
 func (g *authGuard) reset(ip string) {
 	g.mu.Lock()
-	delete(g.fails, ip)
+	if f := g.fails[ip]; f != nil {
+		g.remove(ip, f)
+	}
 	g.mu.Unlock()
+}
+
+func (g *authGuard) remove(ip string, f *authFailure) {
+	delete(g.fails, ip)
+	if f.elem != nil {
+		g.order.Remove(f.elem)
+		f.elem = nil
+	}
 }
 
 func remoteIP(r *http.Request) string {

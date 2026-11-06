@@ -14,7 +14,8 @@
 > `503 Tunnel offline`; the server sends `GO_AWAY` when it stops. Tunnels cannot
 > claim a small reserved set of subdomains (`www`, `api`, `admin`, ...). Account
 > limits (`max_tunnels`, `max_sessions`, `rate_limit`) are enforced. See README.md
-> and CHANGELOG.md for what is current.
+> and CHANGELOG.md for what is current. Production deployment and incident
+> procedures are authoritative only in `docs/OPERATIONS.md`.
 
 > **Project:** WireRift  
 > **Tagline:** Tear a rift through the wire. Expose localhost to the world.  
@@ -1398,8 +1399,8 @@ Blocked by default: `www`, `api`, `admin`, `dashboard`, `status`, `health`, `met
 
 | Metric | Target | Notes |
 |--------|--------|-------|
-| Tunnel establishment | < 100ms | After auth |
-| HTTP request latency overhead | < 5ms | Added by tunnel vs direct |
+| Tunnel establishment | p95 < 100ms | After auth, controlled runner |
+| HTTP request latency overhead | p95 < 5ms | 1KB response, tunneled p95 minus direct p95 |
 | Throughput per tunnel | > 500 Mbps | On 1 Gbps link |
 | Concurrent tunnels per server | > 10,000 | With connection pooling |
 | Concurrent streams per tunnel | > 256 | Configurable |

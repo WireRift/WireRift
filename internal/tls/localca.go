@@ -294,7 +294,7 @@ func createLocalCA(dir string) (*LocalCA, error) {
 
 	ca := &LocalCA{Cert: cert, Key: key, Dir: dir}
 	// Write the key first (0600) so a half-written CA is never trustable.
-	if err := writeFileAtomicMode(ca.KeyPath(), pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
+	if err := writeFileAtomicMode(ca.KeyPath(), pem.EncodeToMemory(&pem.Block{Type: ecPrivateKeyPEMType, Bytes: keyDER}), 0o600); err != nil {
 		return nil, fmt.Errorf("write local CA key: %w", err)
 	}
 	if betweenCAFilesHook != nil {

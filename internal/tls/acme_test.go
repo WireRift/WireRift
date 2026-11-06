@@ -2085,13 +2085,8 @@ func TestLoadOrCreateKey_CorruptPEM(t *testing.T) {
 	// Write corrupt data (not valid PEM)
 	os.WriteFile(keyPath, []byte("this is not PEM data"), 0600)
 
-	// Should fall through to generate a new key
-	key, err := mgr.loadOrCreateKey(keyPath)
-	if err != nil {
-		t.Fatalf("loadOrCreateKey with corrupt PEM should generate new key: %v", err)
-	}
-	if key == nil {
-		t.Fatal("Expected a new key to be generated")
+	if _, err := mgr.loadOrCreateKey(keyPath); err == nil {
+		t.Fatal("loadOrCreateKey silently replaced corrupt PEM")
 	}
 }
 
@@ -2105,13 +2100,8 @@ func TestLoadOrCreateKey_CorruptPEMBlock(t *testing.T) {
 	badPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: []byte("not-a-valid-key")})
 	os.WriteFile(keyPath, badPEM, 0600)
 
-	// Should fall through to generate a new key because ParseECPrivateKey fails
-	key, err := mgr.loadOrCreateKey(keyPath)
-	if err != nil {
-		t.Fatalf("loadOrCreateKey with bad key bytes should generate new key: %v", err)
-	}
-	if key == nil {
-		t.Fatal("Expected a new key to be generated")
+	if _, err := mgr.loadOrCreateKey(keyPath); err == nil {
+		t.Fatal("loadOrCreateKey silently replaced invalid key bytes")
 	}
 }
 
@@ -2128,8 +2118,8 @@ func TestLoadOrCreateKey_WriteError(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error when key file cannot be written")
 	}
-	if !strings.Contains(err.Error(), "save account key") {
-		t.Errorf("Expected 'save account key' error, got: %v", err)
+	if !strings.Contains(err.Error(), "read existing account key") {
+		t.Errorf("Expected existing-path read error, got: %v", err)
 	}
 }
 

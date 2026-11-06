@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -51,6 +52,11 @@ type Config struct {
 	// in-flight requests; beyond it new uploads get 503 until others finish.
 	// Default DefaultMaxBufferedBodyBytes (256 MB).
 	MaxBufferedBodyBytes int64
+
+	// TrustedProxyCIDRs identifies reverse proxies whose X-Forwarded-For chain
+	// may be used to resolve the original visitor. Empty means every forwarding
+	// header is untrusted and the socket peer is the client identity.
+	TrustedProxyCIDRs []string
 
 	// TCPBindHost is the interface TCP tunnel ports listen on ("" = all
 	// interfaces). -dev sets it to loopback so nothing is reachable remotely.
@@ -114,6 +120,15 @@ type Config struct {
 
 	// ACMEChallengeHandler serves ACME HTTP-01 challenges on /.well-known/acme-challenge/
 	ACMEChallengeHandler http.HandlerFunc
+
+	// CertificateExpiry returns the earliest expiry among certificates already
+	// loaded by the TLS manager. It must be side-effect free: metrics scrapes
+	// must never trigger certificate issuance or disk I/O.
+	CertificateExpiry func() time.Time
+
+	// PersistenceErrors returns write failures tracked by an external
+	// persistence component such as the TLS manager.
+	PersistenceErrors func() uint64
 }
 
 // DefaultConfig returns the default server configuration.
@@ -131,13 +146,44 @@ func DefaultConfig() Config {
 	}
 }
 
+const (
+	defaultTCPPortStart = 20000
+	defaultTCPPortEnd   = 29999
+)
+
+func parseTCPAddrRange(spec string) (int, int, error) {
+	if spec == "" {
+		return defaultTCPPortStart, defaultTCPPortEnd, nil
+	}
+	startText, endText, ok := strings.Cut(spec, "-")
+	if !ok {
+		return 0, 0, fmt.Errorf("expected START-END")
+	}
+	start, err := strconv.Atoi(strings.TrimSpace(startText))
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid start port: %w", err)
+	}
+	end, err := strconv.Atoi(strings.TrimSpace(endText))
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid end port: %w", err)
+	}
+	if start < 1 || start > 65535 || end < 1 || end > 65535 {
+		return 0, 0, fmt.Errorf("ports must be between 1 and 65535")
+	}
+	if start > end {
+		return 0, 0, fmt.Errorf("start port must not exceed end port")
+	}
+	return start, end, nil
+}
+
 // Server is the tunnel server.
 type Server struct {
 	pending pendingConns // control connections still unauthenticated
 
-	config      Config
-	logger      *slog.Logger
-	authManager *auth.Manager
+	config           Config
+	logger           *slog.Logger
+	authManager      *auth.Manager
+	trustedProxyNets []netip.Prefix
 
 	// Listeners
 	controlListener net.Listener
@@ -178,8 +224,12 @@ type Server struct {
 	// Traffic counters
 	bodyBudget *byteBudget // caps buffered request bodies (nil = unlimited)
 
-	bytesIn  atomic.Int64
-	bytesOut atomic.Int64
+	bytesIn             atomic.Int64
+	bytesOut            atomic.Int64
+	httpStatus          [5]atomic.Uint64
+	httpDurationBuckets [httpDurationBucketSlots]atomic.Uint64
+	httpDurationNanos   atomic.Int64
+	persistenceErrors   atomic.Uint64
 
 	// Traffic inspector
 	requestLogs []RequestLog
@@ -187,11 +237,25 @@ type Server struct {
 	maxLogs     int
 
 	// Lifecycle
-	ctx       context.Context
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
-	startTime time.Time
+	ctx         context.Context
+	cancel      context.CancelFunc
+	wg          sync.WaitGroup
+	lifecycleMu sync.Mutex
+	lifecycle   lifecycleState
+	fatalErrors chan error
+	startTime   time.Time
+	ready       atomic.Bool
 }
+
+type lifecycleState uint8
+
+const (
+	lifecycleNew lifecycleState = iota
+	lifecycleStarting
+	lifecycleRunning
+	lifecycleStopping
+	lifecycleStopped
+)
 
 // Session represents a client session.
 type Session struct {
@@ -333,16 +397,9 @@ func New(config Config, logger *slog.Logger) *Server {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	portStart, portEnd := 20000, 29999
-	if config.TCPAddrRange != "" {
-		if parts := strings.SplitN(config.TCPAddrRange, "-", 2); len(parts) == 2 {
-			if ps, err := strconv.Atoi(strings.TrimSpace(parts[0])); err == nil {
-				portStart = ps
-			}
-			if pe, err := strconv.Atoi(strings.TrimSpace(parts[1])); err == nil {
-				portEnd = pe
-			}
-		}
+	portStart, portEnd := defaultTCPPortStart, defaultTCPPortEnd
+	if parsedStart, parsedEnd, err := parseTCPAddrRange(config.TCPAddrRange); err == nil {
+		portStart, portEnd = parsedStart, parsedEnd
 	}
 
 	pinSecret := make([]byte, 32)
@@ -357,6 +414,7 @@ func New(config Config, logger *slog.Logger) *Server {
 	if config.MaxBufferedBodyBytes <= 0 {
 		config.MaxBufferedBodyBytes = DefaultMaxBufferedBodyBytes
 	}
+	trustedProxyNets, _ := parseTrustedProxyCIDRs(config.TrustedProxyCIDRs)
 
 	domainSecret := config.DomainSecret
 	if len(domainSecret) == 0 {
@@ -364,18 +422,20 @@ func New(config Config, logger *slog.Logger) *Server {
 	}
 
 	s := &Server{
-		domainSecret: domainSecret,
-		config:       config,
-		logger:       logger,
-		ctx:          ctx,
-		cancel:       cancel,
-		tcpPortStart: portStart,
-		tcpPortEnd:   portEnd,
-		rateLimiter:  ratelimit.NewManager(100, 50),
-		authFails:    ratelimit.NewManager(authFailRefill, authFailBurst),
-		maxLogs:      500, // Keep last 500 requests for inspection
-		pinSecret:    pinSecret,
-		bodyBudget:   newByteBudget(config.MaxBufferedBodyBytes),
+		domainSecret:     domainSecret,
+		config:           config,
+		logger:           logger,
+		ctx:              ctx,
+		cancel:           cancel,
+		tcpPortStart:     portStart,
+		tcpPortEnd:       portEnd,
+		rateLimiter:      ratelimit.NewManager(100, 50),
+		authFails:        ratelimit.NewManager(authFailRefill, authFailBurst),
+		maxLogs:          500, // Keep last 500 requests for inspection
+		pinSecret:        pinSecret,
+		bodyBudget:       newByteBudget(config.MaxBufferedBodyBytes),
+		trustedProxyNets: trustedProxyNets,
+		fatalErrors:      make(chan error, 1),
 	}
 
 	// Store portStart-1 so first Add(1) yields portStart
@@ -392,7 +452,34 @@ func New(config Config, logger *slog.Logger) *Server {
 
 // Start starts the server.
 func (s *Server) Start() error {
-	s.startTime = time.Now()
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.lifecycle != lifecycleNew {
+		return fmt.Errorf("server already started or stopped")
+	}
+	s.lifecycle = lifecycleStarting
+	started := false
+	defer func() {
+		if !started {
+			s.lifecycle = lifecycleNew
+		}
+	}()
+
+	s.ready.Store(false)
+
+	trustedProxyNets, err := parseTrustedProxyCIDRs(s.config.TrustedProxyCIDRs)
+	if err != nil {
+		return fmt.Errorf("invalid trusted proxy CIDRs: %w", err)
+	}
+	s.trustedProxyNets = trustedProxyNets
+
+	portStart, portEnd, err := parseTCPAddrRange(s.config.TCPAddrRange)
+	if err != nil {
+		return fmt.Errorf("invalid TCP port range %q: %w", s.config.TCPAddrRange, err)
+	}
+	s.tcpPortStart, s.tcpPortEnd = portStart, portEnd
+	s.nextPort.Store(int32(portStart - 1)) //nolint:gosec // validated port numbers are <= 65535
+
 	s.loadHeld()
 
 	// Start control plane listener
@@ -402,13 +489,24 @@ func (s *Server) Start() error {
 
 	// Start HTTP edge listener
 	if err := s.startHTTPListener(); err != nil {
+		// Start is atomic from its caller's perspective: do not leave the control
+		// plane reachable after reporting that the server failed to start.
+		_ = s.controlListener.Close()
+		s.wg.Wait()
 		return fmt.Errorf("start HTTP listener: %w", err)
 	}
 
 	// Start HTTPS edge listener if TLS is configured
 	if s.config.TLSConfig != nil {
 		if err := s.startHTTPSListener(); err != nil {
-			s.logger.Warn("HTTPS listener not started", "error", err)
+			// TLS was explicitly configured, so starting without the HTTPS edge
+			// would be a silently degraded and potentially insecure partial start.
+			if s.httpServer != nil { // nil when the HTTP edge is disabled by an empty address
+				_ = s.httpServer.Close()
+			}
+			_ = s.controlListener.Close()
+			s.wg.Wait()
+			return fmt.Errorf("start HTTPS listener: %w", err)
 		}
 	}
 
@@ -426,6 +524,14 @@ func (s *Server) Start() error {
 		s.startRateLimiterEviction()
 	}()
 
+	// Publish readiness only after every configured listener and background
+	// maintenance loop has started. The atomic store also makes startTime safely
+	// visible to concurrent health and metrics requests.
+	s.startTime = time.Now()
+	s.lifecycle = lifecycleRunning
+	s.ready.Store(true)
+	started = true
+
 	s.logger.Info("server started",
 		"control", s.config.ControlAddr,
 		"http", s.config.HTTPAddr,
@@ -439,6 +545,16 @@ const goAwayGrace = 2 * time.Second
 
 // Stop stops the server.
 func (s *Server) Stop() error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.lifecycle == lifecycleStopped {
+		return nil
+	}
+	s.lifecycle = lifecycleStopping
+	defer func() { s.lifecycle = lifecycleStopped }()
+
+	// Stop advertising readiness before beginning graceful drain.
+	s.ready.Store(false)
 	s.saveHeld()
 
 	// Tell every client the stop is intentional before cancelling the context
@@ -495,8 +611,36 @@ func (s *Server) Stop() error {
 	return nil
 }
 
+// Errors reports the first unexpected failure of a required listener. The
+// channel is buffered so failure reporting cannot deadlock during shutdown.
+func (s *Server) Errors() <-chan error {
+	return s.fatalErrors
+}
+
+func (s *Server) reportFatalListenerError(component string, err error) {
+	// A listener closed during rollback or Stop is expected: readiness is
+	// withdrawn before those closes. CompareAndSwap also reports only once.
+	if err == nil || !s.ready.CompareAndSwap(true, false) {
+		return
+	}
+	fatalErr := fmt.Errorf("%s listener failed: %w", component, err)
+	s.logger.Error("required listener failed", "component", component, "error", err)
+	select {
+	case s.fatalErrors <- fatalErr:
+	default:
+	}
+	s.cancel()
+}
+
 // startControlListener starts the control plane listener.
 func (s *Server) startControlListener() error {
+	if s.config.ControlAddr == "" {
+		// The control plane is mandatory and carries the auth token. An
+		// empty address would run net.Listen("tcp", "") and silently bind a
+		// random port on ALL interfaces; a misconfigured start must fail
+		// loudly instead.
+		return errors.New("control plane address is empty")
+	}
 	var err error
 	s.controlListener, err = net.Listen("tcp", s.config.ControlAddr)
 	if err != nil {
@@ -525,7 +669,7 @@ func (s *Server) acceptControlConnections() {
 				return
 			default:
 			}
-			// If listener was closed, stop accepting
+			s.reportFatalListenerError("control", err)
 			return
 		}
 
@@ -1172,7 +1316,10 @@ func (s *Server) teardownTunnel(tunnel *Tunnel) {
 	tunnel.markClosed()
 	switch tunnel.Type {
 	case proto.TunnelTypeHTTP:
-		s.tunnels.Delete(tunnel.Subdomain)
+		// Only release the name if it still points at this tunnel: a
+		// takeover may have swapped in the reconnecting client's
+		// replacement between the session snapshot and this teardown.
+		s.tunnels.CompareAndDelete(tunnel.Subdomain, tunnel)
 		if tunnel.CustomDomain != "" {
 			// Only release the name if it still points at this tunnel.
 			s.tunnels.CompareAndDelete(customKeyPrefix+tunnel.CustomDomain, tunnel)
@@ -1376,6 +1523,12 @@ func (s *Server) proxyTCPConnection(conn net.Conn, tunnel *Tunnel, session *Sess
 
 // startHTTPListener starts the HTTP edge listener.
 func (s *Server) startHTTPListener() error {
+	if s.config.HTTPAddr == "" {
+		// Empty means the HTTP edge is disabled (in-tree contract: "Don't
+		// start HTTP"); without this skip net.Listen("tcp", "") would bind
+		// a random port on ALL interfaces.
+		return nil
+	}
 	var err error
 	s.httpListener, err = net.Listen("tcp", s.config.HTTPAddr)
 	if err != nil {
@@ -1396,7 +1549,7 @@ func (s *Server) startHTTPListener() error {
 	go func() {
 		defer s.wg.Done()
 		if err := s.httpServer.Serve(s.httpListener); err != nil && err != http.ErrServerClosed {
-			s.logger.Error("HTTP server error", "error", err)
+			s.reportFatalListenerError("HTTP", err)
 		}
 	}()
 
@@ -1405,6 +1558,13 @@ func (s *Server) startHTTPListener() error {
 
 // startHTTPSListener starts the HTTPS edge listener.
 func (s *Server) startHTTPSListener() error {
+	if s.config.HTTPSAddr == "" {
+		// The edge is enabled (TLSConfig is set) but no address was given.
+		// Falling through would run net.Listen("tcp", "") and silently bind
+		// a random port on ALL interfaces; Start()'s contract for a degraded
+		// HTTPS edge is a loud failure instead (see the F16 cleanup above).
+		return errors.New("HTTPS edge is enabled (TLSConfig is set) but no HTTPS address is configured")
+	}
 	ln, err := net.Listen("tcp", s.config.HTTPSAddr)
 	if err != nil {
 		return err
@@ -1426,7 +1586,7 @@ func (s *Server) startHTTPSListener() error {
 	go func() {
 		defer s.wg.Done()
 		if err := s.httpsServer.Serve(tlsListener); err != nil && err != http.ErrServerClosed {
-			s.logger.Error("HTTPS server error", "error", err)
+			s.reportFatalListenerError("HTTPS", err)
 		}
 	}()
 

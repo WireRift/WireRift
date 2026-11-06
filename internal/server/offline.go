@@ -95,6 +95,7 @@ func (s *Server) saveHeld() {
 		}
 	}
 	if err != nil {
+		s.persistenceErrors.Add(1)
 		s.logger.Warn("could not save held subdomains", "error", err)
 	}
 }

@@ -95,11 +95,15 @@ type Client struct {
 
 	// HTTP client for proxying (shared for connection reuse)
 	httpClient *http.Client
+	localConns sync.Map // map[*trackedLocalConn]struct{}
 
 	// Lifecycle
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	ctx         context.Context
+	cancel      context.CancelFunc
+	wg          sync.WaitGroup
+	handlerWG   sync.WaitGroup
+	lifecycleMu sync.Mutex
+	lifecycle   clientLifecycleState
 
 	// failed is closed, with failErr set, when the client gave up for good
 	// (the server rejected the token), so callers do not wait on a dead client.
@@ -108,8 +112,20 @@ type Client struct {
 	failErr  error
 }
 
+type clientLifecycleState uint8
+
+const (
+	clientLifecycleNew clientLifecycleState = iota
+	clientLifecycleConnecting
+	clientLifecycleRunning
+	clientLifecycleClosing
+	clientLifecycleClosed
+)
+
 // Tunnel represents an active tunnel.
 type Tunnel struct {
+	mu        sync.Mutex
+	closed    bool
 	ID        string
 	Type      proto.TunnelType
 	PublicURL string
@@ -133,28 +149,61 @@ func New(config Config, logger *slog.Logger) *Client {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	return &Client{
+	c := &Client{
 		config: config,
 		logger: logger,
 		ctx:    ctx,
 		cancel: cancel,
 		failed: make(chan struct{}),
-		httpClient: &http.Client{
-			// No overall Timeout: it would also cap body streaming and cut off
-			// large downloads/SSE. Bound connect and time-to-first-byte instead.
-			// Redirects are the visitor's to follow, not this relay's.
-			CheckRedirect: func(*http.Request, []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-			Transport: &http.Transport{
-				DialContext:           (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
-				ResponseHeaderTimeout: 30 * time.Second,
-				MaxIdleConns:          100,
-				MaxIdleConnsPerHost:   10,
-				IdleConnTimeout:       90 * time.Second,
-			},
+	}
+	c.httpClient = &http.Client{
+		// No overall Timeout: it would also cap body streaming and cut off
+		// large downloads/SSE. Bound connect and time-to-first-byte instead.
+		// Redirects are the visitor's to follow, not this relay's.
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+		Transport: &http.Transport{
+			DialContext:           c.dialLocalHTTP,
+			ResponseHeaderTimeout: 30 * time.Second,
+			MaxIdleConns:          100,
+			MaxIdleConnsPerHost:   10,
+			IdleConnTimeout:       90 * time.Second,
 		},
 	}
+	return c
+}
+
+type trackedLocalConn struct {
+	net.Conn
+	owner *Client
+	once  sync.Once
+}
+
+func (c *trackedLocalConn) Close() error {
+	var err error
+	c.once.Do(func() {
+		c.owner.localConns.Delete(c)
+		err = c.Conn.Close()
+	})
+	return err
+}
+
+func (c *Client) dialLocalHTTP(ctx context.Context, network, address string) (net.Conn, error) {
+	conn, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, network, address)
+	if err != nil {
+		return nil, err
+	}
+	tracked := &trackedLocalConn{Conn: conn, owner: c}
+	c.localConns.Store(tracked, struct{}{})
+	return tracked, nil
+}
+
+func (c *Client) closeLocalHTTPConnections() {
+	c.localConns.Range(func(key, _ any) bool {
+		_ = key.(*trackedLocalConn).Close()
+		return true
+	})
 }
 
 // Failed returns a channel that is closed when the client has given up for good
@@ -180,12 +229,34 @@ func (c *Client) fail(err error) {
 
 // Connect connects to the tunnel server.
 func (c *Client) Connect() error {
+	c.lifecycleMu.Lock()
+	if c.lifecycle != clientLifecycleNew {
+		c.lifecycleMu.Unlock()
+		return fmt.Errorf("client already connected, connecting, or closed")
+	}
+	c.lifecycle = clientLifecycleConnecting
+	c.lifecycleMu.Unlock()
+
 	if err := c.connect(); err != nil {
+		c.lifecycleMu.Lock()
+		if c.lifecycle == clientLifecycleConnecting {
+			c.lifecycle = clientLifecycleNew
+		}
+		c.lifecycleMu.Unlock()
 		return err
 	}
 
+	// Close may have cancelled and joined the connection while connect was
+	// authenticating. It owns the lifecycle transition once state changed.
+	c.lifecycleMu.Lock()
+	if c.lifecycle != clientLifecycleConnecting {
+		c.lifecycleMu.Unlock()
+		return fmt.Errorf("client closed while connecting")
+	}
+	c.lifecycle = clientLifecycleRunning
+
 	// Start stream handler (pass mux explicitly to avoid race on reconnect)
-	currentMux := c.mux
+	currentMux := c.currentMux()
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
@@ -207,6 +278,7 @@ func (c *Client) Connect() error {
 			c.reconnectLoop()
 		}()
 	}
+	c.lifecycleMu.Unlock()
 
 	return nil
 }
@@ -374,7 +446,20 @@ func (c *Client) authenticate() error {
 
 // Close closes the client.
 func (c *Client) Close() error {
+	c.lifecycleMu.Lock()
+	if c.lifecycle == clientLifecycleClosed {
+		c.lifecycleMu.Unlock()
+		return nil
+	}
+	c.lifecycle = clientLifecycleClosing
+	defer func() {
+		c.lifecycle = clientLifecycleClosed
+		c.lifecycleMu.Unlock()
+	}()
+
 	c.cancel()
+	c.connected.Store(false)
+	c.closeLocalHTTPConnections()
 
 	c.connMu.RLock()
 	m, conn := c.mux, c.conn
@@ -399,6 +484,9 @@ func (c *Client) Close() error {
 	}
 
 	c.wg.Wait()
+	// handleStreams is part of wg, so after it exits no new handlerWG.Add can
+	// race this Wait. Every accepted local relay is now owned by Close.
+	c.handlerWG.Wait()
 	return nil
 }
 
@@ -528,8 +616,21 @@ func assignedTCPPort(tunnelType proto.TunnelType, publicURL string, remotePort i
 
 // CloseTunnel closes a tunnel.
 func (c *Client) CloseTunnel(id string) error {
+	if value, ok := c.tunnels.Load(id); ok {
+		tunnel := value.(*Tunnel)
+		activeID, first := tunnel.markClosed()
+		if !first {
+			return nil
+		}
+		id = activeID
+	}
+	return c.closeTunnelID(id)
+}
+
+func (c *Client) closeTunnelID(id string) error {
 	m := c.currentMux()
 	if m == nil {
+		c.tunnels.Delete(id)
 		return ErrNotConnected
 	}
 
@@ -537,14 +638,10 @@ func (c *Client) CloseTunnel(id string) error {
 	// EncodeJSONPayload cannot fail for TunnelClose (only string field)
 	frame, _ := proto.EncodeJSONPayload(proto.FrameTunnelClose, proto.ControlStreamID, closeReq)
 
-	if err := m.GetFrameWriter().Write(frame); err != nil {
-		return err
-	}
-
+	err := m.GetFrameWriter().Write(frame)
 	c.tunnels.Delete(id)
 	c.logger.Info("tunnel closed", "id", id)
-
-	return nil
+	return err
 }
 
 // SessionID returns the current session ID.
@@ -624,11 +721,16 @@ func (c *Client) heartbeatLoop(m *mux.Mux) {
 				c.logger.Warn("heartbeat failed", "error", err)
 			}
 		case <-m.Done():
-			c.connected.Store(false)
-			if ga := m.GoAway(); ga != nil {
-				c.logger.Warn("server closed the connection", "reason", ga.Reason, "message", ga.Message)
-			} else {
-				c.logger.Warn("connection lost")
+			c.connMu.RLock()
+			current := c.mux == m
+			c.connMu.RUnlock()
+			if current {
+				c.connected.Store(false)
+				if ga := m.GoAway(); ga != nil {
+					c.logger.Warn("server closed the connection", "reason", ga.Reason, "message", ga.Message)
+				} else {
+					c.logger.Warn("connection lost")
+				}
 			}
 			return
 		}
@@ -710,21 +812,25 @@ var tunnelRetryBase = time.Second
 
 // recreateTunnels re-creates all tunnels after a reconnect.
 func (c *Client) recreateTunnels() {
-	var oldTunnels []*Tunnel
+	type tunnelSnapshot struct {
+		key    string
+		tunnel *Tunnel
+	}
+	var oldTunnels []tunnelSnapshot
 	c.tunnels.Range(func(key, value any) bool {
-		oldTunnels = append(oldTunnels, value.(*Tunnel))
-		c.tunnels.Delete(key)
+		oldTunnels = append(oldTunnels, tunnelSnapshot{key: key.(string), tunnel: value.(*Tunnel)})
 		return true
 	})
 
-	// A tunnel that could not be re-created stays registered so the next
-	// reconnect tries again, instead of being lost for good (a client with an
-	// empty tunnel map looks connected but serves nothing).
-	m := c.mux
-	keep := func(t *Tunnel) { c.tunnels.Store(t.ID, t) }
+	// Keep the old desired-tunnel entry registered while the request is in
+	// flight. Tunnel.Close can then find and tombstone it; a stale response may
+	// only replace it while holding the same tunnel ownership lock.
+	m := c.currentMux()
 
-	for _, t := range oldTunnels {
+	for _, snapshot := range oldTunnels {
+		t := snapshot.tunnel
 		if t.request == nil {
+			c.tunnels.Delete(snapshot.key)
 			continue
 		}
 		request := *t.request
@@ -733,8 +839,12 @@ func (c *Client) recreateTunnels() {
 		// port) for a moment, so retry with backoff before giving up.
 		var newTunnel *Tunnel
 		var err error
-		expired, lost := false, false
+		expired, lost, closed := false, false, false
 		for attempt, delay := 0, tunnelRetryBase; attempt < 5; attempt, delay = attempt+1, delay*2 {
+			if t.isClosed() {
+				closed = true
+				break
+			}
 			// A time-limited tunnel keeps its ORIGINAL deadline across reconnects.
 			// The remaining time is recomputed on every attempt (the retry sleeps
 			// eat into it) and rounded DOWN, so no reconnect can extend the
@@ -772,7 +882,7 @@ func (c *Client) recreateTunnels() {
 		}
 		// The name the server picked is gone (someone else got it): a tunnel the
 		// user never named is better off with a new URL than without one.
-		if err != nil && !expired && !lost && t.autoSubdomain && errors.Is(err, ErrTunnelFailed) && strings.Contains(err.Error(), "taken") {
+		if err != nil && !expired && !lost && !closed && !t.isClosed() && t.autoSubdomain && errors.Is(err, ErrTunnelFailed) && strings.Contains(err.Error(), "taken") {
 			c.logger.Warn("previous subdomain is taken, asking for a new one", "id", t.ID, "subdomain", request.Subdomain)
 			request.Subdomain = ""
 			// The retries took time: the deadline of a time-limited tunnel has
@@ -794,20 +904,67 @@ func (c *Client) recreateTunnels() {
 		}
 		if expired {
 			c.logger.Info("tunnel expired, not re-creating", "id", t.ID)
+			c.tunnels.Delete(snapshot.key)
+			continue
+		}
+		if closed || t.isClosed() {
+			c.tunnels.Delete(snapshot.key)
+			if newTunnel != nil && err == nil {
+				_ = c.closeTunnelID(newTunnel.ID)
+			}
 			continue
 		}
 		if lost {
 			c.logger.Warn("connection lost while re-creating tunnel, will retry on next reconnect", "id", t.ID, "error", err)
-			keep(t)
 			continue
 		}
 		if err != nil {
 			c.logger.Error("giving up re-creating tunnel for now, will retry on next reconnect", "id", t.ID, "error", err)
-			keep(t)
 			continue
 		}
-		c.logger.Info("tunnel re-created", "old_id", t.ID, "new_id", newTunnel.ID, "url", newTunnel.PublicURL)
+		oldID := t.ID
+		if !c.publishTunnelReplacement(snapshot.key, t, newTunnel) {
+			continue
+		}
+		c.logger.Info("tunnel re-created", "old_id", oldID, "new_id", t.ID, "url", t.PublicURL)
 	}
+}
+
+func (c *Client) publishTunnelReplacement(oldKey string, current, replacement *Tunnel) bool {
+	current.mu.Lock()
+	if current.closed {
+		current.mu.Unlock()
+		c.tunnels.Delete(oldKey)
+		_ = c.closeTunnelID(replacement.ID)
+		return false
+	}
+
+	oldID := current.ID
+	originalExpiry := current.ExpiresAt
+	autoSubdomain := current.autoSubdomain
+	current.ID = replacement.ID
+	current.Type = replacement.Type
+	current.PublicURL = replacement.PublicURL
+	current.LocalAddr = replacement.LocalAddr
+	current.Subdomain = replacement.Subdomain
+	current.Port = replacement.Port
+	current.request = replacement.request
+	current.autoSubdomain = autoSubdomain || replacement.autoSubdomain
+	if originalExpiry.IsZero() {
+		current.ExpiresAt = replacement.ExpiresAt
+	} else {
+		current.ExpiresAt = originalExpiry
+	}
+	c.tunnels.Delete(oldKey)
+	if oldID != oldKey {
+		c.tunnels.Delete(oldID)
+	}
+	// openTunnel temporarily registered the response object. Replace it with
+	// the stable handle originally returned to the caller.
+	c.tunnels.Delete(replacement.ID)
+	c.tunnels.Store(current.ID, current)
+	current.mu.Unlock()
+	return true
 }
 
 // HTTPOption is an option for HTTP tunnels.
@@ -887,7 +1044,27 @@ func WithPIN(pin string) HTTPOption {
 
 // Close closes the tunnel.
 func (t *Tunnel) Close() error {
-	return t.client.CloseTunnel(t.ID)
+	id, first := t.markClosed()
+	if !first {
+		return nil
+	}
+	return t.client.closeTunnelID(id)
+}
+
+func (t *Tunnel) markClosed() (string, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return t.ID, false
+	}
+	t.closed = true
+	return t.ID, true
+}
+
+func (t *Tunnel) isClosed() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.closed
 }
 
 // handleStreams accepts incoming streams from the given mux and dispatches them.
@@ -899,7 +1076,9 @@ func (c *Client) handleStreams(m *mux.Mux) {
 		if err != nil {
 			return
 		}
+		c.handlerWG.Add(1)
 		go func() {
+			defer c.handlerWG.Done()
 			defer func() {
 				if r := recover(); r != nil {
 					c.logger.Error("panic in stream handler", "error", r)
@@ -951,6 +1130,7 @@ func (c *Client) handleHTTPStream(stream *mux.Stream) {
 	}
 
 	// Forward to local service
+	req = req.WithContext(c.ctx)
 	req.URL.Scheme = "http"
 	req.URL.Host = tunnel.LocalAddr
 	req.RequestURI = ""
@@ -1022,7 +1202,13 @@ func (c *Client) handleTCPStream(stream *mux.Stream) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		io.Copy(localConn, stream)
+		_, err := io.Copy(localConn, stream)
+		if err != nil {
+			// A reset or lost mux is an abort, not a normal half-close. Close the
+			// whole local socket so the opposite copy cannot remain blocked forever.
+			localConn.Close()
+			return
+		}
 		// Remote finished sending: propagate EOF to the local service.
 		if tc, ok := localConn.(*net.TCPConn); ok {
 			_ = tc.CloseWrite()

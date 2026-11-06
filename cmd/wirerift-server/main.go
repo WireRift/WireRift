@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -120,6 +121,7 @@ func run(parentCtx context.Context, args []string) error {
 
 	// Custom domains
 	dnsServer := fs.String("dns-server", "", "DNS server (host[:port]) used to verify custom-domain TXT records (default: system resolver)")
+	trustedProxyCIDRs := fs.String("trusted-proxy-cidrs", "", "Comma-separated proxy CIDRs trusted to supply X-Forwarded-For (default: none)")
 
 	// Auth
 	tokenFlag := fs.String("token", "", "Set a fixed auth token (default: auto-generated)")
@@ -206,15 +208,25 @@ Environment Variables:
 		}
 	}
 
-	// Create auth manager (flag > env > random)
-	authMgr := auth.NewManager(*tokenFlag)
+	// Create auth manager (flag > env > secret file > random).
+	bootstrapToken, tokenSource, err := resolveBootstrapToken(*tokenFlag)
+	if err != nil {
+		return err
+	}
+	authMgr := auth.NewManager(bootstrapToken)
 	if err := loadTokenFile(authMgr, tokenFilePath(*tokensFile, *certDir), logger); err != nil {
 		return err
 	}
 	devToken := authMgr.DevToken()
 
+	// Create TLS manager before printing connection instructions: when ACME is
+	// active it also secures the public control plane.
+	tlsMgr, err := newTLSManager(*autoCert, *acmeEmail, *domain, *certDir, *acmeStaging, logger)
+	if err != nil {
+		return err
+	}
+
 	// Print connection info prominently
-	tokenSource := tokenSourceLabel(*tokenFlag)
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "╔══════════════════════════════════════════════╗")
 	fmt.Fprintln(os.Stderr, "║              WireRift Server                 ║")
@@ -236,30 +248,11 @@ Environment Variables:
 	if strings.HasPrefix(serverAddr, ":") {
 		serverAddr = "localhost" + serverAddr
 	}
-	if *controlCert != "" {
+	if *controlCert != "" || (tlsMgr != nil && tlsMgr.IsACMEEnabled()) {
 		serverAddr = "tls://" + serverAddr
 	}
 	fmt.Fprintf(os.Stderr, "  wirerift http 8080 -server %s -token %s\n", serverAddr, shownToken)
 	fmt.Fprintln(os.Stderr, "╚══════════════════════════════════════════════╝")
-
-	// Create TLS manager
-	var tlsMgr *tlspkg.Manager
-	var tlsErr error
-	if *autoCert || *acmeEmail != "" {
-		tlsMgr, tlsErr = tlspkg.NewManager(tlspkg.Config{
-			Domain:     *domain,
-			CertDir:    *certDir,
-			AutoCert:   true,
-			Email:      *acmeEmail,
-			UseStaging: *acmeStaging,
-		})
-		if tlsErr != nil {
-			return fmt.Errorf("failed to create TLS manager: %v", tlsErr)
-		}
-		if tlsMgr.IsACMEEnabled() {
-			logger.Info("Let's Encrypt ACME enabled", "email", *acmeEmail, "staging", *acmeStaging)
-		}
-	}
 
 	// Create server config
 	srvConfig := server.DefaultConfig()
@@ -273,11 +266,13 @@ Environment Variables:
 	srvConfig.OfflineGrace = *offlineGrace
 	srvConfig.HeldFile = filepath.Join(*certDir, "held.json")
 	srvConfig.AuthManager = authMgr
+	srvConfig.TrustedProxyCIDRs = splitCommaList(*trustedProxyCIDRs)
 
-	if err := checkCertPair("dashboard-tls", *dashCert, *dashKey); err != nil {
+	dashboardTLS, err := loadDashboardTLS(*dashCert, *dashKey)
+	if err != nil {
 		return err
 	}
-	controlTLS, err := loadControlTLS(*controlCert, *controlKey)
+	controlTLS, err := configuredControlTLS(*controlCert, *controlKey, tlsMgr)
 	if err != nil {
 		return err
 	}
@@ -285,6 +280,8 @@ Environment Variables:
 	if tlsMgr != nil {
 		srvConfig.TLSConfig = tlsMgr.TLSConfig()
 		srvConfig.ACMEChallengeHandler = tlsMgr.ACMEChallengeHandler()
+		srvConfig.CertificateExpiry = tlsMgr.EarliestCertificateExpiry
+		srvConfig.PersistenceErrors = tlsMgr.PersistenceErrors
 	}
 	if dev != nil {
 		srvConfig.TLSConfig = dev.Provider.TLSConfig()
@@ -310,6 +307,20 @@ Environment Variables:
 		Port:         *dashboardAddr,
 		HTTPSEnabled: tlsMgr != nil,
 	})
+	dashServer := &http.Server{
+		Addr:              net.JoinHostPort(*dashboardBind, strconv.Itoa(*dashboardAddr)),
+		Handler:           dash.Handler(),
+		TLSConfig:         dashboardTLS,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+	dashListener, err := net.Listen("tcp", dashServer.Addr)
+	if err != nil {
+		return fmt.Errorf("failed to start dashboard on %s: %w", dashServer.Addr, err)
+	}
+	defer dashListener.Close()
 
 	// Context for graceful shutdown
 	ctx, cancel := context.WithCancel(parentCtx)
@@ -320,11 +331,15 @@ Environment Variables:
 	// Handle signals
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
 
 	go func() {
-		sig := <-sigCh
-		logger.Info("shutting down", "signal", sig)
-		cancel()
+		select {
+		case sig := <-sigCh:
+			logger.Info("shutting down", "signal", sig)
+			cancel()
+		case <-ctx.Done():
+		}
 	}()
 
 	// Start server
@@ -342,36 +357,21 @@ Environment Variables:
 
 	go watchTokenFile(ctx, authMgr, srv, tokenFilePath(*tokensFile, *certDir), tokenReloadInterval, logger)
 
-	// Start dashboard
-	dashServer := &http.Server{
-		Addr:              net.JoinHostPort(*dashboardBind, strconv.Itoa(*dashboardAddr)),
-		Handler:           dash.Handler(),
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      60 * time.Second,
-		IdleTimeout:       120 * time.Second,
-	}
-
+	// Start dashboard on the listener reserved before the other services were
+	// started, so a bind failure cannot leave a partially running process.
+	dashboardErrors := make(chan error, 1)
 	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logger.Error("dashboard panic", "error", r)
-			}
-		}()
 		logger.Info("dashboard started", "addr", dashServer.Addr)
-		var err error
-		if *dashCert != "" {
-			err = dashServer.ListenAndServeTLS(*dashCert, *dashKey)
-		} else {
-			err = dashServer.ListenAndServe()
-		}
-		if err != nil && err != http.ErrServerClosed {
-			logger.Error("dashboard error", "error", err)
+		if err := serveDashboard(dashServer, dashListener, dashboardTLS != nil); err != nil {
+			select {
+			case dashboardErrors <- err:
+			default:
+			}
 		}
 	}()
 
-	// Wait for shutdown
-	<-ctx.Done()
+	// Wait for operator shutdown or any required serving component to fail.
+	runErr := awaitRuntimeEnd(ctx, cancel, srv.Errors(), dashboardErrors)
 
 	// Shutdown dashboard with timeout
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -382,7 +382,68 @@ Environment Variables:
 	_ = srv.Stop()
 
 	logger.Info("server stopped")
-	return nil
+	return runErr
+}
+
+func awaitRuntimeEnd(ctx context.Context, cancel context.CancelFunc, serverErrors, dashboardErrors <-chan error) error {
+	select {
+	case <-ctx.Done():
+		// reportFatalListenerError sends before cancelling the server context.
+		// Prefer that concrete failure over a generic context cancellation.
+		select {
+		case err := <-serverErrors:
+			return fmt.Errorf("server runtime failure: %w", err)
+		default:
+			return nil
+		}
+	case err := <-serverErrors:
+		cancel()
+		return fmt.Errorf("server runtime failure: %w", err)
+	case err := <-dashboardErrors:
+		cancel()
+		return fmt.Errorf("dashboard runtime failure: %w", err)
+	}
+}
+
+func serveDashboard(server *http.Server, listener net.Listener, useTLS bool) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("dashboard panic: %v", recovered)
+		}
+	}()
+	if useTLS {
+		err = server.ServeTLS(listener, "", "")
+	} else {
+		err = server.Serve(listener)
+	}
+	if errors.Is(err, http.ErrServerClosed) {
+		return nil
+	}
+	if err == nil {
+		return fmt.Errorf("dashboard stopped unexpectedly")
+	}
+	return err
+}
+
+func newTLSManager(autoCert bool, email, domain, certDir string, staging bool, logger *slog.Logger) (*tlspkg.Manager, error) {
+	if !autoCert && email == "" {
+		return nil, nil
+	}
+	mgr, err := tlspkg.NewManager(tlspkg.Config{
+		Domain:      domain,
+		CertDir:     certDir,
+		AutoCert:    true,
+		Email:       email,
+		UseStaging:  staging,
+		RequireACME: email != "",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create TLS manager: %v", err)
+	}
+	if mgr.IsACMEEnabled() {
+		logger.Info("Let's Encrypt ACME enabled", "email", email, "staging", staging)
+	}
+	return mgr, nil
 }
 
 // checkCertPair requires -<name>-cert and -<name>-key to be set together.
@@ -391,6 +452,23 @@ func checkCertPair(name, cert, key string) error {
 		return fmt.Errorf("-%s-cert and -%s-key must be set together", name, name)
 	}
 	return nil
+}
+
+func loadDashboardTLS(cert, key string) (*tls.Config, error) {
+	if err := checkCertPair("dashboard-tls", cert, key); err != nil {
+		return nil, err
+	}
+	if cert == "" {
+		return nil, nil
+	}
+	pair, err := tls.LoadX509KeyPair(cert, key)
+	if err != nil {
+		return nil, fmt.Errorf("load dashboard TLS key pair: %v", err)
+	}
+	return &tls.Config{
+		Certificates: []tls.Certificate{pair},
+		MinVersion:   tls.VersionTLS12,
+	}, nil
 }
 
 // loadControlTLS builds the control-plane TLS config (nil when not requested).
@@ -408,6 +486,17 @@ func loadControlTLS(cert, key string) (*tls.Config, error) {
 	return &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS12}, nil
 }
 
+func configuredControlTLS(cert, key string, mgr *tlspkg.Manager) (*tls.Config, error) {
+	config, err := loadControlTLS(cert, key)
+	if err != nil {
+		return nil, err
+	}
+	if config == nil && mgr != nil && mgr.IsACMEEnabled() {
+		config = mgr.TLSConfig()
+	}
+	return config, nil
+}
+
 // httpsPort extracts the port of an address like ":443"; the standard port
 // (and anything unparsable) yields 0, meaning "omit the port from URLs".
 func httpsPort(addr string) int {
@@ -420,6 +509,13 @@ func httpsPort(addr string) int {
 		return 0
 	}
 	return n
+}
+
+func splitCommaList(value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return strings.Split(value, ",")
 }
 
 // txtResolverFor returns a TXT resolver that asks the given DNS server
@@ -494,8 +590,35 @@ func tokenSourceLabel(tokenFlag string) string {
 		return "-token flag"
 	case os.Getenv("WIRERIFT_TOKEN") != "":
 		return "WIRERIFT_TOKEN env" //nolint:gosec // a label, not a credential
+	case os.Getenv("WIRERIFT_TOKEN_FILE") != "":
+		return "WIRERIFT_TOKEN_FILE secret"
 	}
 	return "random"
+}
+
+func resolveBootstrapToken(tokenFlag string) (token, source string, err error) {
+	if tokenFlag != "" {
+		return tokenFlag, "-token flag", nil
+	}
+	if env := os.Getenv("WIRERIFT_TOKEN"); env != "" {
+		return env, "WIRERIFT_TOKEN env", nil
+	}
+	path := os.Getenv("WIRERIFT_TOKEN_FILE")
+	if path == "" {
+		return "", "random", nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", "", fmt.Errorf("read WIRERIFT_TOKEN_FILE: %w", err)
+	}
+	token = strings.TrimSpace(string(data))
+	if token == "" {
+		return "", "", errors.New("WIRERIFT_TOKEN_FILE is empty")
+	}
+	if len(token) > 4096 {
+		return "", "", errors.New("WIRERIFT_TOKEN_FILE exceeds 4096 bytes")
+	}
+	return token, "WIRERIFT_TOKEN_FILE secret", nil
 }
 
 // printToken prints the token lines of the banner and returns the token to

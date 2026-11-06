@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
@@ -15,8 +17,95 @@ import (
 // maxRequestBodySize bounds the request body buffered for tunneling.
 const maxRequestBodySize = 32 * 1024 * 1024
 
+// maxForwardedForHops bounds work on attacker-controlled forwarding headers.
+const maxForwardedForHops = 32
+
 // ErrRequestTooLarge is returned when a request body exceeds maxRequestBodySize.
 var ErrRequestTooLarge = errors.New("request body too large")
+
+func parseTrustedProxyCIDRs(specs []string) ([]netip.Prefix, error) {
+	if len(specs) == 0 {
+		return nil, nil
+	}
+	prefixes := make([]netip.Prefix, 0, len(specs))
+	for _, spec := range specs {
+		spec = strings.TrimSpace(spec)
+		if spec == "" {
+			return nil, errors.New("empty CIDR")
+		}
+		prefix, err := netip.ParsePrefix(spec)
+		if err != nil {
+			return nil, fmt.Errorf("%q: %w", spec, err)
+		}
+		prefixes = append(prefixes, prefix.Masked())
+	}
+	return prefixes, nil
+}
+
+func parseRemoteIP(remoteAddr string) (string, netip.Addr, bool) {
+	host := remoteAddr
+	if parsedHost, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		host = parsedHost
+	}
+	addr, err := netip.ParseAddr(strings.Trim(host, "[]"))
+	if err != nil {
+		return host, netip.Addr{}, false
+	}
+	addr = addr.WithZone("").Unmap()
+	return addr.String(), addr, true
+}
+
+func containsIP(prefixes []netip.Prefix, addr netip.Addr) bool {
+	for _, prefix := range prefixes {
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
+// clientIP resolves the visitor consistently for access controls, inspection,
+// stream metadata, and backend forwarding. Forwarding headers are considered
+// only when the immediate socket peer is explicitly trusted.
+func (s *Server) clientIP(r *http.Request) string {
+	peerText, peer, validPeer := parseRemoteIP(r.RemoteAddr)
+	if !validPeer || !containsIP(s.trustedProxyNets, peer) {
+		return peerText
+	}
+
+	values := r.Header.Values("X-Forwarded-For")
+	if len(values) == 0 {
+		return peerText
+	}
+	chain := make([]netip.Addr, 0, len(values))
+	for _, value := range values {
+		for _, token := range strings.Split(value, ",") {
+			if len(chain) >= maxForwardedForHops {
+				return peerText
+			}
+			addr, err := netip.ParseAddr(strings.TrimSpace(token))
+			if err != nil || addr.Zone() != "" {
+				return peerText
+			}
+			chain = append(chain, addr.Unmap())
+		}
+	}
+	if len(chain) == 0 {
+		return peerText
+	}
+
+	// Walk from the trusted socket peer towards the visitor. The first
+	// untrusted hop is the client boundary; any values to its left are claims
+	// made by that untrusted hop and must be ignored.
+	client := peerText
+	for i := len(chain) - 1; i >= 0; i-- {
+		client = chain[i].String()
+		if !containsIP(s.trustedProxyNets, chain[i]) {
+			return client
+		}
+	}
+	return client
+}
 
 // skipForwardHeader reports headers that must not be copied verbatim from the
 // visitor: the proxy re-emits trusted values (forwarding headers), the framing
@@ -40,10 +129,27 @@ func SerializeRequest(r *http.Request) ([]byte, error) {
 	return append(head, body...), nil
 }
 
+func (s *Server) serializeRequest(r *http.Request) ([]byte, error) {
+	head, body, err := s.serializeRequestParts(r)
+	if err != nil {
+		return nil, err
+	}
+	return append(head, body...), nil
+}
+
 // serializeRequestParts returns the request head and its buffered body
 // separately, so a caller can send them one after the other without a third
 // copy of a large body.
 func serializeRequestParts(r *http.Request) (head, body []byte, err error) {
+	clientIP, _, _ := parseRemoteIP(r.RemoteAddr)
+	return serializeRequestPartsFor(r, clientIP)
+}
+
+func (s *Server) serializeRequestParts(r *http.Request) (head, body []byte, err error) {
+	return serializeRequestPartsFor(r, s.clientIP(r))
+}
+
+func serializeRequestPartsFor(r *http.Request, clientIP string) (head, body []byte, err error) {
 	// Buffer the body first so the framing headers match what is sent.
 	if r.Body != nil {
 		body, err = io.ReadAll(io.LimitReader(r.Body, maxRequestBodySize+1))
@@ -92,16 +198,11 @@ func serializeRequestParts(r *http.Request) (head, body []byte, err error) {
 
 	// Add forwarding headers (exactly one of each, never client-supplied
 	// duplicates that a backend could read first).
-	clientIP := r.RemoteAddr
-	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		clientIP = host
-	}
 	buf.WriteString("X-Forwarded-For: ")
-	if existing := r.Header.Get("X-Forwarded-For"); existing != "" {
-		buf.WriteString(existing + ", " + clientIP)
-	} else {
-		buf.WriteString(clientIP)
-	}
+	// The edge is the trust boundary. A direct visitor can supply any incoming
+	// X-Forwarded-For value, so forwarding or appending it lets that visitor
+	// spoof the client IP seen by common backend frameworks.
+	buf.WriteString(clientIP)
 	buf.WriteString("\r\n")
 	buf.WriteString("X-Forwarded-Proto: ")
 	if r.TLS != nil {

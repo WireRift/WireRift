@@ -155,6 +155,7 @@ func TestConfigureCustomDomains(t *testing.T) {
 
 func TestTokenBanner(t *testing.T) {
 	t.Setenv("WIRERIFT_TOKEN", "")
+	t.Setenv("WIRERIFT_TOKEN_FILE", "")
 	if tokenSourceLabel("") != "random" || tokenSourceLabel("x") != "-token flag" {
 		t.Error("tokenSourceLabel")
 	}
@@ -170,6 +171,52 @@ func TestTokenBanner(t *testing.T) {
 	out.Reset()
 	if shown := printToken(&out, "-token flag", "operator-secret"); shown != "<your token>" || strings.Contains(out.String(), "operator-secret") {
 		t.Errorf("operator token leaked into the banner: %q / %q", shown, out.String())
+	}
+}
+
+func TestResolveBootstrapTokenFromSecretFile(t *testing.T) {
+	t.Setenv("WIRERIFT_TOKEN", "")
+	path := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(path, []byte("file-secret\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WIRERIFT_TOKEN_FILE", path)
+
+	token, source, err := resolveBootstrapToken("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "file-secret" || source != "WIRERIFT_TOKEN_FILE secret" {
+		t.Fatalf("token/source = %q/%q", token, source)
+	}
+
+	t.Setenv("WIRERIFT_TOKEN", "env-secret")
+	if token, source, err = resolveBootstrapToken(""); err != nil || token != "env-secret" || source != "WIRERIFT_TOKEN env" {
+		t.Fatalf("env precedence = %q/%q/%v", token, source, err)
+	}
+	if token, source, err = resolveBootstrapToken("flag-secret"); err != nil || token != "flag-secret" || source != "-token flag" {
+		t.Fatalf("flag precedence = %q/%q/%v", token, source, err)
+	}
+}
+
+func TestResolveBootstrapTokenSecretFileFailsClosed(t *testing.T) {
+	t.Setenv("WIRERIFT_TOKEN", "")
+	for name, prepare := range map[string]func(t *testing.T) string{
+		"missing": func(t *testing.T) string { return filepath.Join(t.TempDir(), "missing") },
+		"empty": func(t *testing.T) string {
+			path := filepath.Join(t.TempDir(), "empty")
+			if err := os.WriteFile(path, []byte(" \n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			return path
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("WIRERIFT_TOKEN_FILE", prepare(t))
+			if _, _, err := resolveBootstrapToken(""); err == nil {
+				t.Fatal("invalid secret file silently fell back to a random token")
+			}
+		})
 	}
 }
 
