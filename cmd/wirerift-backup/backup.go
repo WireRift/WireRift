@@ -95,7 +95,7 @@ func loadKey(name string) ([]byte, error) {
 			return decoded, nil
 		}
 	}
-	return nil, fmt.Errorf("key must contain exactly 32 raw bytes or 64 hexadecimal characters")
+	return nil, fmt.Errorf("key must contain exactly 32 raw bytes or 64 hexadecimal characters (create one with: openssl rand -hex 32)")
 }
 
 func ensurePathOutside(root, candidate, label string) error {

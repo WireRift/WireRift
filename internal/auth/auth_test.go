@@ -439,3 +439,21 @@ func TestValidateTokenAccountNotFound2(t *testing.T) {
 		t.Errorf("Error = %v, want %v", err, ErrInvalidToken)
 	}
 }
+
+func TestDisableBootstrapToken(t *testing.T) {
+	m := NewManager("bootstrap-secret")
+	if _, _, err := m.ValidateToken("bootstrap-secret"); err != nil {
+		t.Fatalf("bootstrap token should work first: %v", err)
+	}
+	if m.HasFileTokens() {
+		t.Error("no file tokens loaded yet")
+	}
+	m.DisableBootstrapToken()
+	if _, _, err := m.ValidateToken("bootstrap-secret"); err == nil {
+		t.Error("bootstrap token accepted after DisableBootstrapToken")
+	}
+	if m.DevToken() != "" {
+		t.Error("DevToken should be empty after disabling")
+	}
+	m.DisableBootstrapToken() // idempotent
+}

@@ -51,6 +51,15 @@ Kod ve tek-node container seviyesi için sonuç: **koşullu production-ready**. 
 | F20 | Orta | Dashboard auth performansı | Guard kapasitede her yeni IP için 10.001 kayıt üzerinde O(n) en-eski taraması yapıyordu; ölçüm 166.004 ns/op ve mevcut-IP güncellemesine göre 2.101x yavaşlama gösterdi. Exact-cap O(1) LRU sonrası kalıcı benchmark 242–248 ns/op ölçüyor. |
 | F21 | Orta | Operasyon gözlemi | Request/error rate, latency histogramı, certificate expiry ve persistence write failure sinyalleri yoktu. Sabit status-class etiketleri, global sabit bucket'lar, yan etkisiz in-memory expiry callback'i ve server+TLS write-error counter'ı eklendi; health/metrics/ACME trafiği kendi sayacını şişirmiyor. |
 
+| F22 | Orta | Kimlik | Token dosyası kullanılırken rastgele `dev_…` bootstrap token geçerli kalıyor ve log'a yazılıyordu. Token dosyası varsa devre dışı bırakılıyor. |
+| F23 | Orta | Gözlem | `/metrics` internetten kimlik doğrulamasız okunabiliyordu. Artık yalnız doğrudan loopback veya geçerli Bearer token. |
+| F24 | Orta | CLI | `WIRERIFT_TOKEN_FILE` yalnız sunucuda vardı; istemci boş token gönderiyordu. İstemci (`http/tcp/serve/start/list/doctor`) artık okuyor. |
+| F25 | Düşük | Kapasite | Edge rate limit sabitti (IP başına 100 req/s, burst 50). `-edge-rate` / `-edge-burst` eklendi. |
+| F26 | Düşük | UX | ACME açıkken düz TCP bağlanan istemci yalnız "connection closed" görüyordu; artık `tls://` ipucu veriyor. |
+| F27 | Düşük | Operasyon | Yedek anahtar formatı hatası düzeltme yolu göstermiyordu (`openssl rand -hex 32`). |
+
+F22-F27 gerçek bir VPS üzerinde (Ubuntu 26.04, tek node, gerçek DNS + Let's Encrypt **staging**) yapılan provada bulundu ve aynı sunucuda düzeltmeden sonra yeniden doğrulandı.
+
 Her yüksek/kritik concurrency, ownership, input veya lifecycle bulgusu kalıcı regresyon testiyle koruma altında. Audit kanıtları ve üçlü doğrulamalar `.temp_files/` altında tutuluyor; klasör git tarafından ignore ediliyor.
 
 ## Build, deployment ve release düzeltmeleri
@@ -81,7 +90,18 @@ Her yüksek/kritik concurrency, ownership, input veya lifecycle bulgusu kalıcı
 - actionlint 1.7.12 ile CI/release workflow semantik ve expression kontrolü — geçti; production workflow'larında mutable action ref kalmadı.
 - `git diff --check` — geçti.
 
-Gerçek Let's Encrypt veya public DNS'e audit sırasında istek gönderilmedi. ACME davranışı kontrollü fake server/transport ile test edildi; gerçek staging provası deployment kapısıdır.
+### Gerçek sunucu provası (6 Kasım 2026)
+
+Ubuntu 26.04, 2 vCPU / 3,8 GB, `tunnel.wirerift.com` + wildcard DNS, systemd, ayrı kullanıcı:
+
+- ACME HTTP-01 (Let's Encrypt **staging**): apex ve istek anında subdomain sertifikası alındı; control plane TLS 1.3.
+- HTTP, HTTPS, TCP ve WebSocket (101 + 200 KB akış) tünelleri internet üzerinden çalıştı.
+- Sunucu restart'ı: istemci ~5 sn'de aynı subdomain ile döndü.
+- `wirerift-backup` create/verify/restore: dosyalar hash'iyle birebir, yanlış anahtar ve bozuk dosya reddedildi; geri yüklenmiş dizinle servis sertifika yeniden almadan çalıştı.
+- 30 sn yük: 13.314 istek, 0 hata, p50 40 ms, p99 122 ms; sunucu RSS ~16 MB.
+- Dış port taraması: yalnız 22/80/443/4443 ve tünel portları açık; dashboard (4040) kapalı.
+
+Henüz yapılmayanlar: production Let's Encrypt, custom-domain TXT (ikinci domain gerekir), 24-72 saatlik soak, çok node.
 
 ## Eksikler ve kalan riskler
 

@@ -102,6 +102,8 @@ func run(parentCtx context.Context, args []string) error {
 	domain := fs.String("domain", "wirerift.com", "Base domain for tunnels")
 	tcpPortRange := fs.String("tcp-ports", "20000-29999", "TCP tunnel port range")
 	offlineGrace := fs.Duration("offline-grace", 2*time.Minute, "keep a dropped client's subdomains reserved for it this long, showing visitors 503 (0 = release at once)")
+	edgeRate := fs.Float64("edge-rate", 0, "requests per second one visitor IP may send to the HTTP edge (0 = default 100)")
+	edgeBurst := fs.Int("edge-burst", 0, "burst allowance on top of -edge-rate (0 = default 50)")
 	tcpIdle := fs.Duration("tcp-idle-timeout", 0, "close a TCP tunnel connection that moved no data for this long (0 = never)")
 	halfClose := fs.Duration("half-close-timeout", 0, "reset a stream the server closed once the client sends nothing for this long (0 = never)")
 
@@ -217,6 +219,7 @@ Environment Variables:
 	if err := loadTokenFile(authMgr, tokenFilePath(*tokensFile, *certDir), logger); err != nil {
 		return err
 	}
+	tokenSource = dropRandomBootstrap(authMgr, tokenSource)
 	devToken := authMgr.DevToken()
 
 	// Create TLS manager before printing connection instructions: when ACME is
@@ -263,6 +266,11 @@ Environment Variables:
 	srvConfig.TCPAddrRange = *tcpPortRange
 	srvConfig.HalfCloseTimeout = *halfClose
 	srvConfig.TCPIdleTimeout = *tcpIdle
+	if *edgeRate < 0 || *edgeBurst < 0 {
+		return errors.New("-edge-rate and -edge-burst must not be negative")
+	}
+	srvConfig.EdgeRatePerIP = *edgeRate
+	srvConfig.EdgeRateBurst = *edgeBurst
 	srvConfig.OfflineGrace = *offlineGrace
 	srvConfig.HeldFile = filepath.Join(*certDir, "held.json")
 	srvConfig.AuthManager = authMgr
@@ -621,10 +629,25 @@ func resolveBootstrapToken(tokenFlag string) (token, source string, err error) {
 	return token, "WIRERIFT_TOKEN_FILE secret", nil
 }
 
+// dropRandomBootstrap disables the random first-run token once the operator has
+// a token file: it would otherwise stay valid as an unadvertised second
+// credential that also lands in the logs. It returns the new token source.
+func dropRandomBootstrap(mgr *auth.Manager, source string) string {
+	if source == "random" && mgr.HasFileTokens() {
+		mgr.DisableBootstrapToken()
+		return "disabled"
+	}
+	return source
+}
+
 // printToken prints the token lines of the banner and returns the token to
 // show in the quick-start command. Only an auto-generated token is printed (it
 // cannot be known otherwise); a token the operator supplied must not land in logs.
 func printToken(w io.Writer, source, token string) string {
+	if source == "disabled" {
+		fmt.Fprintln(w, "  Token: tokens file in use (no random token)")
+		return "<your token>"
+	}
 	fmt.Fprintf(w, "  Token (%s):\n", source)
 	if source == "random" {
 		fmt.Fprintf(w, "  %s\n", token)

@@ -105,7 +105,7 @@ Use a separate staging domain and Let's Encrypt staging before production.
 docker compose pull
 docker compose up -d
 curl -fsS http://127.0.0.1/health/ready
-curl -fsS http://127.0.0.1/metrics
+curl -fsS http://127.0.0.1/metrics   # loopback needs no token; remote callers send a Bearer token
 ```
 
 Deploy one canary node first. Keep the previous image digest and volume snapshot
@@ -126,8 +126,16 @@ owner's approved SLOs.
   bounded HTTP status classes, a fixed global latency histogram, the earliest
   in-memory certificate expiry, and persistent-state write errors. HTTP metrics
   intentionally have no path, host, method, account, or tunnel labels.
-- Restrict `/metrics` with the network or reverse proxy when operational counts
-  must not be public.
+- `/metrics` answers loopback callers without credentials (a request that carries
+  `X-Forwarded-For`/`Forwarded` is not treated as loopback) and every other
+  caller only with `Authorization: Bearer <token>`. Point a remote Prometheus at
+  it with `authorization.credentials_file`.
+- `-edge-rate` and `-edge-burst` set the per-visitor-IP request limit of the HTTP
+  edge (defaults 100 req/s, burst 50). Raise them when a busy site or a proxy
+  without `-trusted-proxy-cidrs` makes many visitors share one IP.
+- When a token file is in use and no bootstrap token (`-token`, `WIRERIFT_TOKEN`,
+  `WIRERIFT_TOKEN_FILE`) is given, the random first-run token is disabled instead
+  of being printed to the log.
 
 Alert when `wirerift_persistence_errors_total` increases or when
 `wirerift_certificate_expiry_timestamp_seconds - time()` enters the approved

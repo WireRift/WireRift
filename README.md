@@ -669,15 +669,18 @@ The included `docker-compose.yml` provides:
 
 ## API Reference
 
-Operational endpoints are served without authentication only when the request
-host does not belong to an active tunnel. Restrict `/metrics` at the network or
-reverse-proxy layer if runtime counts must not be publicly visible.
+Operational endpoints are served only when the request host does not belong to
+an active tunnel. `/healthz` and `/health/ready` are public. `/metrics` is not:
+a direct loopback peer (a local Prometheus, `curl`) reads it freely, everyone
+else must send `Authorization: Bearer TOKEN` with a valid token. A same-host
+reverse proxy that forwards visitors (it sets `X-Forwarded-For`/`Forwarded`) is
+treated like any other remote caller.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/healthz` | GET, HEAD | Process liveness |
 | `/health/ready` | GET, HEAD | Listener and maintenance-loop readiness; returns 503 while draining/not started |
-| `/metrics` | GET, HEAD | Prometheus-format readiness/topology/bytes, fixed-cardinality HTTP status and latency, earliest loaded-certificate expiry, and persistence-write errors |
+| `/metrics` | GET, HEAD | Loopback or Bearer token. Prometheus-format readiness/topology/bytes, fixed-cardinality HTTP status and latency, earliest loaded-certificate expiry, and persistence-write errors |
 
 Dashboard API endpoints require an `Authorization: Bearer TOKEN` header:
 

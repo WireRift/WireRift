@@ -115,9 +115,35 @@ func (s *Server) handleOperationalEndpoint(w http.ResponseWriter, r *http.Reques
 		}
 		writeOperationalJSON(w, r, http.StatusOK, `{"status":"ready"}`)
 	case "/metrics":
+		if !s.metricsAllowed(r) {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="wirerift-metrics"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return true
+		}
 		s.writePrometheusMetrics(w, r)
 	}
 	return true
+}
+
+// metricsAllowed gates /metrics: topology and traffic counts are not for the
+// public. A direct loopback peer (a local Prometheus or curl) is trusted; a
+// loopback peer that forwards someone else's request (a same-host reverse
+// proxy sets a forwarding header) is not. Everyone else needs a valid token.
+func (s *Server) metricsAllowed(r *http.Request) bool {
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() &&
+			r.Header.Get("X-Forwarded-For") == "" && r.Header.Get("Forwarded") == "" &&
+			r.Header.Get("X-Real-Ip") == "" {
+			return true
+		}
+	}
+	const prefix = "Bearer "
+	h := r.Header.Get("Authorization")
+	if len(h) <= len(prefix) || !strings.EqualFold(h[:len(prefix)], prefix) {
+		return false
+	}
+	_, _, err := s.authManager.ValidateToken(strings.TrimSpace(h[len(prefix):]))
+	return err == nil
 }
 
 func writeOperationalJSON(w http.ResponseWriter, r *http.Request, status int, body string) {

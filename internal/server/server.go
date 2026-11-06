@@ -58,6 +58,12 @@ type Config struct {
 	// header is untrusted and the socket peer is the client identity.
 	TrustedProxyCIDRs []string
 
+	// EdgeRatePerIP is the sustained requests per second one visitor IP may send
+	// to the HTTP edge, and EdgeRateBurst the burst allowance on top of it.
+	// Zero means the defaults (100 and 50).
+	EdgeRatePerIP float64
+	EdgeRateBurst int
+
 	// TCPBindHost is the interface TCP tunnel ports listen on ("" = all
 	// interfaces). -dev sets it to loopback so nothing is reachable remotely.
 	TCPBindHost string
@@ -150,6 +156,14 @@ const (
 	defaultTCPPortStart = 20000
 	defaultTCPPortEnd   = 29999
 )
+
+// edgeRate returns v, or def when v is not positive.
+func edgeRate(v, def float64) float64 {
+	if v > 0 {
+		return v
+	}
+	return def
+}
 
 func parseTCPAddrRange(spec string) (int, int, error) {
 	if spec == "" {
@@ -429,7 +443,7 @@ func New(config Config, logger *slog.Logger) *Server {
 		cancel:           cancel,
 		tcpPortStart:     portStart,
 		tcpPortEnd:       portEnd,
-		rateLimiter:      ratelimit.NewManager(100, 50),
+		rateLimiter:      ratelimit.NewManager(edgeRate(config.EdgeRatePerIP, 100), int(edgeRate(float64(config.EdgeRateBurst), 50))),
 		authFails:        ratelimit.NewManager(authFailRefill, authFailBurst),
 		maxLogs:          500, // Keep last 500 requests for inspection
 		pinSecret:        pinSecret,

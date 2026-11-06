@@ -97,7 +97,8 @@ Examples:
 
 Environment Variables:
   WIRERIFT_SERVER    Server address (default: localhost:4443)
-  WIRERIFT_TOKEN     Authentication token`)
+  WIRERIFT_TOKEN     Authentication token
+  WIRERIFT_TOKEN_FILE  File holding the token (used when WIRERIFT_TOKEN is unset)`)
 }
 
 // Common flags and options
@@ -109,8 +110,31 @@ type commonOptions struct {
 func parseCommonOptions() commonOptions {
 	return commonOptions{
 		server: getEnv("WIRERIFT_SERVER", "localhost:4443"),
-		token:  getEnv("WIRERIFT_TOKEN", ""),
+		token:  envToken(),
 	}
+}
+
+// envToken returns the token from WIRERIFT_TOKEN or, failing that, from the
+// file named by WIRERIFT_TOKEN_FILE (a mounted secret keeps it out of the
+// process environment). An unreadable file is reported, not ignored.
+func envToken() string {
+	if v := os.Getenv("WIRERIFT_TOKEN"); v != "" {
+		return v
+	}
+	path := os.Getenv("WIRERIFT_TOKEN_FILE")
+	if path == "" {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: cannot read WIRERIFT_TOKEN_FILE: %v\n", err)
+		return ""
+	}
+	if len(data) > 4096 {
+		fmt.Fprintln(os.Stderr, "warning: WIRERIFT_TOKEN_FILE exceeds 4096 bytes, ignored")
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }
 
 func getEnv(key, defaultVal string) string {
@@ -604,7 +628,7 @@ func loadConfig(path string) (*ConfigFile, error) {
 
 	cfg := &ConfigFile{
 		Server: getEnv("WIRERIFT_SERVER", "localhost:4443"),
-		Token:  getEnv("WIRERIFT_TOKEN", ""),
+		Token:  envToken(),
 	}
 
 	// JSON files are parsed with stdlib encoder (reliable)
@@ -622,7 +646,7 @@ func loadConfig(path string) (*ConfigFile, error) {
 			cfg.Server = getEnv("WIRERIFT_SERVER", "localhost:4443")
 		}
 		if cfg.Token == "" {
-			cfg.Token = getEnv("WIRERIFT_TOKEN", "")
+			cfg.Token = envToken()
 		}
 		return cfg, nil
 	}

@@ -33,3 +33,34 @@ func TestYAMLConfigRejectsMalformedAndInvalidBooleanValues(t *testing.T) {
 		}
 	}
 }
+
+func TestEnvTokenFromFile(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "token")
+	if err := os.WriteFile(file, []byte("  file-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WIRERIFT_TOKEN", "")
+	t.Setenv("WIRERIFT_TOKEN_FILE", file)
+	if got := envToken(); got != "file-secret" {
+		t.Errorf("envToken = %q, want trimmed file content", got)
+	}
+	if got := parseCommonOptions().token; got != "file-secret" {
+		t.Errorf("parseCommonOptions token = %q", got)
+	}
+	t.Setenv("WIRERIFT_TOKEN", "env-secret")
+	if got := envToken(); got != "env-secret" {
+		t.Errorf("WIRERIFT_TOKEN should win, got %q", got)
+	}
+	t.Setenv("WIRERIFT_TOKEN", "")
+	t.Setenv("WIRERIFT_TOKEN_FILE", filepath.Join(dir, "missing"))
+	if got := envToken(); got != "" {
+		t.Errorf("missing file -> %q, want empty", got)
+	}
+	big := filepath.Join(dir, "big")
+	_ = os.WriteFile(big, make([]byte, 5000), 0o600)
+	t.Setenv("WIRERIFT_TOKEN_FILE", big)
+	if got := envToken(); got != "" {
+		t.Errorf("oversized file accepted")
+	}
+}

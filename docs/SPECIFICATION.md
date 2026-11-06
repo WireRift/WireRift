@@ -1569,9 +1569,9 @@ wirerift/
 ### V2.0 — Production Hardening
 
 - [ ] Cluster mode: multiple edge servers with shared state (gossip protocol)
-- [ ] Persistent tunnel URLs (survive server restart)
+- [x] Persistent tunnel URLs (subdomain reservations survive a server restart, v1.14.2)
 - [ ] OAuth/OIDC tunnel-level auth
-- [ ] IP whitelisting per tunnel
+- [x] IP whitelisting per tunnel (`-whitelist`)
 - [ ] Request/response transformation middleware
 - [ ] gRPC / HTTP/2 tunneling
 - [ ] UDP tunneling (QUIC)

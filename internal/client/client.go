@@ -413,6 +413,9 @@ func (c *Client) authenticate() error {
 	case f := <-m.ControlFrame():
 		respFrame = f
 	case <-m.Done():
+		if _, useTLS := SplitServerAddr(c.config.ServerAddr); !useTLS && c.config.TLSConfig == nil {
+			return fmt.Errorf("connection closed before login finished; if the server uses TLS (ACME or -control-tls-cert), address it as tls://%s", c.config.ServerAddr)
+		}
 		return fmt.Errorf("connection closed")
 	case <-c.ctx.Done():
 		return fmt.Errorf("cancelled")

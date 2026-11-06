@@ -4613,6 +4613,7 @@ func TestMetricsEndpointExportsRuntimeState(t *testing.T) {
 	s.bytesOut.Store(456)
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req.RemoteAddr = "127.0.0.1:5555"
 	rec := httptest.NewRecorder()
 	s.handleHTTPRequest(rec, req)
 

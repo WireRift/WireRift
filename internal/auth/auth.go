@@ -244,6 +244,23 @@ func (m *Manager) accountActive(id string) bool {
 	return ok && a.(*Account).Active
 }
 
+// HasFileTokens reports whether the token file supplied at least one token.
+func (m *Manager) HasFileTokens() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.byHash) > 0
+}
+
+// DisableBootstrapToken removes the bootstrap (dev) token so that only tokens
+// from the token file authenticate. Call it before the server starts serving.
+func (m *Manager) DisableBootstrapToken() {
+	if m.devToken == nil {
+		return
+	}
+	m.tokens.Delete(m.devToken.ID)
+	m.devToken = nil
+}
+
 // DevToken returns the development token secret for testing.
 func (m *Manager) DevToken() string {
 	if m.devToken != nil {

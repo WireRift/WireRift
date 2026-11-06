@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wirerift/wirerift/internal/auth"
 	"github.com/wirerift/wirerift/internal/server"
 )
 
@@ -263,5 +264,41 @@ func TestEmptySecretFileLeftByACrashIsHealed(t *testing.T) {
 	}
 	if again, _ := loadOrCreateDomainSecret(dir); string(again) != string(secret) {
 		t.Error("the healed secret is not stable")
+	}
+}
+
+func TestPrintTokenDisabled(t *testing.T) {
+	var out strings.Builder
+	if shown := printToken(&out, "disabled", "dev_whatever"); shown != "<your token>" || strings.Contains(out.String(), "dev_whatever") {
+		t.Errorf("disabled token leaked or wrong placeholder: %q / %q", shown, out.String())
+	}
+}
+
+func TestDropRandomBootstrap(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "tokens.json")
+	m := auth.NewManager()
+	secret := m.DevToken()
+	// No token file tokens: the random token stays.
+	if got := dropRandomBootstrap(m, "random"); got != "random" {
+		t.Fatalf("source = %q, want random", got)
+	}
+	if _, _, err := m.ValidateToken(secret); err != nil {
+		t.Fatalf("random token should still work: %v", err)
+	}
+	// With file tokens it is dropped, and an operator-supplied one never is.
+	if _, err := runTokenCmd(t, "create", "-file", file, "-account", "acct"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.LoadTokenFile(file); err != nil {
+		t.Fatal(err)
+	}
+	if got := dropRandomBootstrap(m, "-token flag"); got != "-token flag" {
+		t.Errorf("operator token source changed to %q", got)
+	}
+	if got := dropRandomBootstrap(m, "random"); got != "disabled" {
+		t.Fatalf("source = %q, want disabled", got)
+	}
+	if _, _, err := m.ValidateToken(secret); err == nil {
+		t.Error("random token still valid after being dropped")
 	}
 }

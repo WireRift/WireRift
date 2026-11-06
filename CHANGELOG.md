@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.16.0] - 2026-11-06
+
+### Security
+- `/metrics` is no longer public. A direct loopback peer reads it as before; any other caller needs `Authorization: Bearer <token>` (a loopback peer that forwards a visitor, i.e. sets `X-Forwarded-For`/`Forwarded`/`X-Real-Ip`, counts as remote). `/healthz` and `/health/ready` stay public.
+- The random first-run token is disabled (and no longer printed to the log) when a token file with tokens is in use and no bootstrap token was supplied. It used to stay valid as an unadvertised second credential.
+
+### Added
+- `wirerift-server -edge-rate` / `-edge-burst`: per-visitor-IP request limit of the HTTP edge (defaults stay 100 req/s, burst 50).
+- The client reads `WIRERIFT_TOKEN_FILE` (used when `WIRERIFT_TOKEN` is unset), for `http`, `tcp`, `serve`, `start`, `list` and `doctor`. Before, only the server did, and a client given only the file sent an empty token.
+
+### Changed
+- A plaintext client talking to a TLS control plane now says "address it as tls://host:port" instead of a bare "connection closed".
+- `wirerift-backup`: the key-format error tells how to create a key (`openssl rand -hex 32`).
+
 ## [1.15.0] - 2026-10-30
 
 ### Fixed
