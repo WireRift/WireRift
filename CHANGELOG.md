@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- `website/` and its `Deploy Website` workflow and Dependabot npm entry: the site lives in its own repository.
+
 ## [1.16.1] - 2026-11-06
 
 ### Fixed

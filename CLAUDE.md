@@ -36,7 +36,7 @@ go run ./test/benchmark/
 make release
 ```
 
-**Important:** The `website/` directory is excluded from all Go commands (tests, lint, build). Always use `./cmd/... ./internal/...` or the Makefile's `$(PACKAGES)` variable, never `./...`.
+**Important:** Use `./cmd/... ./internal/...` (the Makefile's `$(PACKAGES)` variable) rather than `./...`: `test/advanced`, `test/benchmark`, `test/soak`, `test/fault` and `test/capacity` are standalone programs, not part of the unit-test set. The project website lives in a separate repository.
 
 ## Architecture
 

@@ -16,7 +16,6 @@ dist/
 *.out
 *.cov
 *.html
-!website/**/*.html
 !internal/dashboard/static/**/*.html
 
 # Environment & secrets
@@ -39,9 +38,6 @@ certs/
 Thumbs.db
 desktop.ini
 
-# Node (website/)
-website/node_modules/
-website/dist/
 
 # Fuzz corpus (can be large)
 **/testdata/fuzz/

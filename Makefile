@@ -8,8 +8,8 @@ BUILD_DATE?=$(shell git show -s --format=%cI HEAD 2>/dev/null || echo unknown)
 GO=go
 GOFLAGS=-v
 LDFLAGS=-s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(BUILD_DATE)
-# Same package set as CI (the website/ and standalone test/advanced, test/benchmark
-# programs are not part of it).
+# Same package set as CI (the standalone test/advanced, test/benchmark, test/soak,
+# test/fault and test/capacity programs are not part of it).
 PACKAGES=./cmd/... ./internal/...
 
 build: build-server build-client build-backup
