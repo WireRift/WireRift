@@ -266,11 +266,9 @@ Environment Variables:
 	srvConfig.TCPAddrRange = *tcpPortRange
 	srvConfig.HalfCloseTimeout = *halfClose
 	srvConfig.TCPIdleTimeout = *tcpIdle
-	if *edgeRate < 0 || *edgeBurst < 0 {
-		return errors.New("-edge-rate and -edge-burst must not be negative")
+	if err := setEdgeRate(&srvConfig, *edgeRate, *edgeBurst); err != nil {
+		return err
 	}
-	srvConfig.EdgeRatePerIP = *edgeRate
-	srvConfig.EdgeRateBurst = *edgeBurst
 	srvConfig.OfflineGrace = *offlineGrace
 	srvConfig.HeldFile = filepath.Join(*certDir, "held.json")
 	srvConfig.AuthManager = authMgr
@@ -627,6 +625,16 @@ func resolveBootstrapToken(tokenFlag string) (token, source string, err error) {
 		return "", "", errors.New("WIRERIFT_TOKEN_FILE exceeds 4096 bytes")
 	}
 	return token, "WIRERIFT_TOKEN_FILE secret", nil
+}
+
+// setEdgeRate applies -edge-rate and -edge-burst (zero keeps the defaults).
+func setEdgeRate(cfg *server.Config, rate float64, burst int) error {
+	if rate < 0 || burst < 0 {
+		return errors.New("-edge-rate and -edge-burst must not be negative")
+	}
+	cfg.EdgeRatePerIP = rate
+	cfg.EdgeRateBurst = burst
+	return nil
 }
 
 // dropRandomBootstrap disables the random first-run token once the operator has

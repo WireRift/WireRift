@@ -427,13 +427,18 @@ func TestRun_DashboardPortConflict(t *testing.T) {
 	httpAddr := httpLn.Addr().String()
 	httpLn.Close()
 
-	// Occupy the dashboard port on all interfaces to cause conflict
-	dashLn, _ := net.Listen("tcp", "0.0.0.0:0")
+	// Occupy the dashboard port on the address the dashboard binds (loopback).
+	// A wildcard listener would not conflict on macOS/BSD, where a specific
+	// address may share a port with a wildcard one, and run would never return.
+	dashLn, _ := net.Listen("tcp", "127.0.0.1:0")
 	_, dashPort, _ := net.SplitHostPort(dashLn.Addr().String())
 	// Keep dashLn open to cause a port conflict for the dashboard
 	defer dashLn.Close()
 
-	err := run(context.Background(), []string{
+	// A bound on the run so a missed conflict fails fast instead of hanging.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	err := run(ctx, []string{
 		"-control", controlAddr,
 		"-http", httpAddr,
 		"-dashboard-port", dashPort,

@@ -302,3 +302,16 @@ func TestDropRandomBootstrap(t *testing.T) {
 		t.Error("random token still valid after being dropped")
 	}
 }
+
+func TestSetEdgeRate(t *testing.T) {
+	var cfg server.Config
+	if err := setEdgeRate(&cfg, 250, 40); err != nil || cfg.EdgeRatePerIP != 250 || cfg.EdgeRateBurst != 40 {
+		t.Fatalf("setEdgeRate = %v, cfg %+v", err, cfg)
+	}
+	if err := setEdgeRate(&cfg, 0, 0); err != nil {
+		t.Errorf("zero (defaults) rejected: %v", err)
+	}
+	if setEdgeRate(&cfg, -1, 0) == nil || setEdgeRate(&cfg, 0, -1) == nil {
+		t.Error("negative values accepted")
+	}
+}
