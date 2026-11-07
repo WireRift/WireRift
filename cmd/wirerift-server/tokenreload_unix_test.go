@@ -6,6 +6,8 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"os"
+	"os/signal"
 	"path/filepath"
 	"syscall"
 	"testing"
@@ -16,6 +18,12 @@ import (
 
 // SIGHUP reloads the token file at once, even before the next poll.
 func TestWatchTokenFileReloadsOnSIGHUP(t *testing.T) {
+	// A SIGHUP that lands before the watcher has registered would kill the test
+	// process (default action); keep it registered here for the whole test.
+	guard := make(chan os.Signal, 16)
+	signal.Notify(guard, syscall.SIGHUP)
+	defer signal.Stop(guard)
+
 	file := filepath.Join(t.TempDir(), "tokens.json")
 	tf := &auth.TokenFile{}
 	if err := tf.Save(file); err != nil {
