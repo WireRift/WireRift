@@ -416,10 +416,16 @@ func (c *Client) authenticate() error {
 	case f := <-m.ControlFrame():
 		respFrame = f
 	case <-m.Done():
-		if _, useTLS := SplitServerAddr(c.config.ServerAddr); !useTLS && c.config.TLSConfig == nil {
-			return fmt.Errorf("connection closed before login finished; if the server uses TLS (ACME or -control-tls-cert), address it as tls://%s", c.config.ServerAddr)
+		// A refusal and the close that follows it arrive together, and select
+		// picks at random between them: the verdict wins over the bare close.
+		select {
+		case respFrame = <-m.ControlFrame():
+		default:
+			if _, useTLS := SplitServerAddr(c.config.ServerAddr); !useTLS && c.config.TLSConfig == nil {
+				return fmt.Errorf("connection closed before login finished; if the server uses TLS (ACME or -control-tls-cert), address it as tls://%s", c.config.ServerAddr)
+			}
+			return fmt.Errorf("connection closed")
 		}
-		return fmt.Errorf("connection closed")
 	case <-c.ctx.Done():
 		return fmt.Errorf("cancelled")
 	}
