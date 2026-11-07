@@ -2093,6 +2093,7 @@ function showSecret(res){
     $('tokCopySecret').onclick = function(){ copyToClipboard(res.secret); toast('Token copied', 'ok'); };
     $('tokCopyCmd').onclick = function(){ copyToClipboard(cmd); toast('Command copied', 'ok'); };
     $('tokHide').onclick = function(){ box.style.display = 'none'; box.innerHTML = ''; };
+    if(box.scrollIntoView) box.scrollIntoView({block: 'center', behavior: 'smooth'});
 }
 
 document.addEventListener('click', function(ev){
