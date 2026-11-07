@@ -102,6 +102,7 @@ func run(parentCtx context.Context, args []string) error {
 	domain := fs.String("domain", "wirerift.com", "Base domain for tunnels")
 	tcpPortRange := fs.String("tcp-ports", "20000-29999", "TCP tunnel port range")
 	offlineGrace := fs.Duration("offline-grace", 2*time.Minute, "keep a dropped client's subdomains reserved for it this long, showing visitors 503 (0 = release at once)")
+	dashHost := fs.String("dashboard-host", "", "also serve the dashboard over the HTTPS edge on this host: a label (\"dashboard\" -> dashboard.<domain>) or a full name; sign-in with a token is always required")
 	edgeRate := fs.Float64("edge-rate", 0, "requests per second one visitor IP may send to the HTTP edge (0 = default 100)")
 	edgeBurst := fs.Int("edge-burst", 0, "burst allowance on top of -edge-rate (0 = default 50)")
 	tcpIdle := fs.Duration("tcp-idle-timeout", 0, "close a TCP tunnel connection that moved no data for this long (0 = never)")
@@ -272,6 +273,7 @@ Environment Variables:
 	srvConfig.OfflineGrace = *offlineGrace
 	srvConfig.HeldFile = filepath.Join(*certDir, "held.json")
 	srvConfig.AuthManager = authMgr
+	srvConfig.Version = version
 	srvConfig.TrustedProxyCIDRs = splitCommaList(*trustedProxyCIDRs)
 
 	dashboardTLS, err := loadDashboardTLS(*dashCert, *dashKey)
@@ -283,12 +285,7 @@ Environment Variables:
 		return err
 	}
 	srvConfig.ControlTLSConfig = controlTLS
-	if tlsMgr != nil {
-		srvConfig.TLSConfig = tlsMgr.TLSConfig()
-		srvConfig.ACMEChallengeHandler = tlsMgr.ACMEChallengeHandler()
-		srvConfig.CertificateExpiry = tlsMgr.EarliestCertificateExpiry
-		srvConfig.PersistenceErrors = tlsMgr.PersistenceErrors
-	}
+	applyTLSManager(&srvConfig, tlsMgr)
 	if dev != nil {
 		srvConfig.TLSConfig = dev.Provider.TLSConfig()
 		srvConfig.PublicScheme = "https"
@@ -312,7 +309,11 @@ Environment Variables:
 		AuthManager:  authMgr,
 		Port:         *dashboardAddr,
 		HTTPSEnabled: tlsMgr != nil,
+		Certs:        certProvider(tlsMgr),
 	})
+	if err := publishDashboard(srv, dash, *dashHost, *domain, tlsMgr != nil || dev != nil, logger); err != nil {
+		return err
+	}
 	dashServer := &http.Server{
 		Addr:              net.JoinHostPort(*dashboardBind, strconv.Itoa(*dashboardAddr)),
 		Handler:           dash.Handler(),
@@ -663,4 +664,57 @@ func printToken(w io.Writer, source, token string) string {
 	}
 	fmt.Fprintln(w, "  (hidden: supplied by you)")
 	return "<your token>"
+}
+
+// certProvider adapts the TLS manager's certificate list for the dashboard.
+func certProvider(m *tlspkg.Manager) func() []dashboard.CertInfo {
+	if m == nil {
+		return nil
+	}
+	return func() []dashboard.CertInfo {
+		infos := m.CertificateInfos()
+		out := make([]dashboard.CertInfo, 0, len(infos))
+		for _, c := range infos {
+			out = append(out, dashboard.CertInfo{Host: c.Host, Issuer: c.Issuer, NotAfter: c.NotAfter, DaysLeft: c.DaysLeft})
+		}
+		return out
+	}
+}
+
+// dashboardHostName turns -dashboard-host into a full host name: a bare label
+// belongs to the base domain, anything with a dot is taken as given.
+func dashboardHostName(flagValue, domain string) string {
+	h := strings.ToLower(strings.TrimSpace(flagValue))
+	if h == "" || strings.Contains(h, ".") {
+		return h
+	}
+	return h + "." + domain
+}
+
+// publishDashboard serves the dashboard on its own host of the edge when
+// -dashboard-host is set. It refuses to do so without HTTPS: the sign-in token
+// would cross the internet in clear text.
+func publishDashboard(srv *server.Server, dash *dashboard.Dashboard, flagValue, domain string, httpsAvailable bool, logger *slog.Logger) error {
+	host := dashboardHostName(flagValue, domain)
+	if host == "" {
+		return nil
+	}
+	if !httpsAvailable {
+		return errors.New("-dashboard-host needs HTTPS (-acme-email, -auto-cert or -dev): the sign-in token must not travel in clear text")
+	}
+	srv.SetDashboardRoute(host, dash.Handler())
+	logger.Info("dashboard published on the edge", "host", host)
+	return nil
+}
+
+// applyTLSManager points the server config at the TLS manager's certificates,
+// ACME challenge handler and health signals (nil: plain HTTP, nothing to set).
+func applyTLSManager(cfg *server.Config, m *tlspkg.Manager) {
+	if m == nil {
+		return
+	}
+	cfg.TLSConfig = m.TLSConfig()
+	cfg.ACMEChallengeHandler = m.ACMEChallengeHandler()
+	cfg.CertificateExpiry = m.EarliestCertificateExpiry
+	cfg.PersistenceErrors = m.PersistenceErrors
 }

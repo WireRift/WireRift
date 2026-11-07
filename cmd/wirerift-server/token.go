@@ -35,6 +35,8 @@ create options:
   -max-tunnels N   tunnels the account may have at once, over all its
                    connections (0 = only the per-connection cap)
   -max-sessions N  simultaneous connections of the account (0 = unlimited)
+  -admin           make the account an administrator: its tokens see every account in
+                   the dashboard (-admin=false takes the role away again)
   -rate N          tunnel creations per second for the account (0 = default)
   -expires dur     lifetime, e.g. 12h or 30d (default: never)
 `
@@ -63,6 +65,7 @@ func runToken(args []string, out io.Writer) error {
 	name := fs.String("name", "", "")
 	maxTunnels := fs.Int("max-tunnels", -1, "")
 	maxSessions := fs.Int("max-sessions", -1, "")
+	admin := fs.Bool("admin", false, "")
 	rate := fs.Int("rate", -1, "")
 	expires := fs.String("expires", "", "")
 	if err := fs.Parse(args[1:]); err != nil {
@@ -80,9 +83,15 @@ func runToken(args []string, out io.Writer) error {
 
 	switch cmd {
 	case "create":
-		return tokenCreate(path, out, auth.CreateOptions{
+		opts := auth.CreateOptions{
 			Account: *account, Name: *name, MaxTunnels: *maxTunnels, MaxSessions: *maxSessions, RateLimit: *rate,
-		}, *expires)
+		}
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name == "admin" {
+				opts.Admin = admin
+			}
+		})
+		return tokenCreate(path, out, opts, *expires)
 	case "list":
 		return tokenList(path, out)
 	case "revoke":
@@ -168,6 +177,9 @@ func describeLimits(a auth.FileAccount) string {
 	}
 	if a.RateLimit > 0 {
 		parts = append(parts, "rate="+strconv.Itoa(a.RateLimit)+"/s")
+	}
+	if a.Admin {
+		parts = append(parts, "admin")
 	}
 	if len(parts) == 0 {
 		return "-"

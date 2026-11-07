@@ -42,6 +42,7 @@ type FileAccount struct {
 	MaxTunnels  int       `json:"max_tunnels,omitempty"`
 	MaxSessions int       `json:"max_sessions,omitempty"`
 	RateLimit   int       `json:"rate_limit,omitempty"`
+	Admin       bool      `json:"admin,omitempty"` // may see every account in the dashboard
 	CreatedAt   time.Time `json:"created_at"`
 }
 
@@ -64,6 +65,7 @@ type CreateOptions struct {
 	MaxTunnels  int
 	MaxSessions int
 	RateLimit   int
+	Admin       *bool         // nil leaves the account's role alone
 	Expires     time.Duration // zero: never
 }
 
@@ -146,6 +148,9 @@ func (f *TokenFile) CreateToken(o CreateOptions) (secret string, tok FileToken, 
 	}
 	if o.RateLimit >= 0 {
 		acct.RateLimit = o.RateLimit
+	}
+	if o.Admin != nil {
+		acct.Admin = *o.Admin
 	}
 
 	secret = TokenPrefix + generateRandomString(40)

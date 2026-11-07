@@ -457,3 +457,36 @@ func TestDisableBootstrapToken(t *testing.T) {
 	}
 	m.DisableBootstrapToken() // idempotent
 }
+
+func TestAdminRoleFromTokenFile(t *testing.T) {
+	f := &TokenFile{}
+	yes, no := true, false
+	secret, _, err := f.CreateToken(CreateOptions{Account: "ops", MaxTunnels: -1, MaxSessions: -1, RateLimit: -1, Admin: &yes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.CreateToken(CreateOptions{Account: "ops", MaxTunnels: -1, MaxSessions: -1, RateLimit: -1}); err != nil {
+		t.Fatal(err) // a second token must not change the role
+	}
+	m := NewManager("b")
+	m.ApplyTokenFile(f)
+	_, acct, err := m.ValidateToken(secret)
+	if err != nil || !acct.IsAdmin() {
+		t.Fatalf("admin token: acct=%+v err=%v", acct, err)
+	}
+	if !(&Account{ID: DevAccountID}).IsAdmin() || (&Account{ID: "x"}).IsAdmin() || (*Account)(nil).IsAdmin() {
+		t.Error("IsAdmin: bootstrap account is admin, others and nil are not")
+	}
+	if _, _, err := f.CreateToken(CreateOptions{Account: "ops", MaxTunnels: -1, MaxSessions: -1, RateLimit: -1, Admin: &no}); err != nil {
+		t.Fatal(err)
+	}
+	m.ApplyTokenFile(f)
+	_, acct, _ = m.ValidateToken(secret)
+	if acct.IsAdmin() {
+		t.Error("-admin=false must take the role away")
+	}
+	accts := m.ListAccounts()
+	if len(accts) < 2 || accts[0].ID > accts[1].ID {
+		t.Errorf("ListAccounts not sorted: %v", accts)
+	}
+}

@@ -30,6 +30,15 @@ type Dashboard struct {
 	port         int
 	httpsEnabled bool
 	guard        authGuard
+	certs        func() []CertInfo
+}
+
+// CertInfo describes one certificate for the administrator view.
+type CertInfo struct {
+	Host     string    `json:"host"`
+	Issuer   string    `json:"issuer"`
+	NotAfter time.Time `json:"not_after"`
+	DaysLeft int       `json:"days_left"`
 }
 
 // Config holds dashboard configuration.
@@ -38,6 +47,7 @@ type Config struct {
 	AuthManager  *auth.Manager
 	Port         int
 	HTTPSEnabled bool
+	Certs        func() []CertInfo // certificates held by the server (optional)
 }
 
 // New creates a new dashboard.
@@ -50,6 +60,7 @@ func New(cfg Config) *Dashboard {
 		authManager:  cfg.AuthManager,
 		port:         cfg.Port,
 		httpsEnabled: cfg.HTTPSEnabled,
+		certs:        cfg.Certs,
 	}
 }
 
@@ -63,6 +74,13 @@ func (d *Dashboard) Handler() http.Handler {
 	mux.HandleFunc("/api/stats", d.authMiddleware(d.handleStats))
 	mux.HandleFunc("/api/requests", d.authMiddleware(d.handleRequests))
 	mux.HandleFunc("/api/requests/", d.authMiddleware(d.handleRequestActions))
+	mux.HandleFunc("/api/me", d.authMiddleware(d.handleMe))
+	mux.HandleFunc("/api/events", d.authMiddleware(d.handleEvents))
+	mux.HandleFunc("/api/admin/overview", d.authMiddleware(d.adminOnly(d.handleAdminOverview)))
+	mux.HandleFunc("/api/admin/history", d.authMiddleware(d.adminOnly(d.handleAdminHistory)))
+	mux.HandleFunc("/api/admin/accounts", d.authMiddleware(d.adminOnly(d.handleAdminAccounts)))
+	mux.HandleFunc("/api/admin/certs", d.authMiddleware(d.adminOnly(d.handleAdminCerts)))
+	mux.HandleFunc("/api/admin/sessions/", d.authMiddleware(d.adminOnly(d.handleAdminSessionAction)))
 	// Unknown API paths are errors, not the web UI page the "/" catch-all would serve.
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		d.jsonError(w, "Not found", http.StatusNotFound)
@@ -221,16 +239,23 @@ func (d *Dashboard) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 }
 
 type scopeKey struct{}
+type adminKey struct{}
+type whoKey struct{}
 
 // withScope records whose data the request may see: the bootstrap account is
 // the administrator and sees everything (empty scope), any other account only
 // its own tunnels, sessions and captured requests.
 func withScope(r *http.Request, acct *auth.Account) *http.Request {
 	scope := ""
-	if acct != nil && acct.ID != auth.DevAccountID {
+	if acct != nil && !acct.IsAdmin() {
 		scope = acct.ID
 	}
-	return r.WithContext(context.WithValue(r.Context(), scopeKey{}, scope))
+	ctx := context.WithValue(r.Context(), scopeKey{}, scope)
+	ctx = context.WithValue(ctx, adminKey{}, acct.IsAdmin())
+	if acct != nil {
+		ctx = context.WithValue(ctx, whoKey{}, acct)
+	}
+	return r.WithContext(ctx)
 }
 
 // scope returns the account a request is limited to ("" = unrestricted).
@@ -502,6 +527,28 @@ display:inline-flex;align-items:center;justify-content:center;font-weight:600;
 }
 .tab.active .tab-badge{background:rgba(59,130,246,.15);color:var(--ac)}
 
+/* Admin / Activity */
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(10.5rem,1fr));gap:.75rem;margin-bottom:1rem}
+.card{background:var(--bg-1);border:1px solid var(--bd);border-radius:.625rem;padding:.75rem .875rem;box-shadow:var(--shadow)}
+.card .k{font-size:.6875rem;color:var(--tx-2);text-transform:uppercase;letter-spacing:.04em;font-weight:500}
+.card .v{font-size:1.25rem;font-weight:700;margin-top:.25rem;word-break:break-word}
+.card .s{font-size:.6875rem;color:var(--tx-2);margin-top:.125rem}
+.card.ok .v{color:var(--ok)}.card.warn .v{color:var(--wn)}.card.bad .v{color:var(--er)}
+.sec-title{font-size:.8125rem;font-weight:600;color:var(--tx-1);margin:1.25rem 0 .5rem;text-transform:uppercase;letter-spacing:.05em}
+.charts{display:grid;grid-template-columns:repeat(auto-fill,minmax(15rem,1fr));gap:.75rem}
+.chart{background:var(--bg-1);border:1px solid var(--bd);border-radius:.625rem;padding:.625rem .75rem}
+.chart .h{display:flex;justify-content:space-between;align-items:baseline;font-size:.75rem;color:var(--tx-2)}
+.chart .h b{color:var(--tx-0);font-size:.9375rem}
+.chart svg{width:100%;height:3.25rem;display:block;margin-top:.25rem}
+.pill{display:inline-block;padding:.0625rem .5rem;border-radius:9999px;font-size:.6875rem;font-weight:600;background:var(--bg-3);color:var(--tx-1)}
+.pill.ok{background:rgba(34,197,94,.15);color:var(--ok)}.pill.warn{background:rgba(245,158,11,.15);color:var(--wn)}.pill.bad{background:rgba(239,68,68,.15);color:var(--er)}
+.hbar{display:flex;align-items:center;gap:.5rem;font-size:.75rem;margin:.1875rem 0;color:var(--tx-1)}
+.hbar .l{width:4.5rem}.hbar .t{flex:1;height:.5rem;background:var(--bg-3);border-radius:9999px;overflow:hidden}
+.hbar .t i{display:block;height:100%;background:var(--ac)}.hbar .n{width:5rem;text-align:right;color:var(--tx-0)}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(20rem,1fr));gap:1rem}
+.btn-danger{background:transparent;color:var(--er);border:1px solid var(--er);border-radius:.375rem;padding:.1875rem .5rem;cursor:pointer;font-size:.75rem}
+.btn-danger:hover{background:var(--er);color:#fff}
+
 /* Panels */
 .panel{display:none}
 .panel.active{display:block}
@@ -714,6 +761,8 @@ th,td{padding:.5rem .625rem;font-size:.75rem}
 <div class="tab active" data-tab="tunnels">Tunnels <span class="tab-badge" id="badgeTunnels">0</span> <span class="kbd">T</span></div>
 <div class="tab" data-tab="sessions">Sessions <span class="tab-badge" id="badgeSessions">0</span> <span class="kbd">S</span></div>
 <div class="tab" data-tab="inspector">Inspector <span class="tab-badge" id="badgeInspector">0</span> <span class="kbd">I</span></div>
+<div class="tab" data-tab="activity">Activity <span class="tab-badge" id="badgeActivity">0</span> <span class="kbd">A</span></div>
+<div class="tab" data-tab="admin" id="tabAdmin" style="display:none">Admin <span class="kbd">D</span></div>
 </div>
 
 <!-- Tunnels Panel -->
@@ -756,6 +805,43 @@ th,td{padding:.5rem .625rem;font-size:.75rem}
 <tbody id="tbodyRequests"></tbody></table>
 </div>
 <div class="empty" id="emptyRequests" style="display:none">No captured requests</div>
+</div>
+
+<!-- Activity Panel -->
+<div class="panel" id="panelActivity">
+<div class="panel-bar">
+<div class="panel-bar-left"><input class="search-box" id="searchActivity" type="text" placeholder="Filter activity..."></div>
+<button class="btn-ghost" id="refreshActivity">Refresh <span class="kbd">R</span></button>
+</div>
+<div class="tbl-wrap">
+<table><thead><tr><th>Time</th><th>Level</th><th>Kind</th><th>Account</th><th>Remote</th><th>Event</th></tr></thead>
+<tbody id="tbodyActivity"></tbody></table>
+</div>
+<div class="empty" id="emptyActivity" style="display:none">No activity yet</div>
+</div>
+
+<!-- Admin Panel -->
+<div class="panel" id="panelAdmin">
+<div class="panel-bar"><div class="panel-bar-left"><span class="pill" id="adminStamp">loading...</span></div>
+<button class="btn-ghost" id="refreshAdmin">Refresh <span class="kbd">R</span></button></div>
+<div class="sec-title" style="margin-top:0">Server health</div>
+<div class="cards" id="adminCards"></div>
+<div class="sec-title">Last hour (10 s samples)</div>
+<div class="charts" id="adminCharts"></div>
+<div class="two">
+<div><div class="sec-title">Response time</div><div id="adminLatency"></div></div>
+<div><div class="sec-title">Responses by status class</div><div id="adminStatus"></div></div>
+</div>
+<div class="sec-title">Accounts</div>
+<div class="tbl-wrap"><table><thead><tr><th>Account</th><th>Role</th><th>State</th><th>Sessions</th><th>Tunnels</th><th>Limits</th></tr></thead><tbody id="tbodyAccounts"></tbody></table></div>
+<div class="sec-title">All sessions</div>
+<div class="tbl-wrap"><table><thead><tr><th>ID</th><th>Account</th><th>Remote</th><th>Connected</th><th>Last heartbeat</th><th>Tunnels</th><th></th></tr></thead><tbody id="tbodyAdminSessions"></tbody></table></div>
+<div class="sec-title">Reserved subdomains (client dropped, waiting for reconnect)</div>
+<div class="tbl-wrap"><table><thead><tr><th>Subdomain</th><th>Account</th><th>Held for</th></tr></thead><tbody id="tbodyHeld"></tbody></table></div>
+<div class="sec-title">Certificates</div>
+<div class="tbl-wrap"><table><thead><tr><th>Host</th><th>Issuer</th><th>Expires</th><th>Days left</th></tr></thead><tbody id="tbodyCerts"></tbody></table></div>
+<div class="sec-title">Configuration in effect</div>
+<div class="cards" id="adminConfig"></div>
 </div>
 </div>
 
@@ -873,6 +959,7 @@ function verifyAndLoad(){
         if(reqInterval) clearInterval(reqInterval);
         reqInterval = setInterval(loadRequests, 2000);
         startByteAnimation();
+        initRoles();
         toast('Authenticated successfully', 'ok');
     }).catch(function(e){
         try { sessionStorage.removeItem('wr_t'); } catch(ex){}
@@ -1512,6 +1599,183 @@ function switchTab(name){
     }
 }
 
+
+/* -- Activity & Admin --------------------------------------- */
+var isAdminUser = false, adminInterval = null, activityCache = [];
+function initRoles(){
+    apiFetch('/api/me').then(function(me){
+        isAdminUser = !!(me && me.admin);
+        $('tabAdmin').style.display = isAdminUser ? '' : 'none';
+        loadActivity();
+        if(adminInterval) clearInterval(adminInterval);
+        adminInterval = setInterval(function(){
+            loadActivity();
+            if(isAdminUser && currentTab === 'admin') loadAdmin();
+        }, 5000);
+        if(isAdminUser) loadAdmin();
+    }).catch(function(){});
+}
+function levelPill(l){ return '<span class="pill ' + (l === 'warn' ? 'warn' : 'ok') + '">' + escHtml(l) + '</span>'; }
+function loadActivity(){
+    apiFetch('/api/events?limit=200').then(function(ev){
+        activityCache = ev || [];
+        $('badgeActivity').textContent = activityCache.length;
+        renderActivity();
+    }).catch(function(){});
+}
+function renderActivity(){
+    var q = ($('searchActivity').value || '').toLowerCase();
+    var rows = '', n = 0;
+    for(var i = 0; i < activityCache.length; i++){
+        var e = activityCache[i];
+        var hay = (e.kind + ' ' + (e.account||'') + ' ' + (e.remote||'') + ' ' + e.message).toLowerCase();
+        if(q && hay.indexOf(q) === -1) continue;
+        n++;
+        rows += '<tr><td>' + fmtTime(e.time) + '</td><td>' + levelPill(e.level) + '</td><td>' + escHtml(e.kind) +
+            '</td><td>' + escHtml(e.account || '-') + '</td><td>' + escHtml(e.remote || '-') +
+            '</td><td>' + escHtml(e.message) + '</td></tr>';
+    }
+    $('tbodyActivity').innerHTML = rows;
+    $('emptyActivity').style.display = n ? 'none' : '';
+}
+function card(k, v, sub, cls){
+    return '<div class="card ' + (cls||'') + '"><div class="k">' + escHtml(k) + '</div><div class="v">' + escHtml(String(v)) +
+        '</div>' + (sub ? '<div class="s">' + escHtml(String(sub)) + '</div>' : '') + '</div>';
+}
+function spark(title, vals, fmt, color){
+    var W = 200, H = 40, n = vals.length, max = 0, last = n ? vals[n-1] : 0, i;
+    for(i = 0; i < n; i++) if(vals[i] > max) max = vals[i];
+    var pts = '';
+    for(i = 0; i < n; i++){
+        var x = n > 1 ? (i * W / (n - 1)) : W;
+        var y = max > 0 ? H - 2 - (vals[i] / max) * (H - 4) : H - 2;
+        pts += x.toFixed(1) + ',' + y.toFixed(1) + ' ';
+    }
+    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" style="color:' + color + '">' +
+        (n > 1 ? '<polygon fill="currentColor" opacity=".12" points="0,' + H + ' ' + pts + W + ',' + H + '"/>' +
+        '<polyline fill="none" stroke="currentColor" stroke-width="1.5" vector-effect="non-scaling-stroke" points="' + pts + '"/>' : '') + '</svg>';
+    return '<div class="chart"><div class="h"><span>' + escHtml(title) + '</span><b>' + escHtml(fmt(last)) + '</b></div>' + svg +
+        '<div class="h"><span>peak ' + escHtml(fmt(max)) + '</span><span>' + n + ' samples</span></div></div>';
+}
+function rates(h, key){
+    var out = [];
+    for(var i = 1; i < h.length; i++){
+        var dt = h[i].t - h[i-1].t; if(dt <= 0) dt = 1;
+        var d = h[i][key] - h[i-1][key]; if(d < 0) d = 0;
+        out.push(d / dt);
+    }
+    return out;
+}
+function gauge(h, key){ var o = []; for(var i = 0; i < h.length; i++) o.push(h[i][key]); return o; }
+function fRate(v){ return (v < 10 ? v.toFixed(1) : Math.round(v)) + '/s'; }
+function fBps(v){ return fmtBytes(v) + '/s'; }
+function fNum(v){ return String(Math.round(v * 10) / 10); }
+function hbars(rows, color){
+    var max = 0, i, out = '';
+    for(i = 0; i < rows.length; i++) if(rows[i][1] > max) max = rows[i][1];
+    for(i = 0; i < rows.length; i++){
+        var w = max > 0 ? (rows[i][1] / max * 100) : 0;
+        out += '<div class="hbar"><span class="l">' + escHtml(rows[i][0]) + '</span><span class="t"><i style="width:' + w.toFixed(1) +
+            '%;background:' + (rows[i][2] || color) + '"></i></span><span class="n">' + escHtml(String(rows[i][3] !== undefined ? rows[i][3] : rows[i][1])) + '</span></div>';
+    }
+    return out;
+}
+function loadAdmin(){
+    Promise.all([
+        apiFetch('/api/admin/overview'), apiFetch('/api/admin/history'), apiFetch('/api/admin/accounts'),
+        apiFetch('/api/admin/certs'), apiFetch('/api/sessions')
+    ]).then(function(r){
+        renderAdmin(r[0], r[1] || [], r[2] || [], r[3] || [], r[4] || []);
+        $('adminStamp').textContent = 'updated ' + fmtTime(new Date());
+        $('adminStamp').className = 'pill ok';
+    }).catch(function(e){ $('adminStamp').textContent = 'update failed: ' + e.message; $('adminStamp').className = 'pill bad'; });
+}
+function renderAdmin(o, h, accts, certs, sess){
+    var certDays = o.cert_expiry ? Math.floor((new Date(o.cert_expiry) - new Date()) / 86400000) : null;
+    var fdWarn = o.open_fds > 800;
+    $('adminCards').innerHTML =
+        card('Status', o.ready ? 'Ready' : 'Not ready', 'version ' + (o.version || '?'), o.ready ? 'ok' : 'bad') +
+        card('Uptime', fmtUptime(o.uptime_seconds), 'since ' + fmtTimeDate(o.started_at)) +
+        card('Sessions', o.sessions, 'connected clients') +
+        card('Tunnels', o.http_tunnels + o.tcp_tunnels, o.http_tunnels + ' http / ' + o.tcp_tunnels + ' tcp') +
+        card('TCP ports', o.tcp_ports_in_use + ' / ' + o.tcp_ports_total, 'in use / available') +
+        card('Requests', o.requests, 'since start') +
+        card('Traffic in / out', fmtBytes(o.bytes_in) + ' / ' + fmtBytes(o.bytes_out), 'through tunnels') +
+        card('Avg response', fNum(o.avg_latency_ms) + ' ms', 'p99 ≤ ' + fNum(o.p99_ms) + ' ms') +
+        card('Memory (heap)', fNum(o.heap_mb) + ' MB', 'sys ' + fNum(o.sys_mb) + ' MB, ' + o.num_gc + ' GCs') +
+        card('Goroutines', o.goroutines, o.cpus + ' CPU(s)') +
+        card('Open files', o.open_fds < 0 ? 'n/a' : o.open_fds, 'file descriptors', fdWarn ? 'warn' : '') +
+        card('Certificate', certDays === null ? 'none' : certDays + ' days', 'earliest expiry', certDays !== null && certDays < 14 ? (certDays < 5 ? 'bad' : 'warn') : 'ok') +
+        card('Write errors', o.persistence_errors, 'persistent state', o.persistence_errors ? 'bad' : 'ok') +
+        card('Go', o.go_version, o.domain);
+    $('adminCharts').innerHTML =
+        spark('Requests', rates(h, 'requests'), fRate, 'var(--ac)') +
+        spark('Errors 4xx', rates(h, 'err4xx'), fRate, 'var(--wn)') +
+        spark('Errors 5xx', rates(h, 'err5xx'), fRate, 'var(--er)') +
+        spark('Traffic in', rates(h, 'bytes_in'), fBps, 'var(--ok)') +
+        spark('Traffic out', rates(h, 'bytes_out'), fBps, 'var(--pr)') +
+        spark('Sessions', gauge(h, 'sessions'), fNum, 'var(--tl)') +
+        spark('Tunnels', gauge(h, 'tunnels'), fNum, 'var(--ac)') +
+        spark('Heap (MB)', gauge(h, 'heap_mb'), fNum, 'var(--wn)') +
+        spark('Goroutines', gauge(h, 'goroutines'), fNum, 'var(--pr)') +
+        spark('Open files', gauge(h, 'fds'), fNum, 'var(--tl)');
+    var lat = [], prev = 0, b, total = o.requests || 0;
+    for(b = 0; b < o.latency_buckets.length; b++){
+        var bk = o.latency_buckets[b], c = bk.count - prev; prev = bk.count;
+        lat.push([bk.le_ms ? '≤ ' + bk.le_ms + ' ms' : '> 10 s', c, null, c + (total ? ' (' + (c / total * 100).toFixed(1) + '%)' : '')]);
+    }
+    $('adminLatency').innerHTML = '<div class="hbar"><span class="l">avg</span><span class="n" style="text-align:left">' + fNum(o.avg_latency_ms) + ' ms</span></div>' +
+        '<div class="hbar"><span class="l">p50/p95/p99</span><span class="n" style="width:auto">≤ ' + fNum(o.p50_ms) + ' / ' + fNum(o.p95_ms) + ' / ' + fNum(o.p99_ms) + ' ms</span></div>' + hbars(lat, 'var(--ac)');
+    var st = o.status || {};
+    $('adminStatus').innerHTML = hbars([['2xx', st['2xx']||0, 'var(--ok)'], ['3xx', st['3xx']||0, 'var(--ac)'], ['4xx', st['4xx']||0, 'var(--wn)'], ['5xx', st['5xx']||0, 'var(--er)'], ['1xx', st['1xx']||0, 'var(--tx-2)']], 'var(--ac)');
+    var rows = '', i;
+    for(i = 0; i < accts.length; i++){
+        var a = accts[i], lim = [];
+        if(a.max_tunnels) lim.push('tunnels≤' + a.max_tunnels);
+        if(a.max_sessions) lim.push('sessions≤' + a.max_sessions);
+        if(a.rate_limit) lim.push('rate ' + a.rate_limit + '/s');
+        rows += '<tr><td>' + escHtml(a.id) + '</td><td>' + (a.admin ? '<span class="pill warn">admin</span>' : 'user') + '</td><td>' +
+            (a.active ? '<span class="pill ok">active</span>' : '<span class="pill bad">disabled</span>') + '</td><td>' + a.sessions + '</td><td>' + a.tunnels + '</td><td>' + escHtml(lim.join(', ') || '-') + '</td></tr>';
+    }
+    $('tbodyAccounts').innerHTML = rows;
+    rows = '';
+    for(i = 0; i < sess.length; i++){
+        var s = sess[i];
+        rows += '<tr><td>' + escHtml(s.id) + '</td><td>' + escHtml(s.account_id) + '</td><td>' + escHtml(s.remote_addr) + '</td><td>' + fmtTimeDate(s.connected_at) +
+            '</td><td>' + (new Date(s.last_heartbeat).getFullYear() < 2000 ? '-' : fmtTime(s.last_heartbeat)) + '</td><td>' + s.tunnel_count + '</td><td><button class="btn-danger" data-kick="' + escHtml(s.id) + '">Disconnect</button></td></tr>';
+    }
+    $('tbodyAdminSessions').innerHTML = rows || '<tr><td colspan="7" style="color:var(--tx-2)">No sessions</td></tr>';
+    rows = '';
+    var held = o.held_subdomains || [];
+    for(i = 0; i < held.length; i++){
+        rows += '<tr><td>' + escHtml(held[i].subdomain) + '</td><td>' + escHtml(held[i].account) + '</td><td>' + fmtUptime((new Date(held[i].until) - new Date()) / 1000) + ' left</td></tr>';
+    }
+    $('tbodyHeld').innerHTML = rows || '<tr><td colspan="3" style="color:var(--tx-2)">None</td></tr>';
+    rows = '';
+    for(i = 0; i < certs.length; i++){
+        var cd = certs[i].days_left, cls = cd < 5 ? 'bad' : (cd < 14 ? 'warn' : 'ok');
+        rows += '<tr><td>' + escHtml(certs[i].host) + '</td><td>' + escHtml(certs[i].issuer) + '</td><td>' + fmtTimeDate(certs[i].not_after) +
+            '</td><td><span class="pill ' + cls + '">' + cd + ' d</span></td></tr>';
+    }
+    $('tbodyCerts').innerHTML = rows || '<tr><td colspan="4" style="color:var(--tx-2)">No certificates in memory</td></tr>';
+    $('adminConfig').innerHTML =
+        card('Domain', o.domain) +
+        card('Dashboard host', o.dashboard_host || 'not published', o.dashboard_host ? 'served on the HTTPS edge' : 'loopback only') +
+        card('Edge rate limit', o.edge_rate_per_ip + '/s', 'burst ' + o.edge_burst + ' per visitor IP') +
+        card('Offline grace', fmtUptime(o.offline_grace_seconds), 'names held after a drop') +
+        card('Trusted proxies', o.trusted_proxy_cidrs, 'CIDR ranges');
+}
+document.addEventListener('click', function(ev){
+    var t = ev.target;
+    if(t && t.getAttribute && t.getAttribute('data-kick')){
+        var id = t.getAttribute('data-kick');
+        if(!confirm('Disconnect session ' + id + '? The client may reconnect; revoke its token to keep it out.')) return;
+        apiFetch('/api/admin/sessions/' + encodeURIComponent(id) + '/kick', {method: 'POST'}).then(function(){
+            toast('Session disconnected', 'ok'); loadAdmin(); loadActivity();
+        }).catch(function(e){ toast('Failed: ' + e.message, 'err'); });
+    }
+});
+
 /* -- Keyboard Shortcuts ------------------------------------- */
 function handleKey(e){
     var tag = (e.target.tagName || '').toLowerCase();
@@ -1522,11 +1786,15 @@ function handleKey(e){
         if(currentTab === 'tunnels') loadTunnels();
         else if(currentTab === 'sessions') loadSessions();
         else if(currentTab === 'inspector') loadRequests();
+        else if(currentTab === 'activity') loadActivity();
+        else if(currentTab === 'admin' && isAdminUser) loadAdmin();
         toast('Refreshed', 'info');
     }
     if(key === 'T'){ e.preventDefault(); switchTab('tunnels'); }
     if(key === 'S'){ e.preventDefault(); switchTab('sessions'); }
     if(key === 'I'){ e.preventDefault(); switchTab('inspector'); }
+    if(key === 'A'){ e.preventDefault(); switchTab('activity'); }
+    if(key === 'D' && isAdminUser){ e.preventDefault(); switchTab('admin'); loadAdmin(); }
 }
 
 /* -- Event Binding ------------------------------------------ */
@@ -1550,6 +1818,9 @@ function init(){
     $('refreshTunnels').onclick = function(){ loadTunnels(); toast('Tunnels refreshed', 'info'); };
     $('refreshSessions').onclick = function(){ loadSessions(); toast('Sessions refreshed', 'info'); };
     $('refreshRequests').onclick = function(){ loadRequests(); toast('Inspector refreshed', 'info'); };
+    $('refreshActivity').onclick = function(){ loadActivity(); toast('Activity refreshed', 'info'); };
+    $('refreshAdmin').onclick = function(){ loadAdmin(); toast('Admin view refreshed', 'info'); };
+    $('searchActivity').oninput = renderActivity;
 
     var debounceTimers = {};
     function debounceRender(key, fn){

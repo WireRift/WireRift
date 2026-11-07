@@ -58,6 +58,9 @@ type Config struct {
 	// header is untrusted and the socket peer is the client identity.
 	TrustedProxyCIDRs []string
 
+	// Version is shown in the administrator dashboard.
+	Version string
+
 	// EdgeRatePerIP is the sustained requests per second one visitor IP may send
 	// to the HTTP edge, and EdgeRateBurst the burst allowance on top of it.
 	// Zero means the defaults (100 and 50).
@@ -244,6 +247,11 @@ type Server struct {
 	httpDurationBuckets [httpDurationBucketSlots]atomic.Uint64
 	httpDurationNanos   atomic.Int64
 	persistenceErrors   atomic.Uint64
+
+	// Administrator view: activity log, rolling history, published dashboard
+	events         eventLog
+	history        historyRing
+	dashboardRoute atomic.Pointer[dashboardRoute]
 
 	// Traffic inspector
 	requestLogs []RequestLog
@@ -543,6 +551,9 @@ func (s *Server) Start() error {
 	// visible to concurrent health and metrics requests.
 	s.startTime = time.Now()
 	s.lifecycle = lifecycleRunning
+	s.wg.Add(1)
+	go s.runHistory()
+	s.recordEvent("info", "server", "", "", "", "server started")
 	s.ready.Store(true)
 	started = true
 
@@ -757,6 +768,7 @@ func (s *Server) handleControlConnection(conn net.Conn) {
 	session, err := s.handleAuth(m, remoteAddr)
 	if err != nil {
 		s.logger.Warn("auth failed", "remote", remoteAddr, "error", err)
+		s.recordEvent("warn", "auth", "", "", remoteAddr.String(), "login failed: "+err.Error())
 		m.Close()
 		return
 	}
@@ -766,11 +778,13 @@ func (s *Server) handleControlConnection(conn net.Conn) {
 	m.SetMaxStreams(muxCfg.MaxStreams)
 
 	s.logger.Info("session started", "id", session.ID, "remote", remoteAddr)
+	s.recordEvent("info", "session", session.AccountID, session.ID, remoteAddr.String(), "client connected")
 
 	// Handle tunnel requests until disconnect
 	s.handleTunnelRequests(m, session)
 
 	s.logger.Info("session ended", "id", session.ID)
+	s.recordEvent("info", "session", session.AccountID, session.ID, remoteAddr.String(), "client disconnected")
 }
 
 // handleAuth authenticates a client connection.
@@ -952,6 +966,7 @@ func (s *Server) CloseRevokedSessions() int {
 	})
 	for _, sess := range stale {
 		s.logger.Info("closing session: token is no longer valid", "session", sess.ID, "account", sess.AccountID)
+		s.recordEvent("warn", "auth", sess.AccountID, sess.ID, "", "session closed: its token was revoked, expired or removed")
 		s.removeSession(sess.ID)
 		_ = sess.Mux.Close()
 	}
@@ -1168,6 +1183,7 @@ func (s *Server) createHTTPTunnel(m *mux.Mux, session *Session, req *proto.Tunne
 	_ = m.GetFrameWriter().Write(respFrame)
 
 	s.logger.Info("tunnel created", "id", tunnelID, "type", "http", "subdomain", subdomain, "custom_domain", customDomain)
+	s.recordEvent("info", "tunnel", session.AccountID, session.ID, "", "http tunnel created: "+subdomain)
 }
 
 // takeOver gives the subdomain to fresh when it belongs to a tunnel of the same
@@ -1260,6 +1276,7 @@ func (s *Server) createTCPTunnel(m *mux.Mux, session *Session, req *proto.Tunnel
 	_ = m.GetFrameWriter().Write(respFrame)
 
 	s.logger.Info("tunnel created", "id", tunnelID, "type", "tcp", "port", port)
+	s.recordEvent("info", "tunnel", session.AccountID, session.ID, "", "tcp tunnel created on port "+strconv.Itoa(port))
 }
 
 // maxTunnelBindAttempts bounds how many ports of the range are tried when some
@@ -1321,6 +1338,7 @@ func (s *Server) closeTunnel(session *Session, tunnelID, reason string) bool {
 
 	s.teardownTunnel(tunnel)
 	s.logger.Info("tunnel "+reason, "id", tunnelID)
+	s.recordEvent("info", "tunnel", session.AccountID, session.ID, "", "tunnel "+reason+": "+tunnelID)
 	return true
 }
 

@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -752,4 +753,41 @@ func (m *Manager) ACMEChallengeHandler() http.HandlerFunc {
 // IsACMEEnabled returns true if Let's Encrypt is configured and active.
 func (m *Manager) IsACMEEnabled() bool {
 	return m.acme != nil
+}
+
+// CertificateInfo describes one certificate held in memory.
+type CertificateInfo struct {
+	Host      string    `json:"host"`
+	Issuer    string    `json:"issuer"`
+	NotBefore time.Time `json:"not_before"`
+	NotAfter  time.Time `json:"not_after"`
+	DaysLeft  int       `json:"days_left"`
+}
+
+// CertificateInfos lists the certificates already in the in-memory cache,
+// earliest expiry first. It never loads or issues anything, so it is safe to
+// call from a dashboard request.
+func (m *Manager) CertificateInfos() []CertificateInfo {
+	var out []CertificateInfo
+	m.certs.Range(func(k, value any) bool {
+		cert, ok := value.(*tls.Certificate)
+		if !ok || cert == nil {
+			return true
+		}
+		leaf := cert.Leaf
+		if leaf == nil && len(cert.Certificate) > 0 {
+			leaf, _ = x509.ParseCertificate(cert.Certificate[0])
+		}
+		if leaf == nil {
+			return true
+		}
+		host, _ := k.(string)
+		out = append(out, CertificateInfo{
+			Host: host, Issuer: leaf.Issuer.CommonName, NotBefore: leaf.NotBefore, NotAfter: leaf.NotAfter,
+			DaysLeft: int(time.Until(leaf.NotAfter).Hours() / 24),
+		})
+		return true
+	})
+	sort.Slice(out, func(i, j int) bool { return out[i].NotAfter.Before(out[j].NotAfter) })
+	return out
 }

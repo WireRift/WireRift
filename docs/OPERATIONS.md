@@ -130,6 +130,11 @@ owner's approved SLOs.
   `X-Forwarded-For`/`Forwarded` is not treated as loopback) and every other
   caller only with `Authorization: Bearer <token>`. Point a remote Prometheus at
   it with `authorization.credentials_file`.
+- The dashboard has an **Admin** tab for administrator tokens (`token create -admin`): health, one hour of
+  rate/latency/memory/fd history, accounts, sessions (with Disconnect), held subdomains, certificate expiry
+  and the Activity log. Reach it with `ssh -L 4040:127.0.0.1:4040 host` or publish it with
+  `-dashboard-host dashboard` (HTTPS only, token required, rate limited). The history and the activity log
+  are in memory only and start empty after a restart; use `/metrics` and the journal for anything longer.
 - `-edge-rate` and `-edge-burst` set the per-visitor-IP request limit of the HTTP
   edge (defaults 100 req/s, burst 50). Raise them when a busy site or a proxy
   without `-trusted-proxy-cidrs` makes many visitors share one IP.

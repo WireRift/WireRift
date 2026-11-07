@@ -32,6 +32,11 @@ func (s *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The published dashboard host is served before tunnel routing.
+	if s.serveDashboardHost(w, r) {
+		return
+	}
+
 	// Measure tunnel-edge traffic only. Operational scrapes and ACME probes are
 	// intentionally excluded so monitoring cannot inflate its own counters.
 	requestStarted := time.Now()

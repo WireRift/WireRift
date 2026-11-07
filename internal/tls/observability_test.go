@@ -52,3 +52,32 @@ func TestCertificatePersistenceErrorsAreCounted(t *testing.T) {
 		t.Fatalf("aggregated persistence errors = %d, want 2", got)
 	}
 }
+
+func TestCertificateInfosListsCachedCertsEarliestFirst(t *testing.T) {
+	m, err := NewManager(Config{Domain: "x.test", CertDir: t.TempDir(), AutoCert: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.CertificateInfos(); len(got) != 0 {
+		t.Fatalf("empty cache listed %d certs", len(got))
+	}
+	for _, h := range []string{"b.x.test", "a.x.test"} {
+		cert, err := m.generateSelfSigned(h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m.storeCert(h, cert)
+	}
+	infos := m.CertificateInfos()
+	if len(infos) != 2 {
+		t.Fatalf("listed %d certs, want 2", len(infos))
+	}
+	for _, c := range infos {
+		if c.Host == "" || c.NotAfter.IsZero() || c.DaysLeft < 1 {
+			t.Errorf("incomplete info %+v", c)
+		}
+	}
+	if infos[0].NotAfter.After(infos[1].NotAfter) {
+		t.Error("not sorted by expiry")
+	}
+}

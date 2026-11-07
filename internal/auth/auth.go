@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -45,6 +46,12 @@ type Account struct {
 	MaxTunnels  int
 	MaxSessions int // 0 = unlimited
 	RateLimit   int
+	Admin       bool // sees every account's data in the dashboard (the bootstrap account always does)
+}
+
+// IsAdmin reports whether the account may see and manage everything.
+func (a *Account) IsAdmin() bool {
+	return a != nil && (a.Admin || a.ID == DevAccountID)
 }
 
 // Manager manages authentication.
@@ -188,7 +195,7 @@ func (m *Manager) ApplyTokenFile(f *TokenFile) {
 		}
 		accounts[a.ID] = &Account{
 			ID: a.ID, Name: a.Name, Active: a.Active, CreatedAt: a.CreatedAt,
-			MaxTunnels: a.MaxTunnels, MaxSessions: a.MaxSessions, RateLimit: a.RateLimit,
+			MaxTunnels: a.MaxTunnels, MaxSessions: a.MaxSessions, RateLimit: a.RateLimit, Admin: a.Admin,
 		}
 	}
 	byHash := make(map[string]*Token, len(f.Tokens))
@@ -244,6 +251,17 @@ func (m *Manager) accountActive(id string) bool {
 	return ok && a.(*Account).Active
 }
 
+// ListAccounts returns a snapshot of every known account, sorted by ID.
+func (m *Manager) ListAccounts() []Account {
+	var out []Account
+	m.accounts.Range(func(_, v any) bool {
+		out = append(out, *v.(*Account))
+		return true
+	})
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
 // HasFileTokens reports whether the token file supplied at least one token.
 func (m *Manager) HasFileTokens() bool {
 	m.mu.RLock()
@@ -258,6 +276,7 @@ func (m *Manager) DisableBootstrapToken() {
 		return
 	}
 	m.tokens.Delete(m.devToken.ID)
+	m.accounts.Delete(m.devToken.AccountID)
 	m.devToken = nil
 }
 

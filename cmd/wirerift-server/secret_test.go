@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -313,5 +315,26 @@ func TestSetEdgeRate(t *testing.T) {
 	}
 	if setEdgeRate(&cfg, -1, 0) == nil || setEdgeRate(&cfg, 0, -1) == nil {
 		t.Error("negative values accepted")
+	}
+}
+
+func TestDashboardHostName(t *testing.T) {
+	for in, want := range map[string]string{
+		"": "", "dashboard": "dashboard.t.example", " Admin ": "admin.t.example", "ops.example.org": "ops.example.org",
+	} {
+		if got := dashboardHostName(in, "t.example"); got != want {
+			t.Errorf("dashboardHostName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestPublishDashboardNeedsHTTPS(t *testing.T) {
+	srv := server.New(server.DefaultConfig(), nil)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if err := publishDashboard(srv, nil, "", "t.example", false, logger); err != nil {
+		t.Errorf("unset flag must be a no-op: %v", err)
+	}
+	if err := publishDashboard(srv, nil, "dashboard", "t.example", false, logger); err == nil {
+		t.Error("publishing without HTTPS must be refused")
 	}
 }

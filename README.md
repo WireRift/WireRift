@@ -227,6 +227,7 @@ Options:
   --https string        HTTPS edge address (default: :443)
   --dashboard-port int  Dashboard port (default: 4040)
   --dashboard-bind str  Dashboard bind address (default: 127.0.0.1)
+  --dashboard-host str  Also serve the dashboard on the HTTPS edge at this host (label or full name; needs HTTPS)
   --dashboard-tls-cert  PEM certificate for the dashboard (with --dashboard-tls-key serves HTTPS)
   --dashboard-tls-key   PEM private key for the dashboard
   --dns-server string   DNS server for custom-domain TXT checks (default: system resolver)
@@ -369,8 +370,8 @@ wirerift start wirerift.json
 The built-in dashboard at `http://localhost:4040` provides:
 
 - **Dark/Light theme** — toggle with button or persisted preference
-- **Tabbed navigation** — Tunnels / Sessions / Inspector with live count badges
-- **Keyboard shortcuts** — `R` refresh, `T` tunnels, `S` sessions, `I` inspector
+- **Tabbed navigation** — Tunnels / Sessions / Inspector / Activity (and Admin for administrators) with live count badges
+- **Keyboard shortcuts** — `R` refresh, `T` tunnels, `S` sessions, `I` inspector, `A` activity, `D` admin
 - **Tunnel management** — copy URL to clipboard, status indicators
 - **Traffic Inspector** — real-time request/response log with:
   - Method badges (GET=green, POST=blue, PUT=amber, DELETE=red)
@@ -382,6 +383,37 @@ The built-in dashboard at `http://localhost:4040` provides:
 - **Animated counters** — bytes and uptime update smoothly
 - **Search/filter** — filter across all tables
 - **Toast notifications** — action feedback
+- **Activity** — what just happened: clients connecting and dropping, tunnels created and closed, failed logins, sessions closed because their token was revoked. An account sees its own events, an administrator everyone's.
+- **Admin** (administrator accounts only) — the whole server at a glance:
+  - health cards: readiness, version, uptime, sessions, tunnels, TCP ports in use, traffic, memory, goroutines, open files, earliest certificate expiry, persistent-state write errors;
+  - one hour of history (10 s samples) as charts: requests/s, 4xx/5xx per second, throughput in and out, sessions, tunnels, heap, goroutines, open files;
+  - response-time distribution (average, p50/p95/p99 bounds) and responses by status class;
+  - every account with its role, limits and live usage; every session with a **Disconnect** button; subdomains held for a dropped client; every certificate with days left; the limits in effect.
+
+### Administrator accounts
+
+Make an account an administrator when creating its token (`-admin=false` takes the role away again; the bootstrap token is always an administrator):
+
+```bash
+wirerift-server token create -account ops -name laptop -admin
+```
+
+When a token file with tokens exists and no bootstrap token is given, the random first-run token is disabled, so the administrator is whoever holds an `-admin` token.
+
+### Reaching the dashboard remotely
+
+By default the dashboard listens on `127.0.0.1:4040` only. Two ways to use it from elsewhere:
+
+```bash
+# 1. SSH tunnel (nothing new is exposed)
+ssh -L 4040:127.0.0.1:4040 you@your-server      # then open http://localhost:4040
+
+# 2. Publish it on the HTTPS edge under its own name
+wirerift-server -domain tunnel.example.com -acme-email you@example.com -dashboard-host dashboard
+# -> https://dashboard.tunnel.example.com  (certificate issued automatically)
+```
+
+`-dashboard-host` takes a label (`dashboard` -> `dashboard.<domain>`) or a full host name and refuses to start without HTTPS. Plain HTTP is redirected to HTTPS, responses carry HSTS and `no-store`, the edge rate limit applies, and every API call still needs a token (ten failed logins from one IP lock it out). `dashboard` is a reserved subdomain, so no tunnel can take the name. Publishing a login page is a choice: prefer the SSH tunnel when a handful of people reach it from fixed machines.
 
 ---
 

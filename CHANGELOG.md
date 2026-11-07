@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Dashboard **Activity** tab: connects, disconnects, tunnel creation and closing, failed logins and revoked sessions (in memory, last 500; an account sees its own, an administrator all).
+- Dashboard **Admin** tab for administrator accounts: health cards, one hour of history charts (requests, errors, throughput, sessions, tunnels, heap, goroutines, open files), response-time distribution, accounts with live usage, all sessions with a Disconnect action, held subdomains, certificate expiry and the limits in effect. New API: `/api/me`, `/api/events`, `/api/admin/{overview,history,accounts,certs}` and `POST /api/admin/sessions/{id}/kick`.
+- `wirerift-server token create -admin[=false]`: administrator accounts. Before, only the bootstrap token (now disabled when a token file is used) could see everything.
+- `-dashboard-host`: serves the dashboard on its own host of the HTTPS edge (HTTP redirects to HTTPS, HSTS, rate limited, token required). Refuses to start without HTTPS.
+
+### Fixed
+- Disabling the bootstrap token also removes its account, so it no longer shows up as an administrator.
+
 ### Removed
 - `website/` and its `Deploy Website` workflow and Dependabot npm entry: the site lives in its own repository.
 

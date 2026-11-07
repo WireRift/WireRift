@@ -156,6 +156,9 @@ func (s *Server) IsCustomDomainActive(host string) bool {
 // created for names that are actually served.
 func (s *Server) IsHostServed(host string) bool {
 	host = normalizeHostHeader(host)
+	if s.isDashboardHost(host) {
+		return true
+	}
 	if sub := extractSubdomain(host, s.config.Domain); sub != "" {
 		_, ok := s.getTunnelBySubdomain(sub)
 		return ok
