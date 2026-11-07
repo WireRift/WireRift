@@ -913,6 +913,8 @@ Client automatically reconnects with exponential backoff (1s → 30s max) and re
 
 The URL survives the drop: the server keeps a lost connection's subdomains reserved for its account for `-offline-grace` (default 2 minutes; `0` releases them at once). Visitors see `503 Tunnel offline` meanwhile, nobody else can take the name, and a tunnel you did not name yourself asks for the same random name again, so the public URL stays the same. If the name was taken after the grace period, the client falls back to a new one.
 
+The same goes for **TCP tunnels**: the public port is reserved for the account for `-offline-grace` as well, nobody else is given it, and the reconnecting client asks for the same port again, so an SSH or database endpoint keeps its address. Closing a tunnel (or exiting) on purpose frees the port at once; if the port was taken after the grace period, the client settles for a new one. The reservation also survives a server restart (`held.json`). A client may ask for a fixed port inside `-tcp-ports` as well (`TunnelRequest.RemotePort`); it is refused with "port already taken" when the port is in use or reserved for another account.
+
 ---
 
 ## License

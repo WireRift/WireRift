@@ -836,8 +836,8 @@ th,td{padding:.5rem .625rem;font-size:.75rem}
 <div class="tbl-wrap"><table><thead><tr><th>Account</th><th>Role</th><th>State</th><th>Sessions</th><th>Tunnels</th><th>Limits</th></tr></thead><tbody id="tbodyAccounts"></tbody></table></div>
 <div class="sec-title">All sessions</div>
 <div class="tbl-wrap"><table><thead><tr><th>ID</th><th>Account</th><th>Remote</th><th>Connected</th><th>Last heartbeat</th><th>Tunnels</th><th></th></tr></thead><tbody id="tbodyAdminSessions"></tbody></table></div>
-<div class="sec-title">Reserved subdomains (client dropped, waiting for reconnect)</div>
-<div class="tbl-wrap"><table><thead><tr><th>Subdomain</th><th>Account</th><th>Held for</th></tr></thead><tbody id="tbodyHeld"></tbody></table></div>
+<div class="sec-title">Reserved subdomains and TCP ports (client dropped, waiting for reconnect)</div>
+<div class="tbl-wrap"><table><thead><tr><th>Subdomain / tcp:port</th><th>Account</th><th>Held for</th></tr></thead><tbody id="tbodyHeld"></tbody></table></div>
 <div class="sec-title">Certificates</div>
 <div class="tbl-wrap"><table><thead><tr><th>Host</th><th>Issuer</th><th>Expires</th><th>Days left</th></tr></thead><tbody id="tbodyCerts"></tbody></table></div>
 <div class="sec-title">Configuration in effect</div>

@@ -1220,10 +1220,14 @@ func (s *Server) takeOver(subdomain string, session *Session, fresh *Tunnel) boo
 // createTCPTunnel handles TCP tunnel creation.
 func (s *Server) createTCPTunnel(m *mux.Mux, session *Session, req *proto.TunnelRequest, tunnelID string) {
 	// Bind before announcing success so a listen failure is reported.
-	listener, port, err := s.listenTunnelPort()
+	listener, port, err := s.listenTCPForRequest(session, req)
 	if err != nil {
 		if errors.Is(err, ErrPortUnavailable) {
 			sendTunnelError(m, "no ports available")
+			return
+		}
+		if errors.Is(err, errPortTaken) || errors.Is(err, errPortOutOfRange) {
+			sendTunnelError(m, err.Error())
 			return
 		}
 		s.logger.Error("failed to start TCP tunnel listener", "error", err)
@@ -1258,6 +1262,8 @@ func (s *Server) createTCPTunnel(m *mux.Mux, session *Session, req *proto.Tunnel
 		return
 	}
 
+	s.held.Delete(tcpHoldKey(port)) // the reservation did its job: the tunnel is registered
+
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
@@ -1270,6 +1276,7 @@ func (s *Server) createTCPTunnel(m *mux.Mux, session *Session, req *proto.Tunnel
 		OK:        true,
 		TunnelID:  tunnelID,
 		Type:      proto.TunnelTypeTCP,
+		Port:      port,
 		PublicURL: tunnel.PublicURL,
 		ExpiresAt: expiresAtPtr(tunnel.ExpiresAt),
 	}
@@ -1427,6 +1434,9 @@ func (s *Server) removeSession(sessionID string) {
 	for _, tunnel := range tunnels {
 		if keep && tunnel.Type == proto.TunnelTypeHTTP && tunnel.CustomDomain == "" {
 			s.holdSubdomain(tunnel.Subdomain, tunnel.AccountID)
+		}
+		if keep && tunnel.Type == proto.TunnelTypeTCP {
+			s.holdPort(tunnel.Port, tunnel.AccountID)
 		}
 		s.teardownTunnel(tunnel)
 	}
@@ -1653,6 +1663,9 @@ func (s *Server) allocatePort() (int, error) {
 			port += portRange
 		}
 
+		if _, held := s.heldPortBy(port); held {
+			continue // reserved for an account whose client is expected back
+		}
 		if _, loaded := s.tcpPorts.LoadOrStore(port, true); !loaded {
 			return port, nil
 		}

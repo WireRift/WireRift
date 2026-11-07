@@ -2,11 +2,14 @@ package server
 
 import (
 	"crypto/tls"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/wirerift/wirerift/internal/proto"
 )
 
 func TestEventLogKeepsNewestAndFilters(t *testing.T) {
@@ -221,5 +224,85 @@ func TestLatencySummaryEmptyAndOverflow(t *testing.T) {
 	_, p50, _, _, b = s.latencySummary(1)
 	if p50 != httpDurationBounds[len(httpDurationBounds)-1]*1000 || b[len(b)-1].Count != 1 {
 		t.Errorf("overflow bucket: p50=%v last=%+v", p50, b[len(b)-1])
+	}
+}
+
+func TestHeldTCPPortsAreSkippedPersistedAndExpire(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.TCPAddrRange = "43000-43004"
+	cfg.OfflineGrace = time.Minute
+	cfg.HeldFile = t.TempDir() + "/held.json"
+	s := New(cfg, nil)
+
+	s.holdPort(43002, "acct_a")
+	if owner, held := s.heldPortBy(43002); !held || owner != "acct_a" {
+		t.Fatalf("heldPortBy = %q %v", owner, held)
+	}
+	seen := map[int]bool{}
+	for i := 0; i < 4; i++ { // every free port of the range, never the reserved one
+		p, err := s.allocatePort()
+		if err != nil {
+			t.Fatalf("allocation %d: %v", i, err)
+		}
+		seen[p] = true
+	}
+	if seen[43002] || len(seen) != 4 {
+		t.Errorf("allocated %v: the reserved port must be skipped", seen)
+	}
+	if _, err := s.allocatePort(); err == nil {
+		t.Error("the range has only the reserved port left; allocation must fail")
+	}
+
+	s.holdSubdomain("shop", "acct_a")
+	s.saveHeld()
+	s2 := New(cfg, nil)
+	s2.loadHeld()
+	if owner, held := s2.heldPortBy(43002); !held || owner != "acct_a" {
+		t.Errorf("port reservation lost over a restart: %q %v", owner, held)
+	}
+	if owner, held := s2.heldBy("shop"); !held || owner != "acct_a" {
+		t.Errorf("subdomain reservation lost over a restart: %q %v", owner, held)
+	}
+
+	s.held.Store(tcpHoldKey(43003), heldName{accountID: "acct_a", until: time.Now().Add(-time.Second)})
+	if _, held := s.heldPortBy(43003); held {
+		t.Error("an expired reservation still counts")
+	}
+}
+
+func TestListenTCPForRequestRules(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.TCPAddrRange = "43100-43110"
+	cfg.OfflineGrace = time.Minute
+	cfg.TCPBindHost = "127.0.0.1"
+	s := New(cfg, nil)
+	alice := &Session{ID: "s1", AccountID: "acct_alice"}
+	bob := &Session{ID: "s2", AccountID: "acct_bob"}
+
+	if _, _, err := s.listenTCPForRequest(alice, &proto.TunnelRequest{RemotePort: 80}); err != errPortOutOfRange {
+		t.Errorf("out of range: %v", err)
+	}
+	s.holdPort(43105, "acct_alice")
+	if _, _, err := s.listenTCPForRequest(bob, &proto.TunnelRequest{RemotePort: 43105}); err != errPortTaken {
+		t.Errorf("another account asking for a reserved port: %v", err)
+	}
+	l, port, err := s.listenTCPForRequest(alice, &proto.TunnelRequest{RemotePort: 43105})
+	if err != nil || port != 43105 {
+		t.Fatalf("the owner asking for its reserved port: %d %v", port, err)
+	}
+	l.Close()
+	s.releasePort(43105)
+
+	// A port held by a foreign program is reported as taken, not as an error.
+	foreign, err := net.Listen("tcp", "127.0.0.1:43106")
+	if err != nil {
+		t.Skipf("cannot occupy a port: %v", err)
+	}
+	defer foreign.Close()
+	if _, _, err := s.listenTCPForRequest(alice, &proto.TunnelRequest{RemotePort: 43106}); err != errPortTaken {
+		t.Errorf("port in use by another program: %v", err)
+	}
+	if _, loaded := s.tcpPorts.Load(43106); loaded {
+		t.Error("a failed bind must not leave the port marked as allocated")
 	}
 }

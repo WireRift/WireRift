@@ -3,6 +3,8 @@ package server
 import (
 	"encoding/json"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/wirerift/wirerift/internal/proto"
@@ -52,9 +54,20 @@ func (s *Server) sweepHeld() {
 
 // heldRecord is one reservation in the held file.
 type heldRecord struct {
-	Subdomain string    `json:"subdomain"`
+	Subdomain string    `json:"subdomain,omitempty"`
+	Port      int       `json:"port,omitempty"` // a reserved TCP port instead of a subdomain
 	AccountID string    `json:"account_id"`
 	Until     time.Time `json:"until"`
+}
+
+// recordFor builds the file record of a table key ("name" or "tcp:<port>").
+func recordFor(key, accountID string, until time.Time) heldRecord {
+	if p, ok := strings.CutPrefix(key, tcpHoldPrefix); ok {
+		if port, err := strconv.Atoi(p); err == nil {
+			return heldRecord{Port: port, AccountID: accountID, Until: until}
+		}
+	}
+	return heldRecord{Subdomain: key, AccountID: accountID, Until: until}
 }
 
 // saveHeld writes the reservations to Config.HeldFile: the names on hold and
@@ -69,7 +82,7 @@ func (s *Server) saveHeld() {
 	var records []heldRecord
 	s.held.Range(func(k, v any) bool {
 		if h := v.(heldName); now.Before(h.until) {
-			records = append(records, heldRecord{k.(string), h.accountID, h.until})
+			records = append(records, recordFor(k.(string), h.accountID, h.until))
 		}
 		return true
 	})
@@ -81,7 +94,10 @@ func (s *Server) saveHeld() {
 		session.mu.RLock()
 		for _, t := range session.Tunnels {
 			if t.Type == proto.TunnelTypeHTTP && t.CustomDomain == "" {
-				records = append(records, heldRecord{t.Subdomain, t.AccountID, until})
+				records = append(records, heldRecord{Subdomain: t.Subdomain, AccountID: t.AccountID, Until: until})
+			}
+			if t.Type == proto.TunnelTypeTCP {
+				records = append(records, heldRecord{Port: t.Port, AccountID: t.AccountID, Until: until})
 			}
 		}
 		session.mu.RUnlock()
@@ -117,7 +133,12 @@ func (s *Server) loadHeld() {
 	}
 	now := time.Now()
 	for _, r := range records {
-		if r.Subdomain != "" && now.Before(r.Until) {
+		if !now.Before(r.Until) {
+			continue
+		}
+		if r.Port > 0 {
+			s.held.Store(tcpHoldKey(r.Port), heldName{accountID: r.AccountID, until: r.Until})
+		} else if r.Subdomain != "" {
 			s.held.Store(r.Subdomain, heldName{accountID: r.AccountID, until: r.Until})
 		}
 	}

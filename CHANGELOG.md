@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- TCP tunnels keep their public port like HTTP tunnels keep their subdomain: when a client drops, the port is reserved for its account for `-offline-grace`, nobody else is handed it (free-port requests skip it), and the reconnecting client asks for the same port, taking it over from its own stale session. It survives a server restart (`held.json`) and shows in the dashboard's reserved list as `tcp:<port>`. Closing on purpose still frees the port at once; a port taken in the meantime makes the client settle for a new one.
+- `TunnelResponse.Port`: the server reports the assigned TCP port. A client may now also ask for a specific port inside the range (`TunnelRequest.RemotePort`, so far ignored); it gets "port already taken" or "port is outside the tunnel port range" when it cannot have it.
+
 ## [1.17.0] - 2026-11-07
 
 ### Added

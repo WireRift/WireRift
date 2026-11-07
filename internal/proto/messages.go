@@ -68,7 +68,8 @@ type TunnelRequest struct {
 
 	// Reconnect marks a request that re-creates a tunnel after the client lost
 	// its connection. The server may then hand the name over from the same
-	// account's previous session, which it has not noticed is dead yet.
+	// account's previous session, which it has not noticed is dead yet. For a
+	// TCP tunnel RemotePort then names the port it had before.
 	Reconnect bool `json:"reconnect,omitempty"`
 }
 
@@ -83,6 +84,10 @@ type TunnelResponse struct {
 	// Subdomain is the name an HTTP tunnel was given, so a client that asked
 	// for a random one can ask for the same name after a reconnect.
 	Subdomain string `json:"subdomain,omitempty"`
+
+	// Port is the public port a TCP tunnel was given, so a client that did not
+	// ask for one can ask for the same port after a reconnect.
+	Port int `json:"port,omitempty"`
 
 	// ExpiresAt is set when the tunnel has a time limit.
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`

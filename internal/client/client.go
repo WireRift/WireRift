@@ -139,6 +139,9 @@ type Tunnel struct {
 	// autoSubdomain marks a name the server picked: a reconnect asks for the
 	// same one so the URL survives, and falls back to a new one if it is gone.
 	autoSubdomain bool
+
+	// autoPort is the same for a TCP tunnel whose public port the server picked.
+	autoPort bool
 }
 
 // New creates a new client.
@@ -579,6 +582,16 @@ func (c *Client) openTunnel(req *proto.TunnelRequest) (*Tunnel, error) {
 		client:    c,
 		request:   req,
 	}
+	if res.Type == proto.TunnelTypeTCP && res.Port != 0 {
+		tunnel.Port = res.Port
+	}
+	if req.RemotePort == 0 && res.Type == proto.TunnelTypeTCP && tunnel.Port != 0 {
+		// The server picked the port: a reconnect asks for the same one.
+		tunnel.autoPort = true
+		pinned := *req
+		pinned.RemotePort = tunnel.Port
+		tunnel.request = &pinned
+	}
 	if req.Subdomain == "" && res.Subdomain != "" && res.Type == proto.TunnelTypeHTTP {
 		tunnel.Subdomain = res.Subdomain
 		tunnel.autoSubdomain = true
@@ -883,24 +896,10 @@ func (c *Client) recreateTunnels() {
 				return
 			}
 		}
-		// The name the server picked is gone (someone else got it): a tunnel the
-		// user never named is better off with a new URL than without one.
-		if err != nil && !expired && !lost && !closed && !t.isClosed() && t.autoSubdomain && errors.Is(err, ErrTunnelFailed) && strings.Contains(err.Error(), "taken") {
-			c.logger.Warn("previous subdomain is taken, asking for a new one", "id", t.ID, "subdomain", request.Subdomain)
-			request.Subdomain = ""
-			// The retries took time: the deadline of a time-limited tunnel has
-			// not moved, so recompute what is left before asking again.
-			if !t.ExpiresAt.IsZero() {
-				remaining := time.Until(t.ExpiresAt)
-				if remaining < time.Second {
-					expired = true
-				} else {
-					request.TTLSeconds = int(remaining / time.Second)
-				}
-			}
-			if !expired {
-				newTunnel, err = c.openTunnel(&request)
-			}
+		// The name or port the server picked is gone (someone else got it): a
+		// tunnel the user never named is better off with a new one than without.
+		if err != nil && !expired && !lost && !closed && !t.isClosed() && (t.autoSubdomain || t.autoPort) && errors.Is(err, ErrTunnelFailed) && strings.Contains(err.Error(), "taken") {
+			newTunnel, expired, err = c.settleForNewName(t, &request)
 		}
 		if newTunnel != nil && err == nil && t.autoSubdomain {
 			newTunnel.autoSubdomain = true // a pinned reconnect request does not set it itself
@@ -933,6 +932,28 @@ func (c *Client) recreateTunnels() {
 	}
 }
 
+// settleForNewName asks again, without the name or port that is gone, for a
+// tunnel the user never named. The retries took time, so the remaining life of
+// a time-limited tunnel is recomputed first; expired reports that it ran out.
+func (c *Client) settleForNewName(t *Tunnel, request *proto.TunnelRequest) (*Tunnel, bool, error) {
+	if t.autoSubdomain {
+		c.logger.Warn("previous subdomain is taken, asking for a new one", "id", t.ID, "subdomain", request.Subdomain)
+		request.Subdomain = ""
+	} else {
+		c.logger.Warn("previous port is taken, asking for a new one", "id", t.ID, "port", request.RemotePort)
+		request.RemotePort = 0
+	}
+	if !t.ExpiresAt.IsZero() {
+		remaining := time.Until(t.ExpiresAt)
+		if remaining < time.Second {
+			return nil, true, nil
+		}
+		request.TTLSeconds = int(remaining / time.Second)
+	}
+	nt, err := c.openTunnel(request)
+	return nt, false, err
+}
+
 func (c *Client) publishTunnelReplacement(oldKey string, current, replacement *Tunnel) bool {
 	current.mu.Lock()
 	if current.closed {
@@ -953,6 +974,7 @@ func (c *Client) publishTunnelReplacement(oldKey string, current, replacement *T
 	current.Port = replacement.Port
 	current.request = replacement.request
 	current.autoSubdomain = autoSubdomain || replacement.autoSubdomain
+	current.autoPort = current.autoPort || replacement.autoPort
 	if originalExpiry.IsZero() {
 		current.ExpiresAt = replacement.ExpiresAt
 	} else {
