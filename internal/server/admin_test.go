@@ -182,3 +182,44 @@ func TestDashboardRouteIsRateLimited(t *testing.T) {
 		t.Error("a flood against the published dashboard was never rate limited")
 	}
 }
+
+func TestStartRecordsHistoryAndEvent(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.ControlAddr, cfg.HTTPAddr, cfg.HTTPSAddr = "127.0.0.1:0", "127.0.0.1:0", ""
+	cfg.TCPAddrRange = "42200-42210"
+	cfg.CertificateExpiry = func() time.Time { return time.Now().Add(48 * time.Hour) }
+	cfg.PersistenceErrors = func() uint64 { return 3 }
+	s := New(cfg, nil)
+	if err := s.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Stop()
+	if len(s.History()) < 1 {
+		t.Error("the sampler must take a first sample at start")
+	}
+	if ev := s.Events(0, ""); len(ev) == 0 || ev[len(ev)-1].Message != "server started" {
+		t.Errorf("events = %+v", ev)
+	}
+	s.tunnels.Store("tcp:42200", &Tunnel{ID: "t", AccountID: "acct_a", Type: "tcp"})
+	s.tcpPorts.Store(42200, true)
+	o := s.AdminOverview()
+	if o.CertExpiry == nil || o.PersistenceErrors != 3 || o.TCPTunnels != 1 || o.TCPPortsUse != 1 || o.TCPPortsMax != 11 {
+		t.Errorf("overview = %+v", o)
+	}
+	if o.OpenFDs == 0 {
+		t.Error("open fds should be counted or -1")
+	}
+}
+
+func TestLatencySummaryEmptyAndOverflow(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+	avg, p50, _, p99, b := s.latencySummary(0)
+	if avg != 0 || p50 != 0 || p99 != 0 || len(b) != len(httpDurationBounds)+1 {
+		t.Errorf("empty: %v %v %v %d", avg, p50, p99, len(b))
+	}
+	s.observeHTTPRequest(200, 30*time.Second) // beyond the last bound
+	_, p50, _, _, b = s.latencySummary(1)
+	if p50 != httpDurationBounds[len(httpDurationBounds)-1]*1000 || b[len(b)-1].Count != 1 {
+		t.Errorf("overflow bucket: p50=%v last=%+v", p50, b[len(b)-1])
+	}
+}

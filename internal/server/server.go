@@ -551,6 +551,7 @@ func (s *Server) Start() error {
 	// visible to concurrent health and metrics requests.
 	s.startTime = time.Now()
 	s.lifecycle = lifecycleRunning
+	s.history.add(s.sampleHistory()) // first sample now, so the charts are never empty
 	s.wg.Add(1)
 	go s.runHistory()
 	s.recordEvent("info", "server", "", "", "", "server started")

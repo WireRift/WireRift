@@ -13,7 +13,9 @@ import (
 	"time"
 
 	"github.com/wirerift/wirerift/internal/auth"
+	"github.com/wirerift/wirerift/internal/dashboard"
 	"github.com/wirerift/wirerift/internal/server"
+	tlspkg "github.com/wirerift/wirerift/internal/tls"
 )
 
 func TestLoadOrCreateDomainSecret(t *testing.T) {
@@ -336,5 +338,72 @@ func TestPublishDashboardNeedsHTTPS(t *testing.T) {
 	}
 	if err := publishDashboard(srv, nil, "dashboard", "t.example", false, logger); err == nil {
 		t.Error("publishing without HTTPS must be refused")
+	}
+}
+
+func TestCertProviderAndApplyTLSManager(t *testing.T) {
+	if certProvider(nil) != nil {
+		t.Error("no TLS manager means no certificate provider")
+	}
+	var cfg server.Config
+	applyTLSManager(&cfg, nil)
+	if cfg.TLSConfig != nil {
+		t.Error("nil manager must leave the config alone")
+	}
+	m, err := tlspkg.NewManager(tlspkg.Config{Domain: "x.test", CertDir: t.TempDir(), AutoCert: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyTLSManager(&cfg, m)
+	if cfg.TLSConfig == nil || cfg.CertificateExpiry == nil || cfg.PersistenceErrors == nil {
+		t.Errorf("manager not applied: %+v", cfg)
+	}
+	if got := certProvider(m)(); len(got) != 0 {
+		t.Errorf("empty cache listed %v", got)
+	}
+}
+
+func TestPublishDashboardPublishes(t *testing.T) {
+	srv := server.New(server.DefaultConfig(), nil)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	dash := dashboard.New(dashboard.Config{Server: srv, AuthManager: auth.NewManager("x")})
+	if err := publishDashboard(srv, dash, "dashboard", "t.example", true, logger); err != nil {
+		t.Fatal(err)
+	}
+	if !srv.IsHostServed("dashboard.t.example") {
+		t.Error("dashboard host not registered on the edge")
+	}
+}
+
+func TestSetupAuth(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	file := filepath.Join(t.TempDir(), "tokens.json")
+	t.Setenv("WIRERIFT_TOKEN", "")
+	t.Setenv("WIRERIFT_TOKEN_FILE", "")
+
+	mgr, source, err := setupAuth("", file, logger) // no token file yet: the random token stays
+	if err != nil || source != "random" || mgr.DevToken() == "" {
+		t.Fatalf("first run: source=%q err=%v", source, err)
+	}
+	if _, err := runTokenCmd(t, "create", "-file", file, "-account", "acme"); err != nil {
+		t.Fatal(err)
+	}
+	mgr, source, err = setupAuth("", file, logger) // token file now has tokens: random one dropped
+	if err != nil || source != "disabled" || mgr.DevToken() != "" {
+		t.Fatalf("with token file: source=%q err=%v", source, err)
+	}
+	mgr, source, err = setupAuth("operator", file, logger) // an operator-supplied token is kept
+	if err != nil || source != "-token flag" || mgr.DevToken() != "operator" {
+		t.Fatalf("with -token: source=%q err=%v", source, err)
+	}
+	if err := os.WriteFile(file, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := setupAuth("", file, logger); err == nil {
+		t.Error("a corrupt token file must stop startup")
+	}
+	t.Setenv("WIRERIFT_TOKEN_FILE", filepath.Join(t.TempDir(), "missing"))
+	if _, _, err := setupAuth("", file, logger); err == nil {
+		t.Error("an unreadable bootstrap token file must stop startup")
 	}
 }

@@ -211,16 +211,10 @@ Environment Variables:
 		}
 	}
 
-	// Create auth manager (flag > env > secret file > random).
-	bootstrapToken, tokenSource, err := resolveBootstrapToken(*tokenFlag)
+	authMgr, tokenSource, err := setupAuth(*tokenFlag, tokenFilePath(*tokensFile, *certDir), logger)
 	if err != nil {
 		return err
 	}
-	authMgr := auth.NewManager(bootstrapToken)
-	if err := loadTokenFile(authMgr, tokenFilePath(*tokensFile, *certDir), logger); err != nil {
-		return err
-	}
-	tokenSource = dropRandomBootstrap(authMgr, tokenSource)
 	devToken := authMgr.DevToken()
 
 	// Create TLS manager before printing connection instructions: when ACME is
@@ -717,4 +711,19 @@ func applyTLSManager(cfg *server.Config, m *tlspkg.Manager) {
 	cfg.ACMEChallengeHandler = m.ACMEChallengeHandler()
 	cfg.CertificateExpiry = m.EarliestCertificateExpiry
 	cfg.PersistenceErrors = m.PersistenceErrors
+}
+
+// setupAuth creates the auth manager: bootstrap token (flag > env > secret
+// file > random) plus the token file, dropping a random bootstrap token when
+// the token file has tokens. It returns the manager and the token source label.
+func setupAuth(tokenFlag, tokenFile string, logger *slog.Logger) (*auth.Manager, string, error) {
+	bootstrapToken, source, err := resolveBootstrapToken(tokenFlag)
+	if err != nil {
+		return nil, "", err
+	}
+	mgr := auth.NewManager(bootstrapToken)
+	if err := loadTokenFile(mgr, tokenFile, logger); err != nil {
+		return nil, "", err
+	}
+	return mgr, dropRandomBootstrap(mgr, source), nil
 }

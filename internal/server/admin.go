@@ -138,7 +138,6 @@ func (s *Server) sampleHistory() HistoryPoint {
 // runHistory samples until the server stops.
 func (s *Server) runHistory() {
 	defer s.wg.Done()
-	s.history.add(s.sampleHistory())
 	t := time.NewTicker(historyInterval)
 	defer t.Stop()
 	for {
@@ -426,7 +425,8 @@ func (s *Server) serveDashboardHost(w http.ResponseWriter, r *http.Request) bool
 		if p := s.config.PublicPort; p != 0 && p != 443 {
 			target = "https://" + net.JoinHostPort(route.host, strconv.Itoa(p))
 		}
-		http.Redirect(w, r, target+r.URL.RequestURI(), http.StatusPermanentRedirect)
+		// The host is the configured dashboard host, never taken from the request.
+		http.Redirect(w, r, target+r.URL.RequestURI(), http.StatusPermanentRedirect) //nolint:gosec // G710: fixed, configured host
 		return true
 	}
 	if r.TLS != nil {
