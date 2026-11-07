@@ -187,6 +187,13 @@ func TestFullFlowThroughTheInterface(t *testing.T) {
 		t.Errorf("stats: %+v", st)
 	}
 
+	e.closeAndDisconnect(t, tv)
+}
+
+// closeAndDisconnect ends a flow: close the tunnel, clear the log, disconnect.
+func (e *env) closeAndDisconnect(t *testing.T, tv TunnelView) {
+	t.Helper()
+	var st State
 	// Closing the tunnel takes it away.
 	e.ok(t, "DELETE", "/api/tunnels/"+tv.ID, nil, nil)
 	e.ok(t, "GET", "/api/state", nil, &st)

@@ -63,7 +63,7 @@ func (e *obsEnv) wait(t *testing.T, n int) []client.Exchange {
 	return nil
 }
 
-func (e *obsEnv) visit(t *testing.T, sub, method, path, body string, hdr map[string]string) (*http.Response, string) {
+func (e *obsEnv) visit(t *testing.T, sub, method, path, body string, hdr map[string]string) (status int, answer string) {
 	t.Helper()
 	req, _ := http.NewRequest(method, "http://"+e.srv.HTTPAddr()+path, strings.NewReader(body))
 	req.Host = sub + "." + e.domain
@@ -76,7 +76,7 @@ func (e *obsEnv) visit(t *testing.T, sub, method, path, body string, hdr map[str
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
-	return resp, string(b)
+	return resp.StatusCode, string(b)
 }
 
 func TestExchangeReportsHTTPRequestAndResponse(t *testing.T) {
@@ -92,9 +92,9 @@ func TestExchangeReportsHTTPRequestAndResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, body := e.visit(t, "obs", "POST", "/items?x=1", "hello world", map[string]string{"Content-Type": "text/plain"})
-	if resp.StatusCode != 201 || body != "got 11 bytes" {
-		t.Fatalf("relay broke: %d %q", resp.StatusCode, body)
+	status, body := e.visit(t, "obs", "POST", "/items?x=1", "hello world", map[string]string{"Content-Type": "text/plain"})
+	if status != 201 || body != "got 11 bytes" {
+		t.Fatalf("relay broke: %d %q", status, body)
 	}
 	x := e.wait(t, 1)[0]
 	if x.Kind != "http" || x.Method != "POST" || x.Path != "/items?x=1" || x.Status != 201 || x.TunnelID != tun.ID {
@@ -142,9 +142,9 @@ func TestExchangeReportsAnUnreachableLocalService(t *testing.T) {
 	if _, err := e.c.HTTP(dead, client.WithSubdomain("dead")); err != nil {
 		t.Fatal(err)
 	}
-	resp, _ := e.visit(t, "dead", "GET", "/", "", nil)
-	if resp.StatusCode != 502 {
-		t.Fatalf("visitor got %d", resp.StatusCode)
+	status, _ := e.visit(t, "dead", "GET", "/", "", nil)
+	if status != 502 {
+		t.Fatalf("visitor got %d", status)
 	}
 	x := e.wait(t, 1)[0]
 	if x.Status != 502 || x.Error == "" || len(x.RespBody) != 0 {
