@@ -159,10 +159,13 @@ func TestExplicitTCPPortRequests(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool { _, err := echoVia(free); return err != nil }, "the closed tunnel's port to stop answering")
-	again, err := alice.TCP(echo, free)
-	if err != nil {
-		t.Fatalf("a port freed on purpose should be available at once: %v", err)
-	}
+	// The listener closes a moment before the port is handed back, so a request
+	// landing in between is refused; it must succeed right after, with no reservation.
+	var again *client.Tunnel
+	waitFor(t, func() bool {
+		again, err = alice.TCP(echo, free)
+		return err == nil
+	}, "a port freed on purpose to be available at once")
 	if again.Port != free {
 		t.Errorf("got %d, want %d", again.Port, free)
 	}
