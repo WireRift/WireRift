@@ -218,9 +218,10 @@ func TestRun_StartFailed_BadControlAddr(t *testing.T) {
 	err := run(context.Background(), []string{
 		"-control", "192.0.2.1:99999",
 		"-http", "192.0.2.1:99998",
+		"-dashboard-port", "0", // not the default 4040, which may be taken on the machine
 	})
 	if err == nil {
-		t.Error("Expected error for bad control address")
+		t.Fatal("Expected error for bad control address")
 	}
 	if !strings.Contains(err.Error(), "failed to start server") {
 		t.Errorf("Expected 'failed to start server', got: %v", err)
