@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.20.0] - 2026-11-07
+
+### Added
+- Admin tab **Access tokens**: list, create and revoke tokens from the dashboard. Every create gives a separate secret (shown once, with a ready client command) for a new or existing account, with label, lifetime, role and limits; revoking one token disconnects its clients and leaves the account's other tokens alone. New API (administrators only): `GET`/`POST /api/admin/tokens`, `POST /api/admin/tokens/{id}/revoke`; needs the token file (answers 501 without one). Actions appear in the activity log without secrets.
+
 ## [1.19.0] - 2026-11-07
 
 ### Added

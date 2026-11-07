@@ -393,6 +393,8 @@ The built-in dashboard at `http://localhost:4040` provides:
 
 ### Administrator accounts
 
+Administrators also manage tokens in the **Admin** tab (no shell on the server needed): the *Access tokens* table lists every token (account, label, role, limits, expiry, status) and *Create a token* makes a new one for a new or existing account, with a label, a lifetime, a role and limits. Each create gives its own secret, shown once with a ready `wirerift` command; **Revoke** disables one token and disconnects its clients at once while the account's other tokens keep working. Changes apply immediately and are written to the same `tokens.json` the `token` command uses (the activity log records who created or revoked what, never a secret).
+
 Make an account an administrator when creating its token (`-admin=false` takes the role away again; the bootstrap token is always an administrator):
 
 ```bash

@@ -386,6 +386,12 @@ func (s *Server) KickSession(id, by string) bool {
 	return true
 }
 
+// RecordAdminEvent logs an administrator's action (token created or revoked,
+// for example) in the activity log. msg must not contain secrets.
+func (s *Server) RecordAdminEvent(by, msg string) {
+	s.recordEvent("info", "admin", "", "", "", msg+" by "+by)
+}
+
 // dashboardRoute serves the dashboard on a host of the HTTP(S) edge.
 type dashboardRoute struct {
 	host    string

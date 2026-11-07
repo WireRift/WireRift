@@ -304,6 +304,9 @@ Environment Variables:
 		Port:         *dashboardAddr,
 		HTTPSEnabled: tlsMgr != nil,
 		Certs:        certProvider(tlsMgr),
+		TokenFile:    tokenFilePath(*tokensFile, *certDir),
+		// A token created or revoked in the Admin tab applies at once.
+		OnTokensChanged: func() { reloadTokens(authMgr, srv, tokenFilePath(*tokensFile, *certDir), logger) },
 	})
 	if err := publishDashboard(srv, dash, *dashHost, *domain, tlsMgr != nil || dev != nil, logger); err != nil {
 		return err

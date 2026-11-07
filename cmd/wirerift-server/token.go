@@ -203,17 +203,4 @@ func tokenRevoke(path string, out io.Writer, id string) error {
 }
 
 // parseLifetime parses a duration with an optional "d" (days) suffix.
-func parseLifetime(s string) (time.Duration, error) {
-	if days, ok := strings.CutSuffix(s, "d"); ok {
-		n, err := strconv.Atoi(days)
-		if err != nil || n <= 0 {
-			return 0, fmt.Errorf("invalid lifetime %q", s)
-		}
-		return time.Duration(n) * 24 * time.Hour, nil
-	}
-	d, err := time.ParseDuration(s)
-	if err != nil || d <= 0 {
-		return 0, fmt.Errorf("invalid lifetime %q", s)
-	}
-	return d, nil
-}
+func parseLifetime(s string) (time.Duration, error) { return auth.ParseLifetime(s) }

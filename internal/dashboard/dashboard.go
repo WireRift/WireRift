@@ -25,12 +25,15 @@ var staticFS embed.FS
 
 // Dashboard provides a web UI for managing WireRift.
 type Dashboard struct {
-	server       *server.Server
-	authManager  *auth.Manager
-	port         int
-	httpsEnabled bool
-	guard        authGuard
-	certs        func() []CertInfo
+	server        *server.Server
+	authManager   *auth.Manager
+	port          int
+	httpsEnabled  bool
+	guard         authGuard
+	certs         func() []CertInfo
+	tokenFile     string
+	tokensChanged func()
+	tokenMu       sync.Mutex
 }
 
 // CertInfo describes one certificate for the administrator view.
@@ -48,6 +51,11 @@ type Config struct {
 	Port         int
 	HTTPSEnabled bool
 	Certs        func() []CertInfo // certificates held by the server (optional)
+	// TokenFile is the token file the Admin tab manages ("" turns token
+	// management off); OnTokensChanged runs after every change so the server
+	// applies it at once.
+	TokenFile       string
+	OnTokensChanged func()
 }
 
 // New creates a new dashboard.
@@ -56,11 +64,13 @@ func New(cfg Config) *Dashboard {
 		cfg.Port = 4040
 	}
 	return &Dashboard{
-		server:       cfg.Server,
-		authManager:  cfg.AuthManager,
-		port:         cfg.Port,
-		httpsEnabled: cfg.HTTPSEnabled,
-		certs:        cfg.Certs,
+		server:        cfg.Server,
+		authManager:   cfg.AuthManager,
+		port:          cfg.Port,
+		httpsEnabled:  cfg.HTTPSEnabled,
+		certs:         cfg.Certs,
+		tokenFile:     cfg.TokenFile,
+		tokensChanged: cfg.OnTokensChanged,
 	}
 }
 
@@ -81,6 +91,8 @@ func (d *Dashboard) Handler() http.Handler {
 	mux.HandleFunc("/api/admin/history", d.authMiddleware(d.adminOnly(d.handleAdminHistory)))
 	mux.HandleFunc("/api/admin/accounts", d.authMiddleware(d.adminOnly(d.handleAdminAccounts)))
 	mux.HandleFunc("/api/admin/certs", d.authMiddleware(d.adminOnly(d.handleAdminCerts)))
+	mux.HandleFunc("/api/admin/tokens", d.authMiddleware(d.adminOnly(d.handleAdminTokens)))
+	mux.HandleFunc("/api/admin/tokens/", d.authMiddleware(d.adminOnly(d.handleAdminTokenAction)))
 	mux.HandleFunc("/api/admin/sessions/", d.authMiddleware(d.adminOnly(d.handleAdminSessionAction)))
 	// Unknown API paths are errors, not the web UI page the "/" catch-all would serve.
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
@@ -684,6 +696,15 @@ border-radius:.375rem;color:var(--tx-0);font-size:.8125rem}
 .cn-status.ok{border:1px solid var(--ok);color:var(--ok)}
 .cn-note{color:var(--tx-2);font-size:.75rem;margin:-.5rem 0 1rem}
 
+
+/* Token management */
+.tok-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(11rem,1fr));gap:.25rem .75rem;margin-top:.5rem}
+.tok-secret{margin-top:1rem;padding:.875rem 1rem;border:1px solid var(--ok);border-radius:.5rem;background:var(--bg-2)}
+.tok-secret code{display:block;margin:.5rem 0;padding:.5rem .75rem;background:var(--bg-1);border-radius:.375rem;word-break:break-all;user-select:all}
+.tok-off{opacity:.55}
+#tokNew{margin-top:1rem}
+#tokNew .cn-note{margin:.75rem 0}
+
 /* Empty state */
 .empty{text-align:center;padding:2.5rem 1rem;color:var(--tx-2);font-size:.875rem}
 
@@ -904,6 +925,23 @@ th,td{padding:.5rem .625rem;font-size:.75rem}
 </div>
 <div class="sec-title">Accounts</div>
 <div class="tbl-wrap"><table><thead><tr><th>Account</th><th>Role</th><th>State</th><th>Sessions</th><th>Tunnels</th><th>Limits</th></tr></thead><tbody id="tbodyAccounts"></tbody></table></div>
+<div class="sec-title">Access tokens</div>
+<div class="tbl-wrap"><table><thead><tr><th>ID</th><th>Account</th><th>Name</th><th>Role</th><th>Limits</th><th>Created</th><th>Expires</th><th>Status</th><th></th></tr></thead><tbody id="tbodyTokens"></tbody></table></div>
+<div class="cn-note" id="tokensOff" style="display:none"></div>
+<details class="cn-form" id="tokNew"><summary>Create a token</summary>
+<div class="tok-grid">
+<div><label for="tokAccount">Account <span class="hint">new or existing</span></label><input id="tokAccount" type="text" list="tokAccounts" autocomplete="off" spellcheck="false" placeholder="alice"><datalist id="tokAccounts"></datalist></div>
+<div><label for="tokName">Label</label><input id="tokName" type="text" autocomplete="off" placeholder="laptop"></div>
+<div><label for="tokExpires">Valid for</label><select id="tokExpires"><option value="">forever</option><option value="1h">1 hour</option><option value="24h">1 day</option><option value="7d">7 days</option><option value="30d">30 days</option><option value="90d">90 days</option><option value="365d">1 year</option></select></div>
+<div><label for="tokRole">Role</label><select id="tokRole"><option value="">unchanged (new: user)</option><option value="admin">administrator</option><option value="user">regular user</option></select></div>
+<div><label for="tokMaxT">Max tunnels <span class="hint">empty = unchanged</span></label><input id="tokMaxT" type="number" min="0"></div>
+<div><label for="tokMaxS">Max sessions</label><input id="tokMaxS" type="number" min="0"></div>
+<div><label for="tokRate">Tunnel creations / s</label><input id="tokRate" type="number" min="0"></div>
+</div>
+<p class="cn-note">Every token has its own secret and can be revoked on its own. Account limits and role are shared by all tokens of an account, so setting them here changes them for its other tokens too.</p>
+<button class="btn" id="tokCreate">Create token</button>
+</details>
+<div class="tok-secret" id="tokSecret" style="display:none"></div>
 <div class="sec-title">All sessions</div>
 <div class="tbl-wrap"><table><thead><tr><th>ID</th><th>Account</th><th>Remote</th><th>Connected</th><th>Last heartbeat</th><th>Tunnels</th><th></th></tr></thead><tbody id="tbodyAdminSessions"></tbody></table></div>
 <div class="sec-title">Reserved subdomains and TCP ports (client dropped, waiting for reconnect)</div>
@@ -1899,6 +1937,7 @@ function loadAdmin(){
         apiFetch('/api/admin/certs'), apiFetch('/api/sessions')
     ]).then(function(r){
         renderAdmin(r[0], r[1] || [], r[2] || [], r[3] || [], r[4] || []);
+        loadTokens();
         $('adminStamp').textContent = 'updated ' + fmtTime(new Date());
         $('adminStamp').className = 'pill ok';
     }).catch(function(e){ $('adminStamp').textContent = 'update failed: ' + e.message; $('adminStamp').className = 'pill bad'; });
@@ -1978,6 +2017,84 @@ function renderAdmin(o, h, accts, certs, sess){
         card('Offline grace', fmtUptime(o.offline_grace_seconds), 'names held after a drop') +
         card('Trusted proxies', o.trusted_proxy_cidrs, 'CIDR ranges');
 }
+
+/* -- Token management --------------------------------------- */
+function tokCall(method, path, body){
+    return fetch(path, {
+        method: method,
+        headers: {'Authorization': 'Bearer ' + apiToken, 'Content-Type': 'application/json'},
+        body: body ? JSON.stringify(body) : null
+    }).then(function(r){
+        return r.json().catch(function(){ return {}; }).then(function(j){
+            if(!r.ok){ var e = new Error(j.error || ('API error ' + r.status)); e.status = r.status; throw e; }
+            return j;
+        });
+    });
+}
+function loadTokens(){
+    tokCall('GET', '/api/admin/tokens').then(function(list){
+        $('tokensOff').style.display = 'none';
+        $('tokNew').style.display = '';
+        renderTokens(list || []);
+    }).catch(function(e){
+        $('tbodyTokens').innerHTML = '';
+        $('tokNew').style.display = 'none';
+        $('tokensOff').style.display = '';
+        $('tokensOff').textContent = e.status === 501 ? 'Token management is off: this server has no token file.' : 'Tokens unavailable: ' + e.message;
+    });
+}
+function renderTokens(list){
+    var rows = '', names = {}, i;
+    for(i = 0; i < list.length; i++){
+        var t = list[i], lim = [];
+        names[t.account] = true;
+        if(t.max_tunnels) lim.push('tunnels≤' + t.max_tunnels);
+        if(t.max_sessions) lim.push('sessions≤' + t.max_sessions);
+        if(t.rate_limit) lim.push('rate ' + t.rate_limit + '/s');
+        var cls = t.status === 'active' ? 'ok' : (t.status === 'expired' ? 'warn' : 'bad');
+        rows += '<tr' + (t.status === 'active' ? '' : ' class="tok-off"') + '><td>' + escHtml(t.id) + '</td><td>' + escHtml(t.account) + '</td><td>' + escHtml(t.name || '-') + '</td><td>' +
+            (t.admin ? '<span class="pill warn">admin</span>' : 'user') + '</td><td>' + escHtml(lim.join(', ') || '-') + '</td><td>' + fmtTimeDate(t.created_at) + '</td><td>' +
+            (t.expires_at ? fmtTimeDate(t.expires_at) : 'never') + '</td><td><span class="pill ' + cls + '">' + escHtml(t.status) + '</span></td><td>' +
+            (t.status === 'revoked' ? '' : '<button class="btn-danger" data-revoke="' + escHtml(t.id) + '">Revoke</button>') + '</td></tr>';
+    }
+    $('tbodyTokens').innerHTML = rows || '<tr><td colspan="9" style="color:var(--tx-2)">No tokens in the token file</td></tr>';
+    var opts = '';
+    for(var n in names) opts += '<option value="' + escHtml(n) + '">';
+    $('tokAccounts').innerHTML = opts;
+}
+function tokNum(id){ var v = $(id).value.trim(); return v === '' ? undefined : parseInt(v, 10); }
+function createToken(){
+    var body = {account: $('tokAccount').value.trim(), name: $('tokName').value.trim(), expires: $('tokExpires').value};
+    var role = $('tokRole').value;
+    if(role) body.admin = role === 'admin';
+    var mt = tokNum('tokMaxT'), ms = tokNum('tokMaxS'), rt = tokNum('tokRate');
+    if(mt !== undefined) body.max_tunnels = mt;
+    if(ms !== undefined) body.max_sessions = ms;
+    if(rt !== undefined) body.rate_limit = rt;
+    if(!body.account){ toast('Give an account name', 'err'); return; }
+    tokCall('POST', '/api/admin/tokens', body).then(function(res){
+        showSecret(res);
+        $('tokName').value = '';
+        loadTokens(); loadAdmin(); loadActivity();
+    }).catch(function(e){ toast('Failed: ' + e.message, 'err'); });
+}
+function showSecret(res){
+    var info = cnInfo || {};
+    var cmd = cnBuild({type: 'http', port: 8080, sub: '', inspect: false, auth: '', pin: '', allow: '', ttl: '',
+        server: info.server_arg || (location.hostname + ':4443'), token: res.secret, os: cnGuessOS()});
+    var box = $('tokSecret');
+    box.style.display = '';
+    box.innerHTML = '<strong>Token ' + escHtml(res.id) + ' for ' + escHtml(res.account) + '</strong> <span class="pill warn">shown only now</span>' +
+        '<code id="tokSecretText"></code><button class="btn-sm" id="tokCopySecret">Copy token</button>' +
+        '<p class="cn-note" style="margin:.75rem 0 .25rem">Try it (port 8080 as an example, change it in the Connect tab):</p><code id="tokCmdText"></code>' +
+        '<button class="btn-sm" id="tokCopyCmd">Copy command</button> <button class="btn-ghost" id="tokHide">Hide</button>';
+    $('tokSecretText').textContent = res.secret;
+    $('tokCmdText').textContent = cmd;
+    $('tokCopySecret').onclick = function(){ copyToClipboard(res.secret); toast('Token copied', 'ok'); };
+    $('tokCopyCmd').onclick = function(){ copyToClipboard(cmd); toast('Command copied', 'ok'); };
+    $('tokHide').onclick = function(){ box.style.display = 'none'; box.innerHTML = ''; };
+}
+
 document.addEventListener('click', function(ev){
     var t = ev.target;
     if(t && t.getAttribute && t.getAttribute('data-kick')){
@@ -1985,6 +2102,13 @@ document.addEventListener('click', function(ev){
         if(!confirm('Disconnect session ' + id + '? The client may reconnect; revoke its token to keep it out.')) return;
         apiFetch('/api/admin/sessions/' + encodeURIComponent(id) + '/kick', {method: 'POST'}).then(function(){
             toast('Session disconnected', 'ok'); loadAdmin(); loadActivity();
+        }).catch(function(e){ toast('Failed: ' + e.message, 'err'); });
+    }
+    if(t && t.getAttribute && t.getAttribute('data-revoke')){
+        var tid = t.getAttribute('data-revoke');
+        if(!confirm('Revoke token ' + tid + '? Clients using it are disconnected at once and cannot log in again.')) return;
+        tokCall('POST', '/api/admin/tokens/' + encodeURIComponent(tid) + '/revoke').then(function(){
+            toast('Token revoked', 'ok'); loadTokens(); loadAdmin(); loadActivity();
         }).catch(function(e){ toast('Failed: ' + e.message, 'err'); });
     }
 });
@@ -2032,6 +2156,7 @@ function init(){
     $('refreshTunnels').onclick = function(){ loadTunnels(); toast('Tunnels refreshed', 'info'); };
     $('refreshSessions').onclick = function(){ loadSessions(); toast('Sessions refreshed', 'info'); };
     $('refreshRequests').onclick = function(){ loadRequests(); toast('Inspector refreshed', 'info'); };
+    $('tokCreate').onclick = createToken;
     $('refreshActivity').onclick = function(){ loadActivity(); toast('Activity refreshed', 'info'); };
     $('refreshAdmin').onclick = function(){ loadAdmin(); toast('Admin view refreshed', 'info'); };
     $('searchActivity').oninput = renderActivity;

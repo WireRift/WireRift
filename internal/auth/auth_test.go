@@ -490,3 +490,16 @@ func TestAdminRoleFromTokenFile(t *testing.T) {
 		t.Errorf("ListAccounts not sorted: %v", accts)
 	}
 }
+
+func TestParseLifetime(t *testing.T) {
+	for in, want := range map[string]time.Duration{"90m": 90 * time.Minute, "12h": 12 * time.Hour, "30d": 30 * 24 * time.Hour} {
+		if got, err := ParseLifetime(in); err != nil || got != want {
+			t.Errorf("ParseLifetime(%q) = %v, %v", in, got, err)
+		}
+	}
+	for _, bad := range []string{"", "0d", "-3d", "abc", "0s", "xd"} {
+		if _, err := ParseLifetime(bad); err == nil {
+			t.Errorf("ParseLifetime(%q) accepted", bad)
+		}
+	}
+}

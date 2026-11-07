@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -195,4 +196,21 @@ func (f *TokenFile) Account(id string) (FileAccount, bool) {
 		}
 	}
 	return FileAccount{}, false
+}
+
+// ParseLifetime parses a token lifetime: a Go duration with an optional "d"
+// (days) suffix, for example "12h" or "30d".
+func ParseLifetime(s string) (time.Duration, error) {
+	if days, ok := strings.CutSuffix(s, "d"); ok {
+		n, err := strconv.Atoi(days)
+		if err != nil || n <= 0 {
+			return 0, fmt.Errorf("invalid lifetime %q", s)
+		}
+		return time.Duration(n) * 24 * time.Hour, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("invalid lifetime %q", s)
+	}
+	return d, nil
 }
