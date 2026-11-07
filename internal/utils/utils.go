@@ -1,6 +1,8 @@
 // Package utils provides common utility functions
 package utils
 
+import "sort"
+
 // IsValidSubdomain checks if a subdomain is valid per RFC 1123.
 func IsValidSubdomain(subdomain string) bool {
 	if len(subdomain) == 0 || len(subdomain) > 63 {
@@ -33,6 +35,16 @@ var reservedSubdomains = map[string]bool{
 	"mail": true, "smtp": true, "ftp": true, "ns1": true, "ns2": true,
 	"status": true, "wirerift": true, "localhost": true, "root": true,
 	"support": true, "help": true, "login": true, "auth": true,
+}
+
+// ReservedSubdomains lists the reserved names, sorted.
+func ReservedSubdomains() []string {
+	out := make([]string, 0, len(reservedSubdomains))
+	for name := range reservedSubdomains {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // IsReservedSubdomain reports whether a (lowercase) subdomain is reserved.

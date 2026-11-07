@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/wirerift/wirerift/internal/proto"
+	"github.com/wirerift/wirerift/internal/utils"
 )
 
 // This file holds what the administrator view of the dashboard needs: a short
@@ -439,4 +440,46 @@ func (s *Server) serveDashboardHost(w http.ResponseWriter, r *http.Request) bool
 	r2.RemoteAddr = net.JoinHostPort(clientIP, "0")
 	route.handler.ServeHTTP(w, r2)
 	return true
+}
+
+// ConnectInfo is what a person needs to point a client at this server: the
+// dashboard's Connect page builds ready-to-run commands from it.
+type ConnectInfo struct {
+	Version      string   `json:"version"`
+	Domain       string   `json:"domain"`
+	ControlHost  string   `json:"control_host"`
+	ControlPort  int      `json:"control_port"`
+	ControlTLS   bool     `json:"control_tls"`
+	ServerArg    string   `json:"server_arg"` // the value for the client's -server flag
+	PublicScheme string   `json:"public_scheme"`
+	PublicPort   int      `json:"public_port"`
+	TCPPortStart int      `json:"tcp_port_start"`
+	TCPPortEnd   int      `json:"tcp_port_end"`
+	Reserved     []string `json:"reserved_subdomains"`
+}
+
+// ConnectInfo describes how clients reach this server.
+func (s *Server) ConnectInfo() ConnectInfo {
+	info := ConnectInfo{
+		Version:      s.config.Version,
+		Domain:       s.config.Domain,
+		ControlHost:  s.config.Domain,
+		ControlTLS:   s.config.ControlTLSConfig != nil,
+		PublicScheme: s.config.PublicScheme,
+		PublicPort:   s.config.PublicPort,
+		TCPPortStart: s.tcpPortStart,
+		TCPPortEnd:   s.tcpPortEnd,
+		Reserved:     utils.ReservedSubdomains(),
+	}
+	if info.PublicScheme == "" {
+		info.PublicScheme = "http"
+	}
+	if _, port, err := net.SplitHostPort(s.ControlAddr()); err == nil {
+		info.ControlPort, _ = strconv.Atoi(port)
+	}
+	info.ServerArg = net.JoinHostPort(info.ControlHost, strconv.Itoa(info.ControlPort))
+	if info.ControlTLS {
+		info.ServerArg = "tls://" + info.ServerArg
+	}
+	return info
 }

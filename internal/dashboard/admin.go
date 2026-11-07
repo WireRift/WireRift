@@ -139,3 +139,10 @@ func (d *Dashboard) handleAdminSessionAction(w http.ResponseWriter, r *http.Requ
 	}
 	d.jsonResponse(w, map[string]string{"status": "disconnected"})
 }
+
+// handleConnect tells any signed-in caller how to reach the server with a client.
+func (d *Dashboard) handleConnect(w http.ResponseWriter, r *http.Request) {
+	if d.getOnly(w, r) {
+		d.jsonResponse(w, d.server.ConnectInfo())
+	}
+}

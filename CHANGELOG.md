@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.19.0] - 2026-11-07
+
+### Added
+- Dashboard **Connect** tab: choose what to publish (web or TCP, local port, subdomain, inspect, basic auth, PIN, IP allow-list, auto-close) and the operating system, and get the install command and the ready-to-run `wirerift` command for this server, token included (masked on screen, copied in full; or a `YOUR_TOKEN` placeholder). The page shows "Connected" when the tunnel appears. New `GET /api/connect` (any signed-in account) with the control address, public scheme, TCP port range and reserved subdomains.
+
 ## [1.18.1] - 2026-11-07
 
 ### Fixed

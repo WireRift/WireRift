@@ -306,3 +306,33 @@ func TestListenTCPForRequestRules(t *testing.T) {
 		t.Error("a failed bind must not leave the port marked as allocated")
 	}
 }
+
+func TestConnectInfoDescribesTheServer(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Domain = "tunnel.example.com"
+	cfg.Version = "9.9.9"
+	cfg.ControlAddr = "127.0.0.1:4443"
+	cfg.PublicScheme = "https"
+	cfg.PublicPort = 443
+	s := New(cfg, nil)
+	info := s.ConnectInfo()
+	if info.Domain != "tunnel.example.com" || info.Version != "9.9.9" || info.ControlPort != 4443 {
+		t.Errorf("basics: %+v", info)
+	}
+	if info.ServerArg != "tunnel.example.com:4443" || info.ControlTLS {
+		t.Errorf("plain control plane: %q tls=%v", info.ServerArg, info.ControlTLS)
+	}
+	if info.PublicScheme != "https" || info.TCPPortEnd < info.TCPPortStart {
+		t.Errorf("public side: %+v", info)
+	}
+
+	cfg.ControlTLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	cfg.PublicScheme = ""
+	info = New(cfg, nil).ConnectInfo()
+	if info.ServerArg != "tls://tunnel.example.com:4443" || !info.ControlTLS {
+		t.Errorf("TLS control plane: %q tls=%v", info.ServerArg, info.ControlTLS)
+	}
+	if info.PublicScheme != "http" {
+		t.Errorf("default scheme: %q", info.PublicScheme)
+	}
+}

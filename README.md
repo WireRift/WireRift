@@ -370,9 +370,10 @@ wirerift start wirerift.json
 The built-in dashboard at `http://localhost:4040` provides:
 
 - **Dark/Light theme** — toggle with button or persisted preference
-- **Tabbed navigation** — Tunnels / Sessions / Inspector / Activity (and Admin for administrators) with live count badges
-- **Keyboard shortcuts** — `R` refresh, `T` tunnels, `S` sessions, `I` inspector, `A` activity, `D` admin
+- **Tabbed navigation** — Tunnels / Connect / Sessions / Inspector / Activity (and Admin for administrators) with live count badges
+- **Keyboard shortcuts** — `R` refresh, `T` tunnels, `C` connect, `S` sessions, `I` inspector, `A` activity, `D` admin
 - **Tunnel management** — copy URL to clipboard, status indicators
+- **Connect** — fill in what to publish (web or TCP, local port, subdomain, inspect, basic auth, PIN, IP allow-list, auto-close) and where it runs (Linux, macOS, Windows); the page writes the install command and the exact `wirerift` command for this server, with your token (hidden on screen, copied in full), and shows "Connected" as soon as the tunnel is up
 - **Traffic Inspector** — real-time request/response log with:
   - Method badges (GET=green, POST=blue, PUT=amber, DELETE=red)
   - Status code coloring (2xx=green, 4xx=red, 5xx=red)

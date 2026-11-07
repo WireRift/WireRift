@@ -287,3 +287,37 @@ func TestAdminViewWithLiveClients(t *testing.T) {
 		t.Error("the kick was not recorded as an event")
 	}
 }
+
+// Any signed-in account (not only administrators) can read how to reach the
+// server; a request without a token cannot.
+func TestConnectInfoForAnyAccount(t *testing.T) {
+	h, _, userTok := adminFixture(t)
+	if rr := get(h, "GET", "/api/connect", ""); rr.Code != http.StatusUnauthorized {
+		t.Errorf("without a token: %d", rr.Code)
+	}
+	rr := get(h, "GET", "/api/connect", userTok)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("plain account: %d %s", rr.Code, rr.Body)
+	}
+	var info server.ConnectInfo
+	if err := json.Unmarshal(rr.Body.Bytes(), &info); err != nil {
+		t.Fatal(err)
+	}
+	if info.ServerArg == "" || info.TCPPortStart == 0 || len(info.Reserved) == 0 {
+		t.Errorf("incomplete connect info: %+v", info)
+	}
+	if rr := get(h, "POST", "/api/connect", userTok); rr.Code != http.StatusMethodNotAllowed {
+		t.Errorf("POST: %d", rr.Code)
+	}
+}
+
+// The page carries the Connect tab and the command builder.
+func TestIndexHasConnectPage(t *testing.T) {
+	h, _, _ := adminFixture(t)
+	body := get(h, "GET", "/", "").Body.String()
+	for _, want := range []string{`data-tab="connect"`, `id="panelConnect"`, "function cnBuild", "WIRERIFT_TOKEN"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("index page lacks %q", want)
+		}
+	}
+}

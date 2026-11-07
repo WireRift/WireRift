@@ -130,6 +130,7 @@ owner's approved SLOs.
   `X-Forwarded-For`/`Forwarded` is not treated as loopback) and every other
   caller only with `Authorization: Bearer <token>`. Point a remote Prometheus at
   it with `authorization.credentials_file`.
+- The dashboard's **Connect** tab (every account) builds the install and `wirerift` commands for this server from `GET /api/connect`: the control address (`tls://` when the control plane serves TLS), public URL scheme, TCP port range and reserved subdomains. Set `-domain` to the public name so the commands carry it.
 - The dashboard has an **Admin** tab for administrator tokens (`token create -admin`): health, one hour of
   rate/latency/memory/fd history, accounts, sessions (with Disconnect), held subdomains, certificate expiry
   and the Activity log. Reach it with `ssh -L 4040:127.0.0.1:4040 host` or publish it with

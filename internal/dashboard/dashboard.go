@@ -75,6 +75,7 @@ func (d *Dashboard) Handler() http.Handler {
 	mux.HandleFunc("/api/requests", d.authMiddleware(d.handleRequests))
 	mux.HandleFunc("/api/requests/", d.authMiddleware(d.handleRequestActions))
 	mux.HandleFunc("/api/me", d.authMiddleware(d.handleMe))
+	mux.HandleFunc("/api/connect", d.authMiddleware(d.handleConnect))
 	mux.HandleFunc("/api/events", d.authMiddleware(d.handleEvents))
 	mux.HandleFunc("/api/admin/overview", d.authMiddleware(d.adminOnly(d.handleAdminOverview)))
 	mux.HandleFunc("/api/admin/history", d.authMiddleware(d.adminOnly(d.handleAdminHistory)))
@@ -658,6 +659,31 @@ font-family:'SF Mono',SFMono-Regular,Consolas,monospace;
 /* Copy feedback */
 .copy-ok{color:var(--ok) !important;transition:color .15s}
 
+
+/* Connect page */
+.cn-grid{display:grid;grid-template-columns:minmax(0,22rem) minmax(0,1fr);gap:1.5rem;align-items:start}
+@media (max-width:860px){.cn-grid{grid-template-columns:minmax(0,1fr)}}
+.cn-form label{display:block;font-size:.75rem;color:var(--tx-1);margin:.75rem 0 .25rem}
+.cn-form input[type=text],.cn-form input[type=number],.cn-form select,.cn-out select{
+width:100%;padding:.4375rem .625rem;background:var(--bg-1);border:1px solid var(--bd);
+border-radius:.375rem;color:var(--tx-0);font-size:.8125rem}
+.cn-form input:focus,.cn-form select:focus,.cn-out select:focus{outline:none;border-color:var(--ac)}
+.cn-form input.bad{border-color:var(--err,#ef4444)}
+.cn-form .hint{color:var(--tx-2);font-weight:400}
+.cn-form .chk{display:flex;align-items:center;gap:.5rem;font-size:.8125rem;color:var(--tx-0);margin:.75rem 0 0}
+.cn-seg{display:flex;border:1px solid var(--bd);border-radius:.5rem;overflow:hidden}
+.cn-seg button{flex:1;padding:.5rem .75rem;background:var(--bg-1);color:var(--tx-1);border:none;cursor:pointer;font-size:.8125rem}
+.cn-seg button.on{background:var(--ac);color:#fff}
+.cn-url{margin-top:.75rem;padding:.5rem .75rem;background:var(--bg-2);border-radius:.375rem;word-break:break-all}
+.cn-form details{margin-top:.75rem}
+.cn-form summary{cursor:pointer;font-size:.8125rem;color:var(--tx-1)}
+.cn-box{position:relative;background:var(--bg-2);border:1px solid var(--bd);border-radius:.5rem;padding:.75rem 4.5rem .75rem .875rem;margin:.375rem 0 1rem;overflow-x:auto}
+.cn-box pre{margin:0;white-space:pre-wrap;word-break:break-all}
+.cn-box .btn-sm{position:absolute;top:.5rem;right:.5rem}
+.cn-status{padding:.625rem .875rem;border-radius:.5rem;background:var(--bg-2);font-size:.8125rem}
+.cn-status.ok{border:1px solid var(--ok);color:var(--ok)}
+.cn-note{color:var(--tx-2);font-size:.75rem;margin:-.5rem 0 1rem}
+
 /* Empty state */
 .empty{text-align:center;padding:2.5rem 1rem;color:var(--tx-2);font-size:.875rem}
 
@@ -759,6 +785,7 @@ th,td{padding:.5rem .625rem;font-size:.75rem}
 <!-- Tabs -->
 <div class="tabs" id="tabBar">
 <div class="tab active" data-tab="tunnels">Tunnels <span class="tab-badge" id="badgeTunnels">0</span> <span class="kbd">T</span></div>
+<div class="tab" data-tab="connect">Connect <span class="kbd">C</span></div>
 <div class="tab" data-tab="sessions">Sessions <span class="tab-badge" id="badgeSessions">0</span> <span class="kbd">S</span></div>
 <div class="tab" data-tab="inspector">Inspector <span class="tab-badge" id="badgeInspector">0</span> <span class="kbd">I</span></div>
 <div class="tab" data-tab="activity">Activity <span class="tab-badge" id="badgeActivity">0</span> <span class="kbd">A</span></div>
@@ -805,6 +832,49 @@ th,td{padding:.5rem .625rem;font-size:.75rem}
 <tbody id="tbodyRequests"></tbody></table>
 </div>
 <div class="empty" id="emptyRequests" style="display:none">No captured requests</div>
+</div>
+
+<!-- Connect Panel -->
+<div class="panel" id="panelConnect">
+<div class="cn-grid">
+<div class="cn-form">
+<div class="sec-title" style="margin-top:0">1. What do you want to publish?</div>
+<div class="cn-seg" id="cnType"><button class="on" data-v="http">Web (HTTP / HTTPS)</button><button data-v="tcp">TCP</button></div>
+<label for="cnPort">Local port (forwarded from localhost)</label>
+<input id="cnPort" type="number" min="1" max="65535" value="3000">
+<div id="cnSubWrap"><label for="cnSub">Subdomain <span class="hint">(empty = a random one)</span></label>
+<input id="cnSub" type="text" placeholder="myapp" autocomplete="off" spellcheck="false"></div>
+<div class="cn-url mono" id="cnUrl"></div>
+<details><summary>More options</summary>
+<div id="cnHttpOpts">
+<label class="chk"><input type="checkbox" id="cnInspect"> Inspect traffic (Inspector tab)</label>
+<label for="cnAuth">Basic auth <span class="hint">user:password</span></label>
+<input id="cnAuth" type="text" autocomplete="off" spellcheck="false">
+<label for="cnPin">PIN <span class="hint">visitors enter it once</span></label>
+<input id="cnPin" type="text" autocomplete="off" spellcheck="false">
+<label for="cnAllow">IP allow-list <span class="hint">1.2.3.4,10.0.0.0/8</span></label>
+<input id="cnAllow" type="text" autocomplete="off" spellcheck="false">
+</div>
+<label for="cnTtl">Close automatically after</label>
+<select id="cnTtl"><option value="">never</option><option value="30m">30 minutes</option><option value="2h">2 hours</option><option value="8h">8 hours</option><option value="24h">24 hours</option></select>
+</details>
+<label class="chk"><input type="checkbox" id="cnTok" checked> Put my token in the command</label>
+</div>
+<div class="cn-out">
+<div class="sec-title" style="margin-top:0">2. Where will it run?</div>
+<select id="cnOS">
+<option value="linux-amd64">Linux (x86-64)</option><option value="linux-arm64">Linux (ARM64)</option>
+<option value="darwin-arm64">macOS (Apple silicon)</option><option value="darwin-amd64">macOS (Intel)</option>
+<option value="windows-amd64">Windows (PowerShell)</option>
+</select>
+<div class="sec-title">Install the client <span class="hint">(once)</span></div>
+<div class="cn-box"><pre class="mono" id="cnInstall"></pre><button class="btn-sm" id="cnCopyInstall">Copy</button></div>
+<div class="sec-title">3. Run this on that machine</div>
+<div class="cn-box"><pre class="mono" id="cnCmd"></pre><button class="btn-sm" id="cnCopyCmd">Copy</button></div>
+<div class="cn-note" id="cnNote"></div>
+<div class="cn-status" id="cnStatus">Waiting for the connection...</div>
+</div>
+</div>
 </div>
 
 <!-- Activity Panel -->
@@ -1585,6 +1655,7 @@ function copyUrl(btn){
 /* -- Tab Switching ------------------------------------------ */
 function switchTab(name){
     currentTab = name;
+    if(name === 'connect' && typeof cnRender === 'function') cnRender();
     var tabs = qsa('.tab');
     for(var i = 0; i < tabs.length; i++){
         var t = tabs[i];
@@ -1600,9 +1671,151 @@ function switchTab(name){
 }
 
 
+
+/* -- Connect ------------------------------------------------ */
+var cnInfo = null, cnBase = {}, cnTimer = null, cnType = 'http';
+var CN_REPO = 'https://github.com/WireRift/WireRift/releases/latest/download/';
+function cnQuote(v, win, force){
+    if(!force && /^[A-Za-z0-9_.:\/@%+=,-]+$/.test(v)) return v;
+    if(win) return "'" + v.replace(/'/g, "''") + "'";
+    return "'" + v.replace(/'/g, "'\\''") + "'";
+}
+function cnMaskToken(t){ return t.length > 6 ? t.slice(0, 4) + '...' : '...'; }
+/* o: {type, port, sub, inspect, auth, pin, allow, ttl, server, token, os}; returns the shell text */
+function cnBuild(o){
+    var win = o.os.indexOf('windows') === 0;
+    var args = [win ? '.\\wirerift.exe' : './wirerift', o.type];
+    if(o.type === 'http'){
+        if(o.inspect) args.push('-inspect');
+        if(o.auth) args.push('-auth', cnQuote(o.auth, win));
+        if(o.pin) args.push('-pin', cnQuote(o.pin, win));
+        if(o.allow) args.push('-whitelist', cnQuote(o.allow, win));
+    }
+    if(o.ttl) args.push('-ttl', o.ttl);
+    args.push('-server', cnQuote(o.server, win), String(o.port));
+    if(o.type === 'http' && o.sub) args.push(o.sub);
+    var tok = o.token || 'YOUR_TOKEN';
+    if(win) return "$env:WIRERIFT_TOKEN = " + cnQuote(tok, true, true) + "\n" + args.join(' ');
+    return 'WIRERIFT_TOKEN=' + cnQuote(tok, false, true) + ' ' + args.join(' ');
+}
+function cnInstallText(os){
+    var asset = 'wirerift-' + os + (os.indexOf('windows') === 0 ? '.exe' : '');
+    if(os.indexOf('windows') === 0) return 'Invoke-WebRequest -Uri ' + CN_REPO + asset + ' -OutFile wirerift.exe';
+    return 'curl -fsSL -o wirerift ' + CN_REPO + asset + ' && chmod +x wirerift';
+}
+function cnGuessOS(){
+    var ua = (navigator.userAgent || '') + ' ' + (navigator.platform || '');
+    if(/Win/i.test(ua)) return 'windows-amd64';
+    if(/Mac/i.test(ua)) return 'darwin-arm64';
+    if(/aarch64|arm64/i.test(ua)) return 'linux-arm64';
+    return 'linux-amd64';
+}
+function cnValues(maskToken){
+    var info = cnInfo || {};
+    var tok = $('cnTok').checked ? apiToken : '';
+    return {
+        type: cnType,
+        port: parseInt($('cnPort').value, 10) || 0,
+        sub: $('cnSub').value.trim().toLowerCase(),
+        inspect: $('cnInspect').checked,
+        auth: $('cnAuth').value.trim(), pin: $('cnPin').value.trim(), allow: $('cnAllow').value.trim().replace(/\s+/g, ''),
+        ttl: $('cnTtl').value,
+        server: info.server_arg || (location.hostname + ':4443'),
+        token: maskToken && tok ? cnMaskToken(tok) : tok,
+        os: $('cnOS').value
+    };
+}
+function cnSubProblem(sub, info){
+    if(!sub) return '';
+    if(!/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(sub)) return 'letters, digits and hyphens only (not at the ends)';
+    if(info && info.reserved_subdomains && info.reserved_subdomains.indexOf(sub) >= 0) return 'this name is reserved';
+    return '';
+}
+function cnPublicURL(o){
+    var info = cnInfo || {};
+    var dom = info.domain || location.hostname;
+    if(o.type === 'tcp') return 'tcp://' + dom + ':' + (info.tcp_port_start ? info.tcp_port_start + '-' + info.tcp_port_end : '...');
+    var sch = info.public_scheme || 'https', port = info.public_port;
+    var hostPort = (!port || (sch === 'http' && port === 80) || (sch === 'https' && port === 443)) ? '' : ':' + port;
+    return sch + '://' + (o.sub || '<random>') + '.' + dom + hostPort;
+}
+function cnRender(){
+    var o = cnValues(false), m = cnValues(true);
+    var bad = cnSubProblem(o.sub, cnInfo);
+    $('cnSub').classList.toggle('bad', !!bad);
+    $('cnSubWrap').style.display = cnType === 'http' ? '' : 'none';
+    $('cnHttpOpts').style.display = cnType === 'http' ? '' : 'none';
+    $('cnUrl').textContent = bad ? 'Subdomain: ' + bad : (cnType === 'tcp' ? 'Public address: ' : 'Public URL: ') + cnPublicURL(o) + (cnType === 'tcp' ? '  (the port is assigned)' : '');
+    $('cnInstall').textContent = cnInstallText(o.os);
+    $('cnCmd').textContent = cnBuild(m);
+    $('cnNote').textContent = $('cnTok').checked
+        ? 'The token is hidden here but copied in full. Anyone with the command can open tunnels as you.'
+        : 'Replace YOUR_TOKEN with your token.';
+}
+function cnCopy(which){
+    var o = cnValues(false);
+    var text = which === 'cmd' ? cnBuild(o) : cnInstallText(o.os);
+    copyToClipboard(text);
+    toast(which === 'cmd' ? 'Command copied' : 'Install command copied', 'ok');
+    if(which === 'cmd') cnSnapshot();
+}
+function cnSnapshot(){
+    apiFetch('/api/tunnels').then(function(list){
+        cnBase = {};
+        (list || []).forEach(function(t){ cnBase[t.id] = true; });
+        cnStatus(null);
+    }).catch(function(){});
+}
+function cnStatus(t){
+    var el = $('cnStatus');
+    if(!t){ el.className = 'cn-status'; el.textContent = 'Waiting for the connection...'; return; }
+    el.className = 'cn-status ok';
+    el.textContent = 'Connected: ' + (t.url || ('tcp port ' + t.port));
+}
+function cnPoll(){
+    if(currentTab !== 'connect') return;
+    var o = cnValues(false);
+    apiFetch('/api/tunnels').then(function(list){
+        var hit = null;
+        (list || []).forEach(function(t){
+            if(cnBase[t.id] || t.type !== o.type || hit) return;
+            if(o.type === 'http' && o.sub && (t.url || '').indexOf('//' + o.sub + '.') < 0) return;
+            hit = t;
+        });
+        if(hit) cnStatus(hit);
+    }).catch(function(){});
+}
+var cnBound = false;
+function initConnect(){
+    if(!cnBound){ cnBound = true; cnBind(); }
+    apiFetch('/api/connect').then(function(info){ cnInfo = info; cnRender(); }).catch(function(){ cnRender(); });
+    cnSnapshot();
+    if(cnTimer) clearInterval(cnTimer);
+    cnTimer = setInterval(cnPoll, 3000);
+}
+function cnBind(){
+    $('cnOS').value = cnGuessOS();
+    var ids = ['cnPort', 'cnSub', 'cnInspect', 'cnAuth', 'cnPin', 'cnAllow', 'cnTtl', 'cnTok', 'cnOS'];
+    ids.forEach(function(id){ $(id).addEventListener('input', cnRender); $(id).addEventListener('change', cnRender); });
+    var btns = qsa('#cnType button');
+    for(var i = 0; i < btns.length; i++){
+        (function(b){
+            b.onclick = function(){
+                cnType = b.getAttribute('data-v');
+                for(var j = 0; j < btns.length; j++) btns[j].classList.toggle('on', btns[j] === b);
+                cnRender();
+            };
+        })(btns[i]);
+    }
+    $('cnCopyInstall').onclick = function(){ cnCopy('install'); };
+    $('cnCopyCmd').onclick = function(){ cnCopy('cmd'); };
+    cnRender();
+}
+
 /* -- Activity & Admin --------------------------------------- */
 var isAdminUser = false, adminInterval = null, activityCache = [];
 function initRoles(){
+    initConnect();
     apiFetch('/api/me').then(function(me){
         isAdminUser = !!(me && me.admin);
         $('tabAdmin').style.display = isAdminUser ? '' : 'none';
@@ -1794,6 +2007,7 @@ function handleKey(e){
     if(key === 'S'){ e.preventDefault(); switchTab('sessions'); }
     if(key === 'I'){ e.preventDefault(); switchTab('inspector'); }
     if(key === 'A'){ e.preventDefault(); switchTab('activity'); }
+    if(key === 'C'){ e.preventDefault(); switchTab('connect'); }
     if(key === 'D' && isAdminUser){ e.preventDefault(); switchTab('admin'); loadAdmin(); }
 }
 

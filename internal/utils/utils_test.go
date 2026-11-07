@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"sort"
 	"strings"
 	"testing"
 )
@@ -78,5 +79,17 @@ func TestIsReservedSubdomain(t *testing.T) {
 	}
 	if IsReservedSubdomain("myapp") {
 		t.Error("myapp should not be reserved")
+	}
+}
+
+func TestReservedSubdomainsListed(t *testing.T) {
+	list := ReservedSubdomains()
+	if len(list) == 0 || !sort.StringsAreSorted(list) {
+		t.Fatalf("expected a sorted, non-empty list, got %v", list)
+	}
+	for _, name := range list {
+		if !IsReservedSubdomain(name) {
+			t.Errorf("%q listed but not reserved", name)
+		}
 	}
 }
