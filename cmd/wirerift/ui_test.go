@@ -107,6 +107,7 @@ func TestDoUIServesAndStops(t *testing.T) {
 		t.Errorf("the API without the key: %d", plain.StatusCode)
 	}
 
+	hc.CloseIdleConnections()
 	cancel()
 	select {
 	case err := <-done:

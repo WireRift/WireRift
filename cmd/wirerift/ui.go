@@ -79,9 +79,13 @@ func doUI(parentCtx context.Context, args []string) error {
 
 	<-ctx.Done()
 	mgr.Disconnect()
-	shutdown, stop := context.WithTimeout(context.Background(), 3*time.Second)
+	// Let requests in flight finish, but never hang on an idle browser tab.
+	shutdown, stop := context.WithTimeout(context.Background(), 2*time.Second)
 	defer stop()
-	return srv.Shutdown(shutdown)
+	if err := srv.Shutdown(shutdown); err != nil {
+		_ = srv.Close()
+	}
+	return nil
 }
 
 // uiListener binds the interface. With no explicit address it tries the
