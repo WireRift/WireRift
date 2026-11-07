@@ -134,8 +134,6 @@ func TestEventsEndpointScopesAndLimits(t *testing.T) {
 	userTok, _, _ := f.CreateToken(auth.CreateOptions{Account: "alice", MaxTunnels: -1, MaxSessions: -1, RateLimit: -1})
 	m := auth.NewManager("x")
 	m.ApplyTokenFile(f)
-	srv := server.New(server.DefaultConfig(), nil)
-	h := New(Config{Server: srv, AuthManager: m}).Handler()
 
 	// A real server records "server started" with no account; start one briefly.
 	cfg := server.DefaultConfig()
@@ -146,7 +144,7 @@ func TestEventsEndpointScopesAndLimits(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer live.Stop()
-	h = New(Config{Server: live, AuthManager: m}).Handler()
+	h := New(Config{Server: live, AuthManager: m}).Handler()
 
 	var all []server.Event
 	rec := get(h, "GET", "/api/events?limit=1", adminTok)
