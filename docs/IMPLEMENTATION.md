@@ -9,7 +9,7 @@
 > embed, no SSE `/api/requests/stream`) and shows a file account only its own
 > tunnels, sessions and requests. Client config is `wirerift.yaml` or `.json` in the
 > current directory (no TOML). Certificates are renewed by a 12-hourly background
-> check with a 14-day window. A dropped session's HTTP subdomains are held for its
+> check with a 14-day window. A dropped session's HTTP subdomains and TCP ports are held for its
 > account for `-offline-grace` (default 2 minutes) and visitors get
 > `503 Tunnel offline`; the server sends `GO_AWAY` when it stops. Tunnels cannot
 > claim a small reserved set of subdomains (`www`, `api`, `admin`, ...). Account

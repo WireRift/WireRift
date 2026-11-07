@@ -84,7 +84,7 @@ backed up as one consistency unit:
 - `*.crt` and `*.key`: issued certificates and private keys;
 - `domain-secret`: custom-domain ownership proof key;
 - `tokens.json`: hashed managed tokens and account policy;
-- `held.json`: temporarily reserved subdomains.
+- `held.json`: temporarily reserved subdomains and TCP ports (`tcp:<port>`).
 
 ## First staging deployment
 
@@ -319,7 +319,7 @@ Then complete the recovery acceptance test:
 3. Confirm restored ownership is the runtime UID and modes remain restrictive.
 4. Start on isolated addresses and require `/health/ready` to pass.
 5. Verify managed tokens, custom-domain TXT proofs, cached certificates, and
-   held subdomains behave as before; exercise control, HTTP, WebSocket, and TCP.
+   held subdomains and TCP ports behave as before; exercise control, HTTP, WebSocket, and TCP.
 6. Record the duration, operator, backup ID, object/key versions, image digest,
    test results, and discrepancies. Destroy the drill volume after evidence is
    retained.
@@ -373,6 +373,12 @@ fresh encrypted snapshot.
 Confirm the configured TCP range, firewall rules, and listener ownership. A
 startup bind failure is fatal and rolls back listeners; do not bypass it by
 starting a partial plaintext service.
+
+A TCP port that a dropped client held stays reserved for its account for
+`-offline-grace` (shown as `tcp:<port>` under held in the Admin tab), so
+"port already taken" for a fixed `RemotePort` right after a disconnect is expected
+for every account but the owner. Clients older than 1.18 do not ask for their
+old port again and get a new one; raise `-offline-grace` for longer protection.
 
 ## Rollback
 

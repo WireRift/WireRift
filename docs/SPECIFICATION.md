@@ -9,7 +9,7 @@
 > embed, no SSE `/api/requests/stream`) and shows a file account only its own
 > tunnels, sessions and requests. Client config is `wirerift.yaml` or `.json` in the
 > current directory (no TOML). Certificates are renewed by a 12-hourly background
-> check with a 14-day window. A dropped session's HTTP subdomains are held for its
+> check with a 14-day window. A dropped session's HTTP subdomains and TCP ports are held for its
 > account for `-offline-grace` (default 2 minutes) and visitors get
 > `503 Tunnel offline`; the server sends `GO_AWAY` when it stops. Tunnels cannot
 > claim a small reserved set of subdomains (`www`, `api`, `admin`, ...). Account
@@ -482,7 +482,8 @@ For raw TCP tunnels, the server dynamically opens listener ports.
 - TCP port range: `20000–29999` (configurable).
 - Each TCP tunnel gets a unique port.
 - On new TCP connection → Open mux stream → Bidirectional `io.Copy`.
-- Port is released when tunnel closes.
+- Port is released when tunnel closes on purpose. When a client drops, the port is reserved for its account for `-offline-grace` (key `tcp:<port>` in `held.json`); other accounts are refused it and free-port requests skip it, and the reconnecting client asks for the same port (`Reconnect` + `RemotePort`) and takes it over from its stale session.
+- A requested `RemotePort` is honored when free and inside the range, otherwise the tunnel fails with "port already taken" / "port is outside the tunnel port range". The assigned port is reported in `TunnelResponse.Port`.
 
 ### 6.4 Control Plane
 
