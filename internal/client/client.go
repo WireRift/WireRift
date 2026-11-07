@@ -56,6 +56,15 @@ type Config struct {
 
 	// HeartbeatInterval is the interval for sending heartbeats.
 	HeartbeatInterval time.Duration
+
+	// OnExchange, when set, is called for every visitor exchange relayed to a
+	// local service, after it ends (the client's web UI uses it). It must not
+	// block for long. Nil costs nothing.
+	OnExchange func(Exchange)
+
+	// CaptureBody is how many bytes of each request and response body
+	// OnExchange receives (0: headers and sizes only).
+	CaptureBody int
 }
 
 // DefaultConfig returns the default client configuration.
@@ -92,6 +101,9 @@ type Client struct {
 	// no request ID, so with two outstanding requests the responses could be
 	// handed to the wrong callers.
 	openMu sync.Mutex
+
+	// exchangeSeq numbers the exchanges reported to Config.OnExchange.
+	exchangeSeq atomic.Uint64
 
 	// HTTP client for proxying (shared for connection reuse)
 	httpClient *http.Client
@@ -1161,6 +1173,10 @@ func (c *Client) handleHTTPStream(stream *mux.Stream) {
 	}
 
 	// Forward to local service
+	var rec *recorder
+	if c.config.OnExchange != nil {
+		rec = c.beginExchange(tunnel, req)
+	}
 	req = req.WithContext(c.ctx)
 	req.URL.Scheme = "http"
 	req.URL.Host = tunnel.LocalAddr
@@ -1168,12 +1184,20 @@ func (c *Client) handleHTTPStream(stream *mux.Stream) {
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		if rec != nil {
+			defer rec.finish(err)
+		}
 		// The local app did not answer. The port is deliberately not shown:
 		// the visitor is on the public internet.
 		_, _ = stream.Write(localUnreachableResponse(strings.Contains(req.Header.Get("Accept"), "text/html") && req.Method != http.MethodHead))
 		return
 	}
 	defer resp.Body.Close()
+
+	if rec != nil {
+		rec.wrapResponse(resp)
+		defer rec.finish(nil)
+	}
 
 	// Write response back through stream
 	_ = resp.Write(stream)
@@ -1185,31 +1209,38 @@ func (c *Client) handleHTTPStream(stream *mux.Stream) {
 // frames, and EOF all propagate (mirrors the server-side proxyTCPConnection
 // relay and handleTCPStream).
 func (c *Client) handleUpgradeStream(stream *mux.Stream, req *http.Request, tunnel *Tunnel) {
+	start := time.Now()
+	hdr := req.Header.Clone()
+	path, host := req.URL.RequestURI(), req.Host
 	localConn, err := net.DialTimeout("tcp", tunnel.LocalAddr, 10*time.Second)
 	if err != nil {
+		c.emitStream(tunnel, "websocket", start, 0, 0, req.Method, path, host, hdr, err.Error())
 		stream.Close()
 		return
 	}
 	defer localConn.Close()
 
 	if err := req.Write(localConn); err != nil {
+		c.emitStream(tunnel, "websocket", start, 0, 0, req.Method, path, host, hdr, err.Error())
 		stream.Close()
 		return
 	}
 
 	var wg sync.WaitGroup
+	var in, out int64
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		io.Copy(localConn, stream)
+		in, _ = io.Copy(localConn, stream)
 		localConn.Close()
 	}()
 	go func() {
 		defer wg.Done()
-		io.Copy(stream, localConn)
+		out, _ = io.Copy(stream, localConn)
 		stream.Close()
 	}()
 	wg.Wait()
+	c.emitStream(tunnel, "websocket", start, in, out, req.Method, path, host, hdr, "")
 }
 
 // handleTCPStream handles an incoming TCP stream by proxying to the local service.
@@ -1221,8 +1252,10 @@ func (c *Client) handleTCPStream(stream *mux.Stream) {
 	}
 
 	// Dial local service
+	start := time.Now()
 	localConn, err := net.DialTimeout("tcp", tunnel.LocalAddr, 10*time.Second)
 	if err != nil {
+		c.emitStream(tunnel, "tcp", start, 0, 0, "", "", "", nil, err.Error())
 		stream.Close()
 		return
 	}
@@ -1230,10 +1263,12 @@ func (c *Client) handleTCPStream(stream *mux.Stream) {
 
 	// Bidirectional copy
 	var wg sync.WaitGroup
+	var in, out int64
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_, err := io.Copy(localConn, stream)
+		n, err := io.Copy(localConn, stream)
+		in = n
 		if err != nil {
 			// A reset or lost mux is an abort, not a normal half-close. Close the
 			// whole local socket so the opposite copy cannot remain blocked forever.
@@ -1247,11 +1282,12 @@ func (c *Client) handleTCPStream(stream *mux.Stream) {
 	}()
 	go func() {
 		defer wg.Done()
-		io.Copy(stream, localConn)
+		out, _ = io.Copy(stream, localConn)
 		// Local service finished: half-close so the visitor sees EOF.
 		stream.Close()
 	}()
 	wg.Wait()
+	c.emitStream(tunnel, "tcp", start, in, out, "", "", "", nil, "")
 }
 
 // findTunnelForStream finds the tunnel associated with a stream.

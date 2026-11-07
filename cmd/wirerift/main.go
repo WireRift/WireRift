@@ -49,6 +49,8 @@ func run(args []string) error {
 		return doTCP(context.Background(), args)
 	case "serve":
 		return doServe(context.Background(), args)
+	case "ui":
+		return doUI(context.Background(), args)
 	case "start":
 		return doStart(context.Background(), args)
 	case "list":
@@ -79,6 +81,7 @@ Commands:
   http <local-port> [subdomain]   Create an HTTP tunnel
   tcp <local-port>                Create a TCP tunnel
   serve <directory>               Serve static files via HTTP tunnel
+  ui                              Open the web interface (connect, tunnels, live traffic)
   start [config-file]             Start tunnels from config file
   list                            List active tunnels
   doctor                          Check connectivity, TLS and login to a server
@@ -94,6 +97,7 @@ Examples:
   wirerift tcp 25565                    Create TCP tunnel on port 25565
   wirerift serve ./dist                 Serve static files and tunnel
   wirerift start wirerift.yaml          Start tunnels from config
+  wirerift ui                           Manage tunnels and watch traffic in a browser
 
 Environment Variables:
   WIRERIFT_SERVER    Server address (default: localhost:4443)

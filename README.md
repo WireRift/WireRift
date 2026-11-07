@@ -25,6 +25,7 @@ Open-source, zero-dependency tunnel server and client written in Go. Expose any 
 - [Quick Start](#quick-start)
 - [Server Reference](#server-reference)
 - [Client Reference](#client-reference)
+- [Client web interface](#client-web-interface)
 - [Dashboard](#dashboard)
 - [Configuration](#configuration)
 - [Access Control](#access-control)
@@ -291,6 +292,7 @@ Commands:
   http <port> [subdomain]   Create an HTTP tunnel
   tcp <port>                Create a TCP tunnel
   serve <directory>         Serve static files via HTTP tunnel
+  ui                        Web interface: connect, tunnels, live traffic
   start [config-file]       Start tunnels from config file
   list                      List active tunnels
   doctor                    Check connectivity, TLS and login to a server
@@ -362,6 +364,23 @@ wirerift serve ./build --subdomain mysite --token mytoken
 wirerift start wirerift.yaml
 wirerift start wirerift.json
 ```
+
+---
+
+## Client web interface
+
+`wirerift ui` opens a small web interface on your own machine, so you can do everything from a browser instead of the command line:
+
+```bash
+wirerift ui              # prints http://127.0.0.1:4041/?k=<key> and opens it
+wirerift ui -no-open     # only print the address
+```
+
+- **Connect**: type the server (`tls://host:4443` when the server uses TLS) and the token, press Connect, press Disconnect when you are done. The server and token can be remembered on this computer (an owner-only file in your user config folder; `-no-save` never writes anything, *Forget saved login* deletes it). The form starts from `WIRERIFT_SERVER` and `WIRERIFT_TOKEN` when nothing was saved.
+- **Tunnels**: open a web or TCP tunnel from a form (local port or `host:port`, subdomain, basic auth, PIN, IP allow-list, own domain, auto-close), copy its public address, close it with one click. A lost connection is re-established by itself and the page shows *reconnecting* meanwhile.
+- **Traffic**: every visitor request that goes through a tunnel appears live, with method, path, status, time, sizes and the visitor's address. Click a row for the request and response headers and bodies (JSON is pretty-printed, gzip is decoded, the first 64 KB of each body is kept). Filter by text or status, pause, clear, **Replay** a request straight to your local app to see its answer again, or copy it as a `curl` command. TCP connections and WebSocket sessions show their byte counts. Nothing leaves your machine: the log is in memory (last 1000 exchanges).
+
+The interface can open tunnels and holds your token, so it protects itself: it listens on the loopback address only (`-listen` refuses anything else), the address printed at start carries a key that is new on every run (the page is useless without it), and requests that name another host (DNS rebinding) or come from another page are refused.
 
 ---
 
@@ -790,6 +809,7 @@ wirerift/
 ├── internal/
 │   ├── auth/                  # Token authentication
 │   ├── client/                # Client implementation
+│   ├── clientui/              # Client web interface (wirerift ui)
 │   ├── config/                # Configuration & domains
 │   ├── dashboard/             # Web dashboard & traffic inspector
 │   ├── mux/                   # Stream multiplexing & flow control

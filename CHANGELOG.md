@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.21.0] - 2026-11-07
+
+### Added
+- `wirerift ui`: the client's web interface. Set the server and token (optionally remembered in an owner-only file), connect and disconnect, open and close web and TCP tunnels from a form, and watch the traffic that passes through them live: method, path, status, time, sizes, visitor address, request/response headers and bodies, **Replay** to the local app, copy as `curl`. Loopback only, with a per-run key in the printed address and Host/Origin checks against DNS rebinding and cross-site requests.
+- Client library: `Config.OnExchange` and `Config.CaptureBody` report each relayed exchange (HTTP, WebSocket, TCP) with headers, captured bodies, timing and the local error when the app did not answer; `Client.Tunnels()` lists the open tunnels. Without a callback nothing changes.
+
 ## [1.20.0] - 2026-11-07
 
 ### Added

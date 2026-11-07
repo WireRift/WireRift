@@ -70,6 +70,7 @@ Connects to server, performs magic+auth handshake, creates tunnels. Auto-reconne
 
 ### Supporting Packages
 
+- `internal/clientui/` — The client's local web interface (`wirerift ui`): manager (connection, tunnels, captured traffic, replay), loopback-only handler with a launch key, embedded single-page UI
 - `internal/auth/` — Token validation with constant-time comparison
 - `internal/dashboard/` — Embedded web UI (`embed.FS` for static files), REST API, CSP nonce-based security
 - `internal/tls/` — ACME (Let's Encrypt) certificate management, self-signed cert generation, and the persistent name-constrained local dev CA (`localca.go`) with trust-store install/removal (`trust.go`) used by `wirerift-server -dev` / `ca` subcommands
