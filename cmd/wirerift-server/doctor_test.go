@@ -81,7 +81,15 @@ func TestParsePortRange(t *testing.T) {
 
 func TestCheckTCPRange(t *testing.T) {
 	r, out := newReport()
-	checkTCPRange(r, "47000-47010")
+	// A fixed port can be taken by any outgoing connection on the machine
+	// (it sits in the ephemeral range), so ask the OS for a free one.
+	probe, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	free := probe.Addr().(*net.TCPAddr).Port
+	probe.Close()
+	checkTCPRange(r, strconv.Itoa(free)+"-"+strconv.Itoa(free+10))
 	if r.Failures+r.Warnings != 0 || !strings.Contains(out.String(), "11 ports") {
 		t.Errorf("valid range: %s", out.String())
 	}
