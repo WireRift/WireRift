@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.18.1] - 2026-11-07
+
+### Fixed
+- Client: a login refusal ("authentication failed") that arrived together with the connection close was sometimes reported as "connection closed before login finished" with the TLS hint. The refusal is reported now.
+- Tests: two timing assumptions in the TCP port tests (a closed tunnel's port is handed back a moment after its listener stops answering) no longer make Windows CI flaky.
+
 ## [1.18.0] - 2026-11-07
 
 ### Added
