@@ -2,7 +2,7 @@
 
 BINARY_SERVER=wirerift-server
 BINARY_CLIENT=wirerift
-VERSION?=1.17.0
+VERSION?=1.18.0
 COMMIT?=$(shell git rev-parse --short=8 HEAD 2>/dev/null || echo none)
 BUILD_DATE?=$(shell git show -s --format=%cI HEAD 2>/dev/null || echo unknown)
 GO=go
