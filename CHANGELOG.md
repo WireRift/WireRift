@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.17.0] - 2026-11-07
+
 ### Added
 - Dashboard **Activity** tab: connects, disconnects, tunnel creation and closing, failed logins and revoked sessions (in memory, last 500; an account sees its own, an administrator all).
 - Dashboard **Admin** tab for administrator accounts: health cards, one hour of history charts (requests, errors, throughput, sessions, tunnels, heap, goroutines, open files), response-time distribution, accounts with live usage, all sessions with a Disconnect action, held subdomains, certificate expiry and the limits in effect. New API: `/api/me`, `/api/events`, `/api/admin/{overview,history,accounts,certs}` and `POST /api/admin/sessions/{id}/kick`.
