@@ -82,8 +82,11 @@ a{color:var(--ac);text-decoration:none}a:hover{text-decoration:underline}
 <div class="f"><label for="ttl">Close automatically after</label><select id="ttl"><option value="">never</option><option>30m</option><option>2h</option><option>8h</option><option>24h</option></select></div>
 <div class="f" data-http style="flex:0 0 auto"><label class="chk"><input type="checkbox" id="inspect"> Also inspect on the server</label></div>
 </div></details>
+<div class="row" style="margin-top:.6rem"><div class="f"><label for="pname">Save these settings as <span class="h">to open them again with one click</span></label><input id="pname" type="text" maxlength="40" placeholder="my app" autocomplete="off"></div><div class="f" style="flex:0 0 auto"><button id="saveBtn">Save</button></div></div>
 <div class="err" id="openErr"></div>
 </div>
+<div class="card hide" id="presetCard"><h2>Saved tunnels <button class="s" id="openAll" style="float:right">Open all</button></h2>
+<table><tbody id="tbPresets"></tbody></table></div>
 <div class="card"><h2>Open tunnels</h2>
 <table><thead><tr><th>Type</th><th>Public address</th><th>Forwards to</th><th>Closes</th><th></th></tr></thead><tbody id="tbTunnels"></tbody></table>
 <div class="empty" id="noTunnels">No tunnels yet. Connect, then open one above.</div></div>
@@ -130,7 +133,7 @@ function renderState(s){
   $('forgetBtn').classList.toggle('hide',!s.token_saved&&!s.remembered);
   $('rememberNote').textContent=s.remembered?'A token is stored in your user config folder.':'';
   $('connErr').textContent=s.state==='disconnected'||s.state==='connected'?(s.error||''):(s.error||(s.state==='reconnecting'?'Connection lost, trying again...':''));
-  $('openBtn').disabled=s.state!=='connected';
+  $('openBtn').disabled=s.state!=='connected';$('openAll').disabled=s.state!=='connected';
   $('nTunnels').textContent=s.tunnels.length;
   $('stReq').textContent=s.stats.requests;$('stErr').textContent=s.stats.errors;$('stIn').textContent=fb(s.stats.bytes_in);$('stOut').textContent=fb(s.stats.bytes_out);
   var j=JSON.stringify(s.tunnels);if(j!==tunJSON){tunJSON=j;renderTunnels(s.tunnels)}
@@ -166,6 +169,33 @@ $('openBtn').onclick=function(){
   $('openErr').textContent='';var b=$('openBtn');b.disabled=true;
   api('POST','/api/tunnels',{type:type,local:$('local').value,subdomain:$('sub').value,auth:$('auth').value,pin:$('pin').value,allow:$('allow').value,domain:$('domain').value,ttl:$('ttl').value,inspect:$('inspect').checked})
   .then(function(){poll()}).catch(function(e){$('openErr').textContent=e.message}).then(function(){b.disabled=!state||state.state!=='connected'});
+};
+var presets=[];
+function formSpec(){return{type:type,local:$('local').value,subdomain:$('sub').value,auth:$('auth').value,pin:$('pin').value,allow:$('allow').value,domain:$('domain').value,ttl:$('ttl').value,inspect:$('inspect').checked}}
+function renderPresets(list){
+  presets=list||[];var h='';
+  presets.forEach(function(p,i){
+    h+='<tr><td><b>'+esc(p.name)+'</b></td><td>'+esc(p.type.toUpperCase())+'</td><td class="m">'+esc(p.local)+(p.subdomain?' &rarr; '+esc(p.subdomain):'')+'</td><td style="text-align:right"><button class="s" data-popen="'+i+'">Open</button> <button class="s" data-pedit="'+i+'">Edit</button> <button class="s" data-pdel="'+i+'">Delete</button></td></tr>';
+  });
+  $('tbPresets').innerHTML=h;$('presetCard').classList.toggle('hide',!presets.length);
+}
+function loadPresets(){api('GET','/api/presets').then(renderPresets).catch(function(){})}
+$('saveBtn').onclick=function(){
+  $('openErr').textContent='';var s=formSpec();s.name=$('pname').value;
+  api('POST','/api/presets',s).then(function(l){renderPresets(l);$('pname').value=''}).catch(function(e){$('openErr').textContent=e.message});
+};
+function openPreset(p){var s={};for(var k in p)if(k!=='name')s[k]=p[k];return api('POST','/api/tunnels',s)}
+$('openAll').onclick=function(){
+  $('openErr').textContent='';var errs=[];
+  presets.reduce(function(chain,p){return chain.then(function(){return openPreset(p).catch(function(e){errs.push(p.name+': '+e.message)})})},Promise.resolve())
+  .then(function(){poll();if(errs.length)$('openErr').textContent=errs.join(' | ')});
+};
+$('tbPresets').onclick=function(e){
+  var o=e.target.getAttribute('data-popen'),d=e.target.getAttribute('data-pdel'),ed=e.target.getAttribute('data-pedit');
+  $('openErr').textContent='';
+  if(o!==null)openPreset(presets[o]).then(poll).catch(function(er){$('openErr').textContent=presets[o].name+': '+er.message});
+  if(d!==null)api('DELETE','/api/presets?name='+encodeURIComponent(presets[d].name)).then(renderPresets).catch(function(er){$('openErr').textContent=er.message});
+  if(ed!==null){var p=presets[ed];setType(p.type);$('local').value=p.local||'';$('sub').value=p.subdomain||'';$('auth').value=p.auth||'';$('pin').value=p.pin||'';$('allow').value=p.allow||'';$('domain').value=p.domain||'';$('ttl').value=p.ttl||'';$('inspect').checked=!!p.inspect;$('pname').value=p.name}
 };
 $('tbTunnels').onclick=function(e){
   var c=e.target.getAttribute('data-copy'),x=e.target.getAttribute('data-close');
@@ -235,6 +265,6 @@ function replay(){
   tab=t.dataset.t;[].forEach.call(document.querySelectorAll('.tab'),function(x){x.classList.toggle('on',x===t)});
   $('tunnels').classList.toggle('hide',tab!=='tunnels');$('traffic').classList.toggle('hide',tab!=='traffic');if(tab==='traffic')renderTraffic();
 }});
-setType('http');poll();setInterval(poll,1000);
+setType('http');loadPresets();poll();setInterval(poll,1000);
 })();
 </script></body></html>`

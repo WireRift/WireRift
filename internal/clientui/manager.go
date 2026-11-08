@@ -185,7 +185,8 @@ func (m *Manager) Connect(server, token string, remember bool) error {
 	m.mu.Lock()
 	m.cl, m.server, m.token, m.connectedAt, m.lastErr, m.remembered = c, server, token, time.Now(), "", remember
 	m.mu.Unlock()
-	saved := Saved{Server: server}
+	saved := m.settings.Load()
+	saved.Server, saved.Token = server, ""
 	if remember {
 		saved.Token = token
 	}
@@ -210,7 +211,9 @@ func (m *Manager) Forget() error {
 	m.mu.Lock()
 	m.token, m.remembered = "", false
 	m.mu.Unlock()
-	return m.settings.Save(Saved{})
+	saved := m.settings.Load()
+	saved.Server, saved.Token = "", ""
+	return m.settings.Save(saved)
 }
 
 // TunnelSpec is a tunnel to open.

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.22.0] - 2026-11-08
+
+### Added
+- `wirerift ui`: saved tunnels. Save the form under a name, then open, edit, delete or open all of them with one click. They survive restarts and *Forget saved login*.
+
 ## [1.21.1] - 2026-11-08
 
 ### Fixed

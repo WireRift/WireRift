@@ -356,7 +356,7 @@ func TestConnectValidationAndSavedLogin(t *testing.T) {
 
 func TestSettingsEdgeCases(t *testing.T) {
 	var none *Settings
-	if got := none.Load(); got != (Saved{}) {
+	if got := none.Load(); got.Server != "" || got.Token != "" || got.Presets != nil {
 		t.Error("nil settings must be empty")
 	}
 	if err := none.Save(Saved{Server: "x"}); err != nil {
@@ -366,14 +366,14 @@ func TestSettingsEdgeCases(t *testing.T) {
 		t.Error(err)
 	}
 	s := NewSettings(filepath.Join(t.TempDir(), "ui.json"))
-	if got := s.Load(); got != (Saved{}) {
+	if got := s.Load(); got.Server != "" || got.Token != "" {
 		t.Errorf("missing file: %+v", got)
 	}
 	if err := s.Save(Saved{}); err != nil {
 		t.Errorf("clearing a missing file: %v", err)
 	}
 	os.WriteFile(s.path, []byte("{not json"), 0o600)
-	if got := s.Load(); got != (Saved{}) {
+	if got := s.Load(); got.Server != "" || got.Token != "" {
 		t.Errorf("garbage file: %+v", got)
 	}
 	// A directory where the file should be makes saving fail with an error.
@@ -616,4 +616,64 @@ func TestReplayKeepsHeadersAndLimitsTheBody(t *testing.T) {
 		t.Errorf("a redirect is shown, not followed, and a big body is cut: %+v", res.Response)
 	}
 	time.Sleep(10 * time.Millisecond)
+}
+
+func TestPresets(t *testing.T) {
+	e := newEnv(t)
+	var list []Preset
+	e.ok(t, "GET", "/api/presets", nil, &list)
+	if len(list) != 0 {
+		t.Fatalf("fresh install has presets: %v", list)
+	}
+	web := Preset{Name: "web", TunnelSpec: TunnelSpec{Type: "http", Local: "3000", Subdomain: "myapp", PIN: "1234"}}
+	e.ok(t, "POST", "/api/presets", web, &list)
+	e.ok(t, "POST", "/api/presets", Preset{Name: "db", TunnelSpec: TunnelSpec{Type: "tcp", Local: "db:5432"}}, &list)
+	web.Local = "4000"
+	web.Name = "WEB" // same name, other case: replaces
+	e.ok(t, "POST", "/api/presets", web, &list)
+	if len(list) != 2 || list[0].Local != "4000" || list[0].PIN != "1234" {
+		t.Fatalf("presets: %+v", list)
+	}
+
+	// They survive connect, forget and a restart.
+	e.connect(t)
+	e.ok(t, "POST", "/api/forget", nil, nil)
+	e.mgr.Disconnect()
+	again := NewManager(client.DefaultConfig(), NewSettings(filepath.Join(e.dir, "cfg", "ui.json")), nil)
+	if got := again.Presets(); len(got) != 2 {
+		t.Fatalf("lost after forget/restart: %+v", got)
+	}
+
+	for _, bad := range []Preset{
+		{Name: "", TunnelSpec: TunnelSpec{Type: "http", Local: "80"}},
+		{Name: strings.Repeat("x", 41), TunnelSpec: TunnelSpec{Type: "http", Local: "80"}},
+		{Name: "a", TunnelSpec: TunnelSpec{Type: "udp", Local: "80"}},
+		{Name: "a", TunnelSpec: TunnelSpec{Type: "http", Local: "nope"}},
+	} {
+		if code, _ := e.call("POST", "/api/presets", bad); code != http.StatusBadRequest {
+			t.Errorf("%+v accepted: %d", bad, code)
+		}
+	}
+	e.ok(t, "DELETE", "/api/presets?name=db", nil, &list)
+	if len(list) != 1 || list[0].Name != "WEB" {
+		t.Fatalf("after delete: %+v", list)
+	}
+	if code, _ := e.call("PUT", "/api/presets", nil); code != http.StatusMethodNotAllowed {
+		t.Errorf("PUT: %d", code)
+	}
+
+	// Limits and no-save mode.
+	for i := 0; i < maxPresets; i++ {
+		_ = e.mgr.SavePreset(Preset{Name: fmt.Sprint("p", i), TunnelSpec: TunnelSpec{Type: "tcp", Local: "1"}})
+	}
+	if err := e.mgr.SavePreset(Preset{Name: "one-too-many", TunnelSpec: TunnelSpec{Type: "tcp", Local: "1"}}); err == nil {
+		t.Error("preset limit not enforced")
+	}
+	off := NewManager(client.DefaultConfig(), nil, nil)
+	if err := off.SavePreset(web); err == nil {
+		t.Error("-no-save must refuse presets")
+	}
+	if err := off.DeletePreset("x"); err != nil || len(off.Presets()) != 0 {
+		t.Error("nil settings must be harmless")
+	}
 }

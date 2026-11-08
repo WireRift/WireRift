@@ -44,6 +44,7 @@ func NewHandler(m *Manager, key, version string) http.Handler {
 	h.mux.HandleFunc("/api/forget", h.api(h.forget))
 	h.mux.HandleFunc("/api/tunnels", h.api(h.tunnels))
 	h.mux.HandleFunc("/api/tunnels/", h.api(h.tunnel))
+	h.mux.HandleFunc("/api/presets", h.api(h.presets))
 	h.mux.HandleFunc("/api/traffic", h.api(h.traffic))
 	h.mux.HandleFunc("/api/traffic/", h.api(h.exchange))
 	h.mux.HandleFunc("/", h.index)
@@ -200,6 +201,35 @@ func (h *handler) forget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, h.m.State())
+}
+
+func (h *handler) presets(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		list := h.m.Presets()
+		if list == nil {
+			list = []Preset{}
+		}
+		writeJSON(w, http.StatusOK, list)
+	case http.MethodPost:
+		var p Preset
+		if !readJSON(w, r, &p) {
+			return
+		}
+		if err := h.m.SavePreset(p); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, h.m.Presets())
+	case http.MethodDelete:
+		if err := h.m.DeletePreset(r.URL.Query().Get("name")); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, h.m.Presets())
+	default:
+		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
 }
 
 func (h *handler) tunnels(w http.ResponseWriter, r *http.Request) {

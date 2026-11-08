@@ -12,6 +12,8 @@ import (
 type Saved struct {
 	Server string `json:"server,omitempty"`
 	Token  string `json:"token,omitempty"` // only when the user asked to remember it
+
+	Presets []Preset `json:"presets,omitempty"`
 }
 
 // Settings is the file the UI keeps in the user's configuration directory.
@@ -54,7 +56,7 @@ func (s *Settings) Save(v Saved) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if v == (Saved{}) {
+	if v.Server == "" && v.Token == "" && len(v.Presets) == 0 {
 		if err := os.Remove(s.path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
