@@ -170,6 +170,11 @@ func (d *Dashboard) handleAdminTokenAction(w http.ResponseWriter, r *http.Reques
 	}
 	d.tokenMu.Lock()
 	f, err := auth.LoadTokenFile(d.tokenFile)
+	if err == nil && f.LastAdminToken(id, time.Now()) {
+		d.tokenMu.Unlock()
+		d.jsonError(w, "This is the last active admin token; create another admin token first", http.StatusConflict)
+		return
+	}
 	if err == nil {
 		err = f.Revoke(id)
 		if err == nil {

@@ -181,6 +181,30 @@ func (f *TokenFile) Revoke(id string) error {
 	return fmt.Errorf("%w: %s", ErrTokenNotFound, id)
 }
 
+// LastAdminToken reports whether revoking the token id would leave no usable
+// token of an active admin account, which would lock everyone out of the
+// admin dashboard.
+func (f *TokenFile) LastAdminToken(id string, now time.Time) bool {
+	usable := func(t FileToken) bool {
+		if t.Revoked || (t.ExpiresAt != nil && !t.ExpiresAt.After(now)) {
+			return false
+		}
+		a, ok := f.Account(t.AccountID)
+		return ok && a.Active && a.Admin
+	}
+	found := false
+	for _, t := range f.Tokens {
+		if !usable(t) {
+			continue
+		}
+		if t.ID != id {
+			return false
+		}
+		found = true
+	}
+	return found
+}
+
 // Sorted returns the tokens ordered by creation time.
 func (f *TokenFile) Sorted() []FileToken {
 	out := append([]FileToken(nil), f.Tokens...)

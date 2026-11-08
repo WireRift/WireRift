@@ -226,3 +226,27 @@ func TestIndexHasTokenManagement(t *testing.T) {
 		}
 	}
 }
+
+func TestRevokeLastAdminTokenRefused(t *testing.T) {
+	h, _, path, adminTok, _, _ := tokenFixture(t)
+	f, _ := auth.LoadTokenFile(path)
+	adminID := ""
+	for _, tok := range f.Tokens {
+		if a, ok := f.Account(tok.AccountID); ok && a.Admin {
+			adminID = tok.ID
+		}
+	}
+	if adminID == "" {
+		t.Fatal("fixture has no admin token")
+	}
+	if rec := postJSON(h, "/api/admin/tokens/"+adminID+"/revoke", adminTok, ""); rec.Code != http.StatusConflict {
+		t.Fatalf("revoking the last admin token: %d %s", rec.Code, rec.Body)
+	}
+	rec := postJSON(h, "/api/admin/tokens", adminTok, `{"account":"boss","admin":true}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create admin: %d", rec.Code)
+	}
+	if rec := postJSON(h, "/api/admin/tokens/"+adminID+"/revoke", adminTok, ""); rec.Code != http.StatusOK {
+		t.Fatalf("with a second admin token the revoke must work: %d %s", rec.Code, rec.Body)
+	}
+}
