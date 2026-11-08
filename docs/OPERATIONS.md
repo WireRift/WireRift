@@ -137,7 +137,7 @@ owner's approved SLOs.
   rate/latency/memory/fd history, accounts, sessions (with Disconnect), held subdomains, certificate expiry
   and the Activity log. Reach it with `ssh -L 4040:127.0.0.1:4040 host` or publish it with
   `-dashboard-host dashboard` (HTTPS only, token required, rate limited). The history and the activity log
-  are in memory only and start empty after a restart; use `/metrics` and the journal for anything longer.
+  are saved to `<cert-dir>/state.json` every minute and on a clean stop, and restored at start (entries older than 24 hours are dropped; the history keeps its last hour and shows a gap while the server was down). Captured request bodies are never written to disk. Use `/metrics` and the journal for anything longer.
 - `-edge-rate` and `-edge-burst` set the per-visitor-IP request limit of the HTTP
   edge (defaults 100 req/s, burst 50). Raise them when a busy site or a proxy
   without `-trusted-proxy-cidrs` makes many visitors share one IP.

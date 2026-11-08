@@ -266,6 +266,7 @@ Environment Variables:
 	}
 	srvConfig.OfflineGrace = *offlineGrace
 	srvConfig.HeldFile = filepath.Join(*certDir, "held.json")
+	srvConfig.StateFile = filepath.Join(*certDir, "state.json")
 	srvConfig.AuthManager = authMgr
 	srvConfig.Version = version
 	srvConfig.TrustedProxyCIDRs = splitCommaList(*trustedProxyCIDRs)

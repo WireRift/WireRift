@@ -102,6 +102,9 @@ type Config struct {
 	// on hold plus the ones of connected clients) and Start loads them back,
 	// so a restart does not open a window for others to take a client's name.
 	HeldFile string
+	// StateFile, when set, keeps the dashboard's activity log and history across
+	// restarts (saved every minute and on Stop).
+	StateFile string
 
 	// TCPIdleTimeout closes a TCP tunnel connection that has moved no data in
 	// either direction for this long. Zero (the default) never does, so a quiet
@@ -503,6 +506,7 @@ func (s *Server) Start() error {
 	s.nextPort.Store(int32(portStart - 1)) //nolint:gosec // validated port numbers are <= 65535
 
 	s.loadHeld()
+	s.loadState()
 
 	// Start control plane listener
 	if err := s.startControlListener(); err != nil {
@@ -582,6 +586,7 @@ func (s *Server) Stop() error {
 	// Stop advertising readiness before beginning graceful drain.
 	s.ready.Store(false)
 	s.saveHeld()
+	s.saveState()
 
 	// Tell every client the stop is intentional before cancelling the context
 	// (which makes the sessions close their connections on their own), but

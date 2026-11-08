@@ -17,8 +17,8 @@ import (
 
 // This file holds what the administrator view of the dashboard needs: a short
 // in-memory event log, a rolling history of the main gauges and counters, a
-// detailed snapshot, and a few management actions. Nothing here is persisted
-// and nothing here is reachable without the dashboard's authentication.
+// detailed snapshot, and a few management actions. With Config.StateFile the log and
+// history survive a restart. Nothing here is reachable without the dashboard's authentication.
 
 const (
 	maxEvents       = 500
@@ -141,12 +141,15 @@ func (s *Server) runHistory() {
 	defer s.wg.Done()
 	t := time.NewTicker(historyInterval)
 	defer t.Stop()
-	for {
+	for n := 1; ; n++ {
 		select {
 		case <-s.ctx.Done():
 			return
 		case <-t.C:
 			s.history.add(s.sampleHistory())
+			if n%stateSaveEvery == 0 {
+				s.saveState()
+			}
 		}
 	}
 }

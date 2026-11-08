@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.24.0] - 2026-11-08
+
+### Added
+- The dashboard's activity log and one-hour history now survive a restart (`<cert-dir>/state.json`, saved every minute and on stop, mode 0600; entries older than 24 hours are dropped). Captured request bodies are not persisted.
+
 ## [1.23.0] - 2026-11-08
 
 ### Added
