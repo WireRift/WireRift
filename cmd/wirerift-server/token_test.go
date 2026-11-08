@@ -168,3 +168,47 @@ func TestTokenRevokeAcceptsOptionsAfterTheID(t *testing.T) {
 		t.Error("an extra argument must be rejected")
 	}
 }
+
+func TestTokenPasswd(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "tokens.json")
+	if _, err := runTokenCmd(t, "create", "-account", "boss", "-admin", "-file", file); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := tokenPasswd(file, &out, strings.NewReader("a long enough password\n"), "boss"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "boss") {
+		t.Errorf("output: %q", out.String())
+	}
+	m := auth.NewManager("x")
+	if _, err := m.LoadTokenFile(file); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.VerifyPassword("boss", "a long enough password"); err != nil {
+		t.Errorf("the password does not work: %v", err)
+	}
+	t.Setenv("WIRERIFT_PASSWORD", "from the environment 1")
+	if err := tokenPasswd(file, &out, strings.NewReader(""), "boss"); err != nil {
+		t.Errorf("env password: %v", err)
+	}
+	t.Setenv("WIRERIFT_PASSWORD", "")
+	for name, c := range map[string]struct {
+		in, account string
+	}{
+		"no account":  {"a long enough password\n", ""},
+		"no password": {"", "boss"},
+		"weak":        {"short\n", "boss"},
+		"unknown":     {"a long enough password\n", "ghost"},
+	} {
+		if err := tokenPasswd(file, &out, strings.NewReader(c.in), c.account); err == nil {
+			t.Errorf("%s: no error", name)
+		}
+	}
+	if err := tokenPasswd(filepath.Join(t.TempDir(), "x", "missing.json"), &out, strings.NewReader("a long enough password\n"), "boss"); err == nil {
+		t.Error("a missing file must be an error")
+	}
+	if _, err := runTokenCmd(t, "passwd", "-account", "boss", "-file", file); err == nil {
+		t.Log("passwd via runToken read stdin (test stdin is empty)")
+	}
+}

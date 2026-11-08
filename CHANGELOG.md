@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.23.0] - 2026-11-08
+
+### Added
+- Dashboard: sign in with a username (the account name) and a password instead of a token. Set passwords in the Admin tab or with `wirerift-server token passwd`. Salted PBKDF2-HMAC-SHA256 hashes in `tokens.json`; 12-hour in-memory sessions; same lockout as wrong tokens; a new password ends the account's sessions.
+
 ## [1.22.0] - 2026-11-08
 
 ### Added

@@ -132,6 +132,7 @@ owner's approved SLOs.
   it with `authorization.credentials_file`.
 - The dashboard's **Connect** tab (every account) builds the install and `wirerift` commands for this server from `GET /api/connect`: the control address (`tls://` when the control plane serves TLS), public URL scheme, TCP port range and reserved subdomains. Set `-domain` to the public name so the commands carry it.
 - Administrators create and revoke tokens in the **Admin** tab (`/api/admin/tokens`): it edits the same `tokens.json` as `wirerift-server token ...` and applies the change at once; a server without a token file answers 501. Back up `tokens.json` as before.
+- Accounts can also sign in to the dashboard with a username (the account name) and a password: set it with `wirerift-server token passwd -account NAME` (password from `WIRERIFT_PASSWORD` or stdin) or in the Admin tab. Hashes are PBKDF2-HMAC-SHA256 in `tokens.json`; sessions last 12 hours, live in memory and end on restart, password change or deactivation.
 - The dashboard has an **Admin** tab for administrator tokens (`token create -admin`): health, one hour of
   rate/latency/memory/fd history, accounts, sessions (with Disconnect), held subdomains, certificate expiry
   and the Activity log. Reach it with `ssh -L 4040:127.0.0.1:4040 host` or publish it with

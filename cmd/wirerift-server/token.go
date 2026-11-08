@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -24,6 +26,9 @@ Commands:
   create    Create a token (the secret is shown once)
   list      List tokens
   revoke    Revoke a token by its id
+  passwd    Set the dashboard password of an account (the username is the account
+            name); give it with -account, the password is read from the
+            WIRERIFT_PASSWORD environment variable or else from standard input
 
 Options (all commands):
   -file path       token file (default <cert-dir>/tokens.json)
@@ -99,6 +104,8 @@ func runToken(args []string, out io.Writer) error {
 			return fmt.Errorf("token revoke: give the token id (see 'token list')")
 		}
 		return tokenRevoke(path, out, positional[0])
+	case "passwd":
+		return tokenPasswd(path, out, os.Stdin, *account)
 	default:
 		return fmt.Errorf("unknown token command %q\n\n%s", cmd, usageText)
 	}
@@ -199,6 +206,38 @@ func tokenRevoke(path string, out io.Writer, id string) error {
 		return err
 	}
 	fmt.Fprintf(out, "Token %s revoked.\n", id)
+	return nil
+}
+
+// tokenPasswd sets the dashboard password of an existing account. The password
+// comes from WIRERIFT_PASSWORD or the first line of in, never from an argument
+// (those show up in the process list and the shell history).
+func tokenPasswd(path string, out io.Writer, in io.Reader, account string) error {
+	if account == "" {
+		return fmt.Errorf("token passwd: -account is required")
+	}
+	pw := os.Getenv("WIRERIFT_PASSWORD")
+	if pw == "" {
+		line, err := bufio.NewReader(in).ReadString('\n')
+		if err != nil && line == "" {
+			return fmt.Errorf("token passwd: give the password in WIRERIFT_PASSWORD or on standard input")
+		}
+		pw = strings.TrimRight(line, "\r\n")
+	}
+	f, err := auth.LoadTokenFile(path)
+	if err != nil {
+		return err
+	}
+	if err := f.SetPassword(account, pw); err != nil {
+		if err == auth.ErrBadAccount {
+			return fmt.Errorf("token passwd: no account %q in %s (create a token for it first)", account, path)
+		}
+		return err
+	}
+	if err := f.Save(path); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Dashboard password set for account %s.\n", account)
 	return nil
 }
 

@@ -62,6 +62,7 @@ type Manager struct {
 	mu       sync.RWMutex
 
 	byHash         map[string]*Token // tokens from the token file, by secret digest
+	passwords      map[string]string // dashboard password hashes by account ID
 	loadedAccounts []string          // account IDs loaded from the token file
 }
 
@@ -189,9 +190,13 @@ func (m *Manager) LoadTokenFile(path string) (int, error) {
 // ApplyTokenFile is LoadTokenFile for an already parsed file.
 func (m *Manager) ApplyTokenFile(f *TokenFile) {
 	accounts := make(map[string]*Account, len(f.Accounts))
+	passwords := make(map[string]string)
 	for _, a := range f.Accounts {
 		if a.ID == DevAccountID {
 			continue // the bootstrap account cannot be redefined from a file
+		}
+		if a.PasswordHash != "" {
+			passwords[a.ID] = a.PasswordHash
 		}
 		accounts[a.ID] = &Account{
 			ID: a.ID, Name: a.Name, Active: a.Active, CreatedAt: a.CreatedAt,
@@ -221,6 +226,7 @@ func (m *Manager) ApplyTokenFile(f *TokenFile) {
 		m.loadedAccounts = append(m.loadedAccounts, id)
 	}
 	m.byHash = byHash
+	m.passwords = passwords
 }
 
 // StillValid reports whether a token returned earlier by ValidateToken would

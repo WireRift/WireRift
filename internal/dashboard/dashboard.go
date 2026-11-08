@@ -7,6 +7,7 @@ import (
 	"embed"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net"
@@ -30,6 +31,7 @@ type Dashboard struct {
 	port          int
 	httpsEnabled  bool
 	guard         authGuard
+	sessions      loginSessions
 	certs         func() []CertInfo
 	tokenFile     string
 	tokensChanged func()
@@ -84,12 +86,15 @@ func (d *Dashboard) Handler() http.Handler {
 	mux.HandleFunc("/api/stats", d.authMiddleware(d.handleStats))
 	mux.HandleFunc("/api/requests", d.authMiddleware(d.handleRequests))
 	mux.HandleFunc("/api/requests/", d.authMiddleware(d.handleRequestActions))
+	mux.HandleFunc("/api/login", d.handleLogin)
+	mux.HandleFunc("/api/logout", d.handleLogout)
 	mux.HandleFunc("/api/me", d.authMiddleware(d.handleMe))
 	mux.HandleFunc("/api/connect", d.authMiddleware(d.handleConnect))
 	mux.HandleFunc("/api/events", d.authMiddleware(d.handleEvents))
 	mux.HandleFunc("/api/admin/overview", d.authMiddleware(d.adminOnly(d.handleAdminOverview)))
 	mux.HandleFunc("/api/admin/history", d.authMiddleware(d.adminOnly(d.handleAdminHistory)))
 	mux.HandleFunc("/api/admin/accounts", d.authMiddleware(d.adminOnly(d.handleAdminAccounts)))
+	mux.HandleFunc("/api/admin/accounts/", d.authMiddleware(d.adminOnly(d.handleAdminPassword)))
 	mux.HandleFunc("/api/admin/certs", d.authMiddleware(d.adminOnly(d.handleAdminCerts)))
 	mux.HandleFunc("/api/admin/tokens", d.authMiddleware(d.adminOnly(d.handleAdminTokens)))
 	mux.HandleFunc("/api/admin/tokens/", d.authMiddleware(d.adminOnly(d.handleAdminTokenAction)))
@@ -213,8 +218,8 @@ func (d *Dashboard) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		// Check for Bearer token
-		auth := r.Header.Get("Authorization")
-		if auth == "" {
+		authz := r.Header.Get("Authorization")
+		if authz == "" {
 			// Session cookies only allowed for safe (GET) requests to prevent CSRF
 			if r.Method == http.MethodGet {
 				cookie, err := r.Cookie("wirerift_session")
@@ -232,14 +237,23 @@ func (d *Dashboard) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		parts := strings.SplitN(auth, " ", 2)
+		parts := strings.SplitN(authz, " ", 2)
 		if len(parts) != 2 || parts[0] != "Bearer" {
 			d.guard.fail(ip)
 			d.jsonError(w, "Invalid authorization", http.StatusUnauthorized)
 			return
 		}
 
-		_, acct, err := d.authManager.ValidateToken(parts[1])
+		var acct *auth.Account
+		var err error
+		if strings.HasPrefix(parts[1], loginSessionPrefix) {
+			var ok bool
+			if acct, ok = d.sessionAccount(parts[1]); !ok {
+				err = errors.New("session ended")
+			}
+		} else {
+			_, acct, err = d.authManager.ValidateToken(parts[1])
+		}
 		if err != nil {
 			d.guard.fail(ip)
 			d.jsonError(w, "Invalid token", http.StatusUnauthorized)
@@ -941,6 +955,14 @@ th,td{padding:.5rem .625rem;font-size:.75rem}
 <p class="cn-note">Every token has its own secret and can be revoked on its own. Account limits and role are shared by all tokens of an account, so setting them here changes them for its other tokens too.</p>
 <button class="btn" id="tokCreate">Create token</button>
 </details>
+<details class="cn-form" id="pwSet"><summary>Set a dashboard password</summary>
+<div class="tok-grid">
+<div><label for="pwAccount">Account <span class="hint">the username for signing in</span></label><input id="pwAccount" type="text" list="tokAccounts" autocomplete="off" spellcheck="false"></div>
+<div><label for="pwValue">New password <span class="hint">at least 10 characters</span></label><input id="pwValue" type="password" autocomplete="new-password"></div>
+</div>
+<p class="cn-note">The account signs in to this dashboard with its name and this password; its role (administrator or regular user) decides what it sees. Setting a new password signs that account out of the dashboard. API tokens keep working.</p>
+<button class="btn" id="pwSave">Set password</button>
+</details>
 <div class="tok-secret" id="tokSecret" style="display:none"></div>
 <div class="sec-title">All sessions</div>
 <div class="tbl-wrap"><table><thead><tr><th>ID</th><th>Account</th><th>Remote</th><th>Connected</th><th>Last heartbeat</th><th>Tunnels</th><th></th></tr></thead><tbody id="tbodyAdminSessions"></tbody></table></div>
@@ -957,13 +979,26 @@ th,td{padding:.5rem .625rem;font-size:.75rem}
 <div class="overlay" id="loginOverlay">
 <div class="login-box">
 <h2>WireRift</h2>
-<div class="sub">Enter your API token to authenticate</div>
+<div class="sub" id="loginSub">Sign in with your username and password</div>
+<div id="loginPw">
+<div class="field">
+<label for="userInput">Username</label>
+<input type="text" id="userInput" placeholder="account name" autocomplete="username" spellcheck="false">
+</div>
+<div class="field">
+<label for="passInput">Password</label>
+<input type="password" id="passInput" placeholder="password" autocomplete="current-password">
+</div>
+</div>
+<div id="loginTk" style="display:none">
 <div class="field">
 <label for="tokenInput">API Token</label>
 <input type="password" id="tokenInput" placeholder="Enter your API token" autocomplete="off">
 </div>
-<button class="btn" id="loginBtn" style="width:100%">Authenticate</button>
+</div>
+<button class="btn" id="loginBtn" style="width:100%">Sign in</button>
 <div class="login-err" id="loginErr"></div>
+<div style="text-align:center;margin-top:.5rem"><a href="#" id="loginSwitch" style="font-size:.8125rem;color:var(--ac)">Use an API token instead</a></div>
 </div>
 </div>
 
@@ -1029,13 +1064,14 @@ function toast(msg, type){
 function showLogin(){
     $('loginOverlay').classList.add('show');
     $('app').style.display = 'none';
-    setTimeout(function(){ $('tokenInput').focus(); }, 100);
+    setTimeout(function(){ $(loginByToken ? 'tokenInput' : 'userInput').focus(); }, 100);
 }
 function hideLogin(){
     $('loginOverlay').classList.remove('show');
     $('app').style.display = 'block';
 }
 function logout(){
+    if(apiToken.indexOf('wrs_') === 0){ fetch('/api/logout', {method: 'POST', headers: {'Authorization': 'Bearer ' + apiToken}}).catch(function(){}); }
     try { sessionStorage.removeItem('wr_t'); } catch(e){}
     apiToken = '';
     if(statsInterval){ clearInterval(statsInterval); statsInterval = null; }
@@ -1044,12 +1080,35 @@ function logout(){
     if(animFrame){ cancelAnimationFrame(animFrame); animFrame = null; }
     showLogin();
 }
-function doLogin(){
-    var val = $('tokenInput').value.trim();
-    if(!val){ $('loginErr').textContent = 'Please enter a token'; return; }
-    apiToken = val;
+var loginByToken = false;
+function setLoginMode(tk){
+    loginByToken = tk;
+    $('loginPw').style.display = tk ? 'none' : '';
+    $('loginTk').style.display = tk ? '' : 'none';
+    $('loginSub').textContent = tk ? 'Enter your API token to authenticate' : 'Sign in with your username and password';
+    $('loginSwitch').textContent = tk ? 'Use a username and password instead' : 'Use an API token instead';
+    $('loginBtn').textContent = tk ? 'Authenticate' : 'Sign in';
     $('loginErr').textContent = '';
-    verifyAndLoad();
+    setTimeout(function(){ $(tk ? 'tokenInput' : 'userInput').focus(); }, 50);
+}
+function doLogin(){
+    $('loginErr').textContent = '';
+    if(loginByToken){
+        var val = $('tokenInput').value.trim();
+        if(!val){ $('loginErr').textContent = 'Please enter a token'; return; }
+        apiToken = val;
+        verifyAndLoad();
+        return;
+    }
+    var u = $('userInput').value.trim(), pw = $('passInput').value;
+    if(!u || !pw){ $('loginErr').textContent = 'Enter your username and password'; return; }
+    fetch('/api/login', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({username: u, password: pw})})
+    .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(j){
+        if(!r.ok) throw new Error(r.status === 429 ? 'Too many failed attempts, wait a few minutes' : (j.error || 'Sign-in failed'));
+        return j;
+    }); })
+    .then(function(j){ $('passInput').value = ''; apiToken = j.token; verifyAndLoad(); })
+    .catch(function(e){ $('loginErr').textContent = e.message === 'Failed to fetch' ? 'Connection failed' : e.message; });
 }
 
 function verifyAndLoad(){
@@ -1071,7 +1130,7 @@ function verifyAndLoad(){
         toast('Authenticated successfully', 'ok');
     }).catch(function(e){
         try { sessionStorage.removeItem('wr_t'); } catch(ex){}
-        $('loginErr').textContent = e.message === 'Unauthorized' ? 'Invalid token' : 'Connection failed';
+        $('loginErr').textContent = e.message === 'Unauthorized' ? (loginByToken ? 'Invalid token' : 'Session rejected, sign in again') : 'Connection failed';
         showLogin();
     });
 }
@@ -2143,9 +2202,10 @@ function init(){
     $('themeBtn').onclick = toggleTheme;
     $('authBtn').onclick = showLogin;
     $('loginBtn').onclick = doLogin;
-    $('tokenInput').addEventListener('keydown', function(e){
-        if(e.key === 'Enter') doLogin();
+    ['tokenInput', 'userInput', 'passInput'].forEach(function(id){
+        $(id).addEventListener('keydown', function(e){ if(e.key === 'Enter') doLogin(); });
     });
+    $('loginSwitch').onclick = function(e){ e.preventDefault(); setLoginMode(!loginByToken); };
 
     var tabEls = qsa('.tab');
     for(var i = 0; i < tabEls.length; i++){
@@ -2158,6 +2218,13 @@ function init(){
     $('refreshSessions').onclick = function(){ loadSessions(); toast('Sessions refreshed', 'info'); };
     $('refreshRequests').onclick = function(){ loadRequests(); toast('Inspector refreshed', 'info'); };
     $('tokCreate').onclick = createToken;
+    $('pwSave').onclick = function(){
+        var acct = $('pwAccount').value.trim(), pw = $('pwValue').value;
+        if(!acct || !pw){ toast('Give an account and a password', 'err'); return; }
+        tokCall('POST', '/api/admin/accounts/' + encodeURIComponent(acct) + '/password', {password: pw}).then(function(){
+            $('pwValue').value = ''; toast('Password set for ' + acct, 'ok'); loadActivity();
+        }).catch(function(e){ toast('Failed: ' + e.message, 'err'); });
+    };
     $('refreshActivity').onclick = function(){ loadActivity(); toast('Activity refreshed', 'info'); };
     $('refreshAdmin').onclick = function(){ loadAdmin(); toast('Admin view refreshed', 'info'); };
     $('searchActivity').oninput = renderActivity;

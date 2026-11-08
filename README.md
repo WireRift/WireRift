@@ -421,6 +421,16 @@ Make an account an administrator when creating its token (`-admin=false` takes t
 wirerift-server token create -account ops -name laptop -admin
 ```
 
+#### Signing in with a username and password
+
+Besides a token, an account can sign in to the dashboard with a **username and password**. The username is the account name (case-insensitive). Set the password in the Admin tab (*Set a dashboard password*) or on the server:
+
+```bash
+echo 'a long password' | wirerift-server token passwd -account ops   # or WIRERIFT_PASSWORD=... 
+```
+
+Passwords are 10-256 characters and stored as salted PBKDF2-HMAC-SHA256 hashes in `tokens.json`; the account's role decides what the session sees. A sign-in gives a session that lasts 12 hours (kept in server memory, so a restart signs everyone out; setting a new password or deactivating the account ends its sessions too). Wrong passwords count against the same per-address lockout as wrong tokens. Passwords only open the dashboard; tunnels still connect with tokens.
+
 When a token file with tokens exists and no bootstrap token is given, the random first-run token is disabled, so the administrator is whoever holds an `-admin` token.
 
 ### Reaching the dashboard remotely

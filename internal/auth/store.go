@@ -37,14 +37,15 @@ type TokenFile struct {
 // FileAccount is an account as stored in the token file. A zero limit means
 // "server default / unlimited".
 type FileAccount struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Active      bool      `json:"active"`
-	MaxTunnels  int       `json:"max_tunnels,omitempty"`
-	MaxSessions int       `json:"max_sessions,omitempty"`
-	RateLimit   int       `json:"rate_limit,omitempty"`
-	Admin       bool      `json:"admin,omitempty"` // may see every account in the dashboard
-	CreatedAt   time.Time `json:"created_at"`
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	Active       bool      `json:"active"`
+	MaxTunnels   int       `json:"max_tunnels,omitempty"`
+	MaxSessions  int       `json:"max_sessions,omitempty"`
+	RateLimit    int       `json:"rate_limit,omitempty"`
+	Admin        bool      `json:"admin,omitempty"`         // may see every account in the dashboard
+	PasswordHash string    `json:"password_hash,omitempty"` // dashboard login (username = account name)
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 // FileToken is a token as stored in the token file.
@@ -203,6 +204,22 @@ func (f *TokenFile) LastAdminToken(id string, now time.Time) bool {
 		found = true
 	}
 	return found
+}
+
+// SetPassword sets the dashboard password of an existing account.
+func (f *TokenFile) SetPassword(account, password string) error {
+	hash, err := HashPassword(password)
+	if err != nil {
+		return err
+	}
+	id := "acct_" + strings.ToLower(account)
+	for i := range f.Accounts {
+		if f.Accounts[i].ID == id {
+			f.Accounts[i].PasswordHash = hash
+			return nil
+		}
+	}
+	return ErrBadAccount
 }
 
 // Sorted returns the tokens ordered by creation time.
