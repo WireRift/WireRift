@@ -631,6 +631,68 @@ display:inline-flex;align-items:center;justify-content:center;font-weight:600;
 .chip.on{background:var(--ac);border-color:var(--ac);color:#fff}
 tr.row-warn td{background:color-mix(in srgb,var(--wn) 9%,transparent)}
 tr.row-warn td:first-child{box-shadow:inset 3px 0 0 var(--wn)}
+/* Admin console */
+.adm-hero{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;margin-top:1rem;padding:1rem 1.25rem;border:1px solid var(--bd);border-radius:.75rem;background:var(--bg-1);box-shadow:var(--shadow);position:relative;overflow:hidden}
+.adm-hero::before{content:'';position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--ok)}
+.adm-hero.warn::before{background:var(--wn)}.adm-hero.bad::before{background:var(--er)}
+.hero-main{display:flex;align-items:center;gap:.875rem;min-width:0}
+.hero-dot{width:.875rem;height:.875rem;border-radius:50%;background:var(--ok);box-shadow:0 0 0 4px color-mix(in srgb,var(--ok) 22%,transparent);flex:none}
+.adm-hero.warn .hero-dot{background:var(--wn);box-shadow:0 0 0 4px color-mix(in srgb,var(--wn) 22%,transparent)}
+.adm-hero.bad .hero-dot{background:var(--er);box-shadow:0 0 0 4px color-mix(in srgb,var(--er) 22%,transparent)}
+.hero-t{font-size:1.125rem;font-weight:700;color:var(--tx-0)}
+.hero-s{font-size:.8125rem;color:var(--tx-1);margin-top:.25rem;display:flex;flex-wrap:wrap;gap:.375rem;align-items:center}
+.hero-meta{display:flex;flex-wrap:wrap;gap:.375rem}
+.hero-meta span{font-size:.75rem;color:var(--tx-1);background:var(--bg-2);border:1px solid var(--bd);border-radius:999px;padding:.1875rem .625rem}
+.tiles-label{font-size:.6875rem;font-weight:600;color:var(--tx-2);text-transform:uppercase;letter-spacing:.06em;margin:1.125rem 0 .5rem}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(11.5rem,1fr));gap:.75rem}
+.tile{position:relative;overflow:hidden;background:var(--bg-1);border:1px solid var(--bd);border-radius:.75rem;padding:.8125rem 1rem .5rem;box-shadow:var(--shadow);min-height:6.75rem;display:flex;flex-direction:column}
+.tile-k{font-size:.6875rem;color:var(--tx-2);text-transform:uppercase;letter-spacing:.05em;font-weight:600}
+.tile-v{font-size:1.5rem;font-weight:700;color:var(--tx-0);margin-top:.1875rem;line-height:1.15;word-break:break-word}
+.tile-s{font-size:.6875rem;color:var(--tx-2);margin-top:.1875rem}
+.tile.warn{border-color:color-mix(in srgb,var(--wn) 55%,var(--bd))}.tile.warn .tile-v{color:var(--wn)}
+.tile-spark{width:100%;height:1.75rem;display:block;margin-top:auto;padding-top:.375rem}
+.meter{height:.375rem;background:var(--bg-3);border-radius:999px;overflow:hidden;margin-top:.5rem}
+.meter i{display:block;height:100%;border-radius:999px}
+.adm-panel{background:var(--bg-1);border:1px solid var(--bd);border-radius:.75rem;padding:.875rem 1rem;box-shadow:var(--shadow);min-width:0}
+.adm-panel-h{display:flex;align-items:center;justify-content:space-between;gap:.75rem;flex-wrap:wrap;margin-bottom:.625rem;font-size:.8125rem;color:var(--tx-0)}
+.adm-sub{font-size:.6875rem;color:var(--tx-2)}
+.seg{display:inline-flex;border:1px solid var(--bd);border-radius:.5rem;overflow:hidden}
+.seg button{background:transparent;border:none;color:var(--tx-1);font:inherit;font-size:.75rem;padding:.3125rem .875rem;cursor:pointer}
+.seg button.on{background:var(--ac);color:#fff}
+.adm-legend{display:flex;gap:1rem;flex-wrap:wrap;font-size:.75rem;color:var(--tx-1)}
+.adm-legend i,.adm-tip i{display:inline-block;width:.625rem;height:.625rem;border-radius:2px;margin-right:.375rem}
+.adm-legend b,.adm-tip b{color:var(--tx-0);font-weight:600}
+.adm-chart{position:relative;min-height:14.5rem}
+.adm-chart svg{display:block;max-width:100%}
+.ax-grid{stroke:var(--bd);stroke-width:1}.ax-t{fill:var(--tx-2);font-size:10.5px}.ax-x{stroke:var(--tx-2);stroke-width:1;stroke-dasharray:3 3}
+.adm-tip{position:absolute;pointer-events:none;background:var(--bg-3);border:1px solid var(--bd);border-radius:.5rem;padding:.4375rem .625rem;font-size:.75rem;color:var(--tx-1);box-shadow:0 6px 18px rgba(0,0,0,.35);white-space:nowrap;z-index:3}
+.adm-tip .tt{color:var(--tx-2);font-size:.6875rem;margin:.0625rem 0 .1875rem}
+.adm-tbl{margin-top:.5rem}.adm-tbl summary{cursor:pointer;font-size:.75rem;color:var(--tx-2)}.adm-tbl .tbl-wrap{margin-top:.5rem;max-height:14rem;overflow:auto}
+.two{margin-top:.75rem}
+.lh-row{display:flex;align-items:flex-end;gap:2px;height:8.5rem}
+.lh{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;height:100%}
+.lh-b{flex:1;width:100%;display:flex;align-items:flex-end}
+.lh-b i{display:block;width:100%;border-radius:3px 3px 0 0;min-height:1px}
+.lh span{font-size:.5625rem;color:var(--tx-2);margin-top:.25rem;white-space:nowrap}
+.lh-stats{display:flex;flex-wrap:wrap;gap:.375rem 1.125rem;margin-top:.75rem;font-size:.75rem;color:var(--tx-2)}.lh-stats b{color:var(--tx-0)}
+.stackbar{display:flex;gap:2px;height:.875rem;border-radius:.4375rem;overflow:hidden;margin:.25rem 0 .875rem}
+.stackbar i{display:block;min-width:3px}
+.sl{display:flex;align-items:center;justify-content:space-between;gap:.75rem;padding:.3125rem 0;font-size:.8125rem;border-bottom:1px solid var(--bd);color:var(--tx-1)}
+.sl:last-child{border-bottom:none}.sl i{display:inline-block;width:.625rem;height:.625rem;border-radius:2px;margin-right:.5rem}
+.sl em{font-style:normal;color:var(--tx-2);margin-left:.25rem}.sl b{margin-left:auto;color:var(--tx-0)}.sl u{text-decoration:none;color:var(--tx-2);width:3.5rem;text-align:right}
+.accts{display:grid;grid-template-columns:repeat(auto-fill,minmax(19rem,1fr));gap:.75rem}
+.acct{background:var(--bg-1);border:1px solid var(--bd);border-radius:.75rem;padding:.875rem 1rem;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:.75rem}
+.acct.off{opacity:.65}
+.acct-h{display:flex;align-items:center;justify-content:space-between;gap:.5rem}.acct-h b{font-size:1rem;color:var(--tx-0);overflow:hidden;text-overflow:ellipsis}
+.lims{display:grid;grid-template-columns:1fr 1fr;gap:.75rem}
+.lim-h{display:flex;justify-content:space-between;font-size:.6875rem;color:var(--tx-2);text-transform:uppercase;letter-spacing:.04em}.lim-h b{color:var(--tx-0);font-size:.8125rem;text-transform:none;letter-spacing:0}
+.lim-n{font-size:.6875rem;color:var(--tx-2);margin-top:.5rem}
+.acct-n{font-size:.6875rem;color:var(--tx-2);margin-top:.375rem}
+.acct-a{display:flex;gap:.5rem;margin-top:auto}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.75rem}
+.adm-nav a.on{color:#fff;background:var(--ac);border-color:var(--ac)}
+.adm-forms>details{margin:0}
+@media(max-width:480px){.tiles{grid-template-columns:repeat(2,minmax(0,1fr));gap:.5rem}.tile-v{font-size:1.1875rem}.lims{grid-template-columns:1fr}.adm-hero{padding:.875rem}}
 /* Admin / Activity */
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(10.5rem,1fr));gap:.75rem;margin-bottom:1rem}
 @media(max-width:480px){.cards{grid-template-columns:repeat(2,minmax(0,1fr));gap:.5rem}.card .v{font-size:1.0625rem}}
@@ -649,16 +711,8 @@ tr.row-warn td:first-child{box-shadow:inset 3px 0 0 var(--wn)}
 .adm-card>summary{font-weight:600;font-size:.875rem;color:var(--tx-0);cursor:pointer}
 .adm-find{margin:.25rem 0 .5rem;max-width:18rem}
 .sec-title{scroll-margin-top:3.5rem}
-.charts{display:grid;grid-template-columns:repeat(auto-fill,minmax(15rem,1fr));gap:.75rem}
-.chart{background:var(--bg-1);border:1px solid var(--bd);border-radius:.625rem;padding:.625rem .75rem}
-.chart .h{display:flex;justify-content:space-between;align-items:baseline;font-size:.75rem;color:var(--tx-2)}
-.chart .h b{color:var(--tx-0);font-size:.9375rem}
-.chart svg{width:100%;height:3.25rem;display:block;margin-top:.25rem}
 .pill{display:inline-block;padding:.0625rem .5rem;border-radius:9999px;font-size:.6875rem;font-weight:600;background:var(--bg-3);color:var(--tx-1)}
 .pill.ok{background:rgba(34,197,94,.15);color:var(--ok)}.pill.warn{background:rgba(245,158,11,.15);color:var(--wn)}.pill.bad{background:rgba(239,68,68,.15);color:var(--er)}
-.hbar{display:flex;align-items:center;gap:.5rem;font-size:.75rem;margin:.1875rem 0;color:var(--tx-1)}
-.hbar .l{width:4.5rem}.hbar .t{flex:1;height:.5rem;background:var(--bg-3);border-radius:9999px;overflow:hidden}
-.hbar .t i{display:block;height:100%;background:var(--ac)}.hbar .n{width:5rem;text-align:right;color:var(--tx-0)}
 .two{display:grid;grid-template-columns:repeat(auto-fit,minmax(20rem,1fr));gap:1rem}
 .btn-danger{background:transparent;color:var(--er);border:1px solid var(--er);border-radius:.375rem;padding:.1875rem .5rem;cursor:pointer;font-size:.75rem}
 .btn-danger:hover{background:var(--er);color:#fff}
@@ -803,7 +857,6 @@ border-radius:.375rem;color:var(--tx-0);font-size:.8125rem}
 .tok-secret{margin-top:1rem;padding:.875rem 1rem;border:1px solid var(--ok);border-radius:.5rem;background:var(--bg-2)}
 .tok-secret code{display:block;margin:.5rem 0;padding:.5rem .75rem;background:var(--bg-1);border-radius:.375rem;word-break:break-all;user-select:all}
 .tok-off{opacity:.55}
-#tokNew{margin-top:1rem}
 #tokNew .cn-note{margin:.75rem 0}
 
 /* Empty state */
@@ -1017,17 +1070,24 @@ th,td{padding:.5rem .625rem;font-size:.75rem}
 <div class="panel" id="panelAdmin">
 <div class="panel-bar"><div class="panel-bar-left"><span class="pill" id="adminStamp">loading...</span></div>
 <button class="btn-ghost" id="refreshAdmin">Refresh <span class="kbd">R</span></button></div>
-<nav class="adm-nav" id="admNav" aria-label="Admin sections"><a href="#secHealth" data-jump="secHealth">Health</a><a href="#secCharts" data-jump="secCharts">Last hour</a><a href="#secAccounts" data-jump="secAccounts">Accounts</a><a href="#secTokens" data-jump="secTokens">Tokens</a><a href="#secSessions" data-jump="secSessions">Sessions</a><a href="#secHeld" data-jump="secHeld">Reserved</a><a href="#secCerts" data-jump="secCerts">Certificates</a><a href="#secConfig" data-jump="secConfig">Configuration</a></nav>
-<div class="sec-title" id="secHealth" style="margin-top:1rem">Server health</div>
-<div class="cards" id="adminCards"></div>
-<div class="sec-title" id="secCharts">Last hour (10 s samples)</div>
-<div class="charts" id="adminCharts"></div>
+<nav class="adm-nav" id="admNav" aria-label="Admin sections"><a href="#secHealth" data-jump="secHealth">Overview</a><a href="#secCharts" data-jump="secCharts">Last hour</a><a href="#secAccounts" data-jump="secAccounts">Accounts</a><a href="#secTokens" data-jump="secTokens">Tokens</a><a href="#secSessions" data-jump="secSessions">Sessions</a><a href="#secHeld" data-jump="secHeld">Reserved</a><a href="#secCerts" data-jump="secCerts">Certificates</a><a href="#secConfig" data-jump="secConfig">Configuration</a></nav>
+<div id="secHealth" class="adm-hero-wrap"><div class="adm-hero" id="admHero"></div></div>
+<div class="tiles-label">Traffic</div>
+<div class="tiles" id="admTilesTraffic"></div>
+<div class="tiles-label">Capacity</div>
+<div class="tiles" id="admTilesCap"></div>
+<div class="sec-title" id="secCharts">Last hour</div>
+<div class="adm-panel">
+<div class="adm-panel-h"><div class="seg" id="admChartTabs"><button class="on" data-ct="req">Requests</button><button data-ct="traffic">Traffic</button></div><div class="adm-legend" id="admLegend"></div></div>
+<div class="adm-chart" id="admChartBox"></div>
+<details class="adm-tbl"><summary>Show the values as a table</summary><div class="tbl-wrap"><table><thead id="admChartHead"></thead><tbody id="admChartRows"></tbody></table></div></details>
+</div>
 <div class="two">
-<div><div class="sec-title">Response time</div><div id="adminLatency"></div></div>
-<div><div class="sec-title">Responses by status class</div><div id="adminStatus"></div></div>
+<div class="adm-panel"><div class="adm-panel-h"><b>Response time</b><span class="adm-sub" id="admLatSub"></span></div><div id="adminLatency"></div></div>
+<div class="adm-panel"><div class="adm-panel-h"><b>Responses by status</b><span class="adm-sub" id="admStatSub"></span></div><div id="adminStatus"></div></div>
 </div>
 <div class="sec-title" id="secAccounts">Accounts</div>
-<div class="tbl-wrap"><table><thead><tr><th>Account</th><th>Role</th><th>State</th><th>Sessions</th><th>Tunnels</th><th title="Since the server started">Requests</th><th title="Since the server started">Traffic in / out</th><th>Limits</th><th></th></tr></thead><tbody id="tbodyAccounts"></tbody></table></div>
+<div class="accts" id="admAccounts"></div>
 <div class="sec-title" id="secTokens">Access tokens</div>
 <input class="search-box adm-find" type="text" placeholder="Filter tokens..." data-find="tbodyTokens">
 <div class="tbl-wrap"><table><thead><tr><th>ID</th><th>Account</th><th>Name</th><th>Role</th><th>Limits</th><th>Created</th><th>Expires</th><th>Status</th><th></th></tr></thead><tbody id="tbodyTokens"></tbody></table></div>
@@ -2074,21 +2134,6 @@ function card(k, v, sub, cls){
     return '<div class="card ' + (cls||'') + '"><div class="k">' + escHtml(k) + '</div><div class="v">' + escHtml(String(v)) +
         '</div>' + (sub ? '<div class="s">' + escHtml(String(sub)) + '</div>' : '') + '</div>';
 }
-function spark(title, vals, fmt, color){
-    var W = 200, H = 40, n = vals.length, max = 0, last = n ? vals[n-1] : 0, i;
-    for(i = 0; i < n; i++) if(vals[i] > max) max = vals[i];
-    var pts = '';
-    for(i = 0; i < n; i++){
-        var x = n > 1 ? (i * W / (n - 1)) : W;
-        var y = max > 0 ? H - 2 - (vals[i] / max) * (H - 4) : H - 2;
-        pts += x.toFixed(1) + ',' + y.toFixed(1) + ' ';
-    }
-    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" style="color:' + color + '">' +
-        (n > 1 ? '<polygon fill="currentColor" opacity=".12" points="0,' + H + ' ' + pts + W + ',' + H + '"/>' +
-        '<polyline fill="none" stroke="currentColor" stroke-width="1.5" vector-effect="non-scaling-stroke" points="' + pts + '"/>' : '') + '</svg>';
-    return '<div class="chart"><div class="h"><span>' + escHtml(title) + '</span><b>' + escHtml(fmt(last)) + '</b></div>' + svg +
-        '<div class="h"><span>peak ' + escHtml(fmt(max)) + '</span><span>' + n + ' samples</span></div></div>';
-}
 function rates(h, key){
     var out = [];
     for(var i = 1; i < h.length; i++){
@@ -2102,15 +2147,211 @@ function gauge(h, key){ var o = []; for(var i = 0; i < h.length; i++) o.push(h[i
 function fRate(v){ return (v < 10 ? v.toFixed(1) : Math.round(v)) + '/s'; }
 function fBps(v){ return fmtBytes(v) + '/s'; }
 function fNum(v){ return String(Math.round(v * 10) / 10); }
-function hbars(rows, color){
-    var max = 0, i, out = '';
-    for(i = 0; i < rows.length; i++) if(rows[i][1] > max) max = rows[i][1];
-    for(i = 0; i < rows.length; i++){
-        var w = max > 0 ? (rows[i][1] / max * 100) : 0;
-        out += '<div class="hbar"><span class="l">' + escHtml(rows[i][0]) + '</span><span class="t"><i style="width:' + w.toFixed(1) +
-            '%;background:' + (rows[i][2] || color) + '"></i></span><span class="n">' + escHtml(String(rows[i][3] !== undefined ? rows[i][3] : rows[i][1])) + '</span></div>';
+
+/* -- Admin console rendering --------------------------------- */
+var admData = {h: [], o: null}, admTab = 'req';
+function sumDelta(h, key){
+    var t = 0;
+    for(var i = 1; i < h.length; i++){ var d = h[i][key] - h[i-1][key]; if(d > 0) t += d; }
+    return t;
+}
+function tspark(vals, color){
+    var W = 120, H = 30, n = vals.length, max = 0, i, pts = '';
+    for(i = 0; i < n; i++) if(vals[i] > max) max = vals[i];
+    if(n < 2) return '';
+    for(i = 0; i < n; i++){
+        var x = i * W / (n - 1), y = max > 0 ? H - 2 - (vals[i] / max) * (H - 5) : H - 2;
+        pts += x.toFixed(1) + ',' + y.toFixed(1) + ' ';
     }
-    return out;
+    return '<svg class="tile-spark" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" style="color:' + color + '" aria-hidden="true">' +
+        '<polygon fill="currentColor" opacity=".13" points="0,' + H + ' ' + pts + W + ',' + H + '"/>' +
+        '<polyline fill="none" stroke="currentColor" stroke-width="1.5" vector-effect="non-scaling-stroke" points="' + pts + '"/></svg>';
+}
+function tile(label, val, sub, vals, color, cls, extra){
+    return '<div class="tile ' + (cls || '') + '"><div class="tile-k">' + escHtml(label) + '</div><div class="tile-v">' + escHtml(String(val)) +
+        '</div><div class="tile-s">' + escHtml(String(sub || '')) + '</div>' + (extra || '') + (vals ? tspark(vals, color) : '') + '</div>';
+}
+function meter(pct, color){
+    pct = Math.max(0, Math.min(100, pct));
+    return '<div class="meter"><i style="width:' + pct.toFixed(1) + '%;background:' + color + '"></i></div>';
+}
+function renderHero(o, h){
+    var issues = [], certDays = o.cert_expiry ? Math.floor((new Date(o.cert_expiry) - new Date()) / 86400000) : null;
+    if(!o.ready) issues.push(['bad', 'Server is not ready']);
+    if(certDays !== null && certDays < 14) issues.push([certDays < 5 ? 'bad' : 'warn', 'Certificate expires in ' + certDays + ' days']);
+    if(o.persistence_errors) issues.push(['bad', o.persistence_errors + ' write error(s) to the state files']);
+    if(o.open_fds > 800) issues.push(['warn', o.open_fds + ' open files']);
+    var tot = sumDelta(h, 'requests'), e5 = sumDelta(h, 'err5xx');
+    if(tot >= 50 && e5 / tot > 0.05) issues.push(['warn', Math.round(e5 / tot * 100) + '% of responses were 5xx in the last hour']);
+    var held = (o.held_subdomains || []).length;
+    if(held) issues.push(['warn', held + ' name(s) held for a client that dropped']);
+    var lvl = 'ok', k;
+    for(k = 0; k < issues.length; k++){ if(issues[k][0] === 'bad') lvl = 'bad'; else if(lvl !== 'bad') lvl = 'warn'; }
+    var title = lvl === 'ok' ? 'All systems normal' : (lvl === 'warn' ? 'Worth a look' : 'Needs attention');
+    var list = '';
+    for(k = 0; k < issues.length; k++) list += '<span class="pill ' + issues[k][0] + '">' + escHtml(issues[k][1]) + '</span> ';
+    var meta = '<span title="Server version">v' + escHtml(o.version || '?') + '</span><span title="Time since the server started">up ' + escHtml(fmtUptime(o.uptime_seconds)) + '</span><span>' + escHtml(o.domain || '') + '</span>';
+    if(o.dashboard_host) meta += '<span title="Dashboard host on the HTTPS edge">' + escHtml(o.dashboard_host) + '</span>';
+    $('admHero').className = 'adm-hero ' + lvl;
+    $('admHero').innerHTML = '<div class="hero-main"><span class="hero-dot"></span><div><div class="hero-t">' + title + '</div><div class="hero-s">' +
+        (list || 'Ready, no warnings. ' + o.sessions + ' client(s) and ' + (o.http_tunnels + o.tcp_tunnels) + ' tunnel(s) connected.') + '</div></div></div><div class="hero-meta">' + meta + '</div>';
+}
+function renderTiles(o, h){
+    var reqR = rates(h, 'requests'), e4 = rates(h, 'err4xx'), e5 = rates(h, 'err5xx'), inR = rates(h, 'bytes_in'), outR = rates(h, 'bytes_out');
+    var now = function(a){ return a.length ? a[a.length - 1] : 0; };
+    var tot = sumDelta(h, 'requests'), bad = sumDelta(h, 'err4xx') + sumDelta(h, 'err5xx');
+    var errPct = tot ? bad / tot * 100 : 0, errRate = [];
+    for(var i = 0; i < reqR.length; i++) errRate.push(reqR[i] > 0 ? (e4[i] + e5[i]) / reqR[i] * 100 : 0);
+    $('admTilesTraffic').innerHTML =
+        tile('Requests', fRate(now(reqR)), fNum(o.requests) + ' since start', reqR, 'var(--ac)') +
+        tile('Error share', (tot ? errPct.toFixed(1) : '0') + '%', '4xx + 5xx, last hour', errRate, 'var(--wn)', errPct > 5 ? 'warn' : '') +
+        tile('Traffic out', fBps(now(outR)), 'in ' + fBps(now(inR)) + ' - total ' + fmtBytes(o.bytes_out) + ' out', outR, 'var(--pr)') +
+        tile('Response time', 'p95 ≤ ' + fNum(o.p95_ms) + ' ms', 'avg ' + fNum(o.avg_latency_ms) + ' ms, p99 ≤ ' + fNum(o.p99_ms) + ' ms', null);
+    var portPct = o.tcp_ports_total ? o.tcp_ports_in_use / o.tcp_ports_total * 100 : 0;
+    $('admTilesCap').innerHTML =
+        tile('Sessions', o.sessions, 'connected clients', gauge(h, 'sessions'), 'var(--tl)') +
+        tile('Tunnels', o.http_tunnels + o.tcp_tunnels, o.http_tunnels + ' http, ' + o.tcp_tunnels + ' tcp', gauge(h, 'tunnels'), 'var(--ac)') +
+        tile('TCP ports', o.tcp_ports_in_use + ' / ' + o.tcp_ports_total, 'in use', null, '', '', meter(portPct, 'var(--tl)')) +
+        tile('Memory', fNum(o.heap_mb) + ' MB', 'heap, sys ' + fNum(o.sys_mb) + ' MB', gauge(h, 'heap_mb'), 'var(--wn)') +
+        tile('Goroutines', o.goroutines, o.cpus + ' CPU(s), ' + o.num_gc + ' GCs', gauge(h, 'goroutines'), 'var(--pr)') +
+        tile('Open files', o.open_fds < 0 ? 'n/a' : o.open_fds, 'file descriptors', gauge(h, 'fds'), 'var(--tl)', o.open_fds > 800 ? 'warn' : '');
+}
+function niceMax(v){
+    if(v <= 0) return 1;
+    var e = Math.pow(10, Math.floor(Math.log10(v))), m = v / e;
+    return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10) * e;
+}
+function chartSeries(){
+    var h = admData.h;
+    if(admTab === 'req'){
+        var tot = rates(h, 'requests'), e4 = rates(h, 'err4xx'), e5 = rates(h, 'err5xx'), ok = [];
+        for(var i = 0; i < tot.length; i++) ok.push(Math.max(0, tot[i] - e4[i] - e5[i]));
+        return {stack: true, fmt: fRate, series: [{n: 'OK (1xx-3xx)', c: 'var(--ok)', v: ok}, {n: '4xx', c: 'var(--wn)', v: e4}, {n: '5xx', c: 'var(--er)', v: e5}]};
+    }
+    return {stack: false, fmt: fBps, series: [{n: 'In', c: 'var(--ac)', v: rates(h, 'bytes_in')}, {n: 'Out', c: 'var(--pr)', v: rates(h, 'bytes_out')}]};
+}
+function drawChart(){
+    var box = $('admChartBox'), h = admData.h;
+    if(!box) return;
+    if(h.length < 3){ box.innerHTML = '<div class="empty" style="padding:2rem 0">Collecting samples (one every 10 s)...</div>'; $('admLegend').innerHTML = ''; return; }
+    var cs = chartSeries(), S = cs.series, n = S[0].v.length, times = h.slice(1).map(function(p){ return p.t; });
+    var W = Math.max(280, box.clientWidth || 700), H = 230, pl = 52, pr = 10, pt = 12, pb = 24, pw = W - pl - pr, ph = H - pt - pb;
+    var cum = [], k, i, maxv = 0;
+    for(k = 0; k < S.length; k++){
+        cum.push([]);
+        for(i = 0; i < n; i++){
+            var base = cs.stack && k > 0 ? cum[k-1][i] : 0;
+            cum[k].push(base + S[k].v[i]);
+            if(cum[k][i] > maxv) maxv = cum[k][i];
+        }
+    }
+    var top = niceMax(maxv), X = function(i){ return pl + (n > 1 ? i * pw / (n - 1) : pw); }, Y = function(v){ return pt + ph - (v / top) * ph; };
+    var g = '', t;
+    for(t = 0; t <= 2; t++){
+        var gv = top * t / 2, gy = Y(gv);
+        g += '<line x1="' + pl + '" x2="' + (W - pr) + '" y1="' + gy.toFixed(1) + '" y2="' + gy.toFixed(1) + '" class="ax-grid"/><text x="' + (pl - 6) + '" y="' + (gy + 3.5).toFixed(1) + '" text-anchor="end" class="ax-t">' + escHtml(cs.fmt(gv)) + '</text>';
+    }
+    var xl = [0, Math.floor((n - 1) / 2), n - 1];
+    for(t = 0; t < xl.length; t++){
+        g += '<text x="' + X(xl[t]).toFixed(1) + '" y="' + (H - 6) + '" text-anchor="' + (t === 0 ? 'start' : t === 2 ? 'end' : 'middle') + '" class="ax-t">' + escHtml(t === 2 ? 'now' : fmtTime(new Date(times[xl[t]] * 1000))) + '</text>';
+    }
+    var layers = '';
+    for(k = 0; k < S.length; k++){
+        var up = '', lo = '';
+        for(i = 0; i < n; i++){ up += X(i).toFixed(1) + ',' + Y(cum[k][i]).toFixed(1) + ' '; }
+        if(cs.stack){
+            for(i = n - 1; i >= 0; i--){ lo += X(i).toFixed(1) + ',' + Y(k > 0 ? cum[k-1][i] : 0).toFixed(1) + ' '; }
+            layers += '<polygon points="' + up + lo + '" fill="' + S[k].c + '" opacity=".85" stroke="var(--bg-1)" stroke-width="1"/>';
+        } else {
+            layers += '<polygon points="' + up + X(n-1).toFixed(1) + ',' + Y(0) + ' ' + X(0).toFixed(1) + ',' + Y(0) + '" fill="' + S[k].c + '" opacity=".1"/>' +
+                '<polyline points="' + up + '" fill="none" stroke="' + S[k].c + '" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>';
+        }
+    }
+    box.innerHTML = '<svg viewBox="0 0 ' + W + ' ' + H + '" width="' + W + '" height="' + H + '" role="img" aria-label="Chart of the last hour">' + g + layers +
+        '<line id="admXh" y1="' + pt + '" y2="' + (pt + ph) + '" class="ax-x" style="display:none"/><g id="admDots"></g></svg><div class="adm-tip" id="admTip" style="display:none"></div>';
+    var svg = box.firstChild, tip = $('admTip'), xh = $('admXh'), dots = $('admDots');
+    function show(ev){
+        var r = svg.getBoundingClientRect(), mx = (ev.clientX - r.left) * (W / r.width);
+        var idx = Math.round((mx - pl) / pw * (n - 1));
+        if(idx < 0) idx = 0; if(idx > n - 1) idx = n - 1;
+        var x = X(idx), d = '', rows = '', tot = 0;
+        for(var q = 0; q < S.length; q++){
+            d += '<circle cx="' + x.toFixed(1) + '" cy="' + Y(cum[q][idx]).toFixed(1) + '" r="3.5" fill="' + S[q].c + '" stroke="var(--bg-1)" stroke-width="2"/>';
+            rows += '<div><i style="background:' + S[q].c + '"></i>' + escHtml(S[q].n) + ' <b>' + escHtml(cs.fmt(S[q].v[idx])) + '</b></div>';
+            tot += S[q].v[idx];
+        }
+        dots.innerHTML = d;
+        xh.setAttribute('x1', x); xh.setAttribute('x2', x); xh.style.display = '';
+        tip.innerHTML = '<div class="tt">' + escHtml(fmtTime(new Date(times[idx] * 1000))) + '</div>' + rows + (cs.stack ? '<div class="tt">total <b>' + escHtml(cs.fmt(tot)) + '</b></div>' : '');
+        tip.style.display = '';
+        var left = x / W * r.width + 12;
+        if(left + tip.offsetWidth > r.width - 4) left = x / W * r.width - tip.offsetWidth - 12;
+        tip.style.left = Math.max(4, left) + 'px'; tip.style.top = '8px';
+    }
+    svg.onmousemove = show;
+    svg.onmouseleave = function(){ tip.style.display = 'none'; xh.style.display = 'none'; dots.innerHTML = ''; };
+    var lg = '';
+    for(k = 0; k < S.length; k++) lg += '<span><i style="background:' + S[k].c + '"></i>' + escHtml(S[k].n) + ' <b>' + escHtml(cs.fmt(S[k].v[n-1])) + '</b></span>';
+    $('admLegend').innerHTML = lg;
+    var head = '<tr><th>Time</th>', rowsT = '';
+    for(k = 0; k < S.length; k++) head += '<th>' + escHtml(S[k].n) + '</th>';
+    $('admChartHead').innerHTML = head + '</tr>';
+    for(i = n - 1; i >= 0 && rowsT.length < 4000; i -= 6){
+        rowsT += '<tr><td>' + escHtml(fmtTime(new Date(times[i] * 1000))) + '</td>';
+        for(k = 0; k < S.length; k++) rowsT += '<td>' + escHtml(cs.fmt(S[k].v[i])) + '</td>';
+        rowsT += '</tr>';
+    }
+    $('admChartRows').innerHTML = rowsT;
+}
+function renderLatency(o){
+    var lb = o.latency_buckets || [], prev = 0, items = [], max = 0, total = o.requests || 0, i, i95 = lb.length;
+    for(i = 0; i < lb.length; i++){
+        var c = lb[i].count - prev; prev = lb[i].count;
+        var lab = lb[i].le_ms ? (lb[i].le_ms >= 1000 ? (lb[i].le_ms / 1000) + ' s' : lb[i].le_ms + ' ms') : '> 10 s';
+        items.push({c: c, lab: lab, le: lb[i].le_ms});
+        if(c > max) max = c;
+        if(lb[i].le_ms && lb[i].le_ms >= o.p95_ms && i95 === lb.length) i95 = i;
+    }
+    var bars = '';
+    for(i = 0; i < items.length; i++){
+        var it = items[i], hgt = max ? it.c / max * 100 : 0;
+        bars += '<div class="lh" title="' + escHtml(it.lab + ': ' + it.c + ' request(s)' + (total ? ' (' + (it.c / total * 100).toFixed(1) + '%)' : '')) + '"><div class="lh-b"><i style="height:' +
+            (it.c && hgt < 3 ? 3 : hgt).toFixed(1) + '%;background:' + (i <= i95 ? 'var(--ac)' : 'var(--wn)') + '"></i></div><span>' + escHtml(it.lab.replace(' ms', '')) + '</span></div>';
+    }
+    $('admLatSub').textContent = 'ms, slowest 5% in amber';
+    $('adminLatency').innerHTML = '<div class="lh-row">' + bars + '</div><div class="lh-stats"><span>avg <b>' + fNum(o.avg_latency_ms) + ' ms</b></span><span>p50 <b>≤ ' + fNum(o.p50_ms) +
+        '</b></span><span>p95 <b>≤ ' + fNum(o.p95_ms) + '</b></span><span>p99 <b>≤ ' + fNum(o.p99_ms) + '</b></span></div>';
+}
+function renderStatus(o){
+    var st = o.status || {}, defs = [['2xx', 'Success', 'var(--ok)'], ['3xx', 'Redirect', 'var(--ac)'], ['4xx', 'Client error', 'var(--wn)'], ['5xx', 'Server error', 'var(--er)'], ['1xx', 'Informational', 'var(--tx-2)']];
+    var total = 0, i;
+    for(i = 0; i < defs.length; i++) total += st[defs[i][0]] || 0;
+    var seg = '', leg = '';
+    for(i = 0; i < defs.length; i++){
+        var c = st[defs[i][0]] || 0, pct = total ? c / total * 100 : 0;
+        if(c) seg += '<i style="flex:' + c + ';background:' + defs[i][2] + '" title="' + escHtml(defs[i][0] + ': ' + c) + '"></i>';
+        if(c || i < 4) leg += '<div class="sl"><span><i style="background:' + defs[i][2] + '"></i>' + defs[i][0] + ' <em>' + defs[i][1] + '</em></span><b>' + fNum(c) + '</b><u>' + pct.toFixed(1) + '%</u></div>';
+    }
+    $('admStatSub').textContent = total ? fNum(total) + ' responses since start' : '';
+    $('adminStatus').innerHTML = (total ? '<div class="stackbar">' + seg + '</div>' : '<div class="empty">No responses yet</div>') + '<div class="sl-list">' + leg + '</div>';
+}
+function renderAccounts(accts){
+    var totalBytes = 0, i;
+    for(i = 0; i < accts.length; i++) totalBytes += (accts[i].bytes_in || 0) + (accts[i].bytes_out || 0);
+    var out = '';
+    for(i = 0; i < accts.length; i++){
+        var a = accts[i], name = a.name || a.id.replace(/^acct_/, ''), bytes = (a.bytes_in || 0) + (a.bytes_out || 0);
+        var lim = function(used, max, label){
+            return '<div class="lim"><div class="lim-h"><span>' + label + '</span><b>' + used + (max ? ' / ' + max : '') + '</b></div>' + (max ? meter(used / max * 100, used >= max ? 'var(--er)' : 'var(--ac)') : '<div class="lim-n">no limit</div>') + '</div>';
+        };
+        out += '<div class="acct' + (a.active ? '' : ' off') + '"><div class="acct-h"><b>' + escHtml(name) + '</b><span>' + (a.admin ? '<span class="pill warn">admin</span> ' : '') +
+            (a.active ? '<span class="pill ok">active</span>' : '<span class="pill bad">disabled</span>') + '</span></div>' +
+            '<div class="lims">' + lim(a.sessions, a.max_sessions, 'Sessions') + lim(a.tunnels, a.max_tunnels, 'Tunnels') + '</div>' +
+            '<div class="acct-t"><div class="lim-h"><span>Traffic since start</span><b>' + fmtBytes(bytes) + '</b></div>' + meter(totalBytes ? bytes / totalBytes * 100 : 0, 'var(--pr)') +
+            '<div class="acct-n">' + fNum(a.requests || 0) + ' requests - in ' + fmtBytes(a.bytes_in || 0) + ' - out ' + fmtBytes(a.bytes_out || 0) + (a.rate_limit ? ' - ' + a.rate_limit + ' creations/s' : '') + '</div></div>' +
+            '<div class="acct-a"><button class="btn-sm" data-newtok="' + escHtml(a.id.replace(/^acct_/, '')) + '">New token</button><button class="btn-sm" data-setpw="' + escHtml(a.id.replace(/^acct_/, '')) + '">Set password</button></div></div>';
+    }
+    $('admAccounts').innerHTML = out || '<div class="empty">No accounts</div>';
 }
 function loadAdmin(){
     Promise.all([
@@ -2124,57 +2365,17 @@ function loadAdmin(){
     }).catch(function(e){ $('adminStamp').textContent = 'update failed: ' + e.message; $('adminStamp').className = 'pill bad'; });
 }
 function renderAdmin(o, h, accts, certs, sess){
-    var certDays = o.cert_expiry ? Math.floor((new Date(o.cert_expiry) - new Date()) / 86400000) : null;
-    var fdWarn = o.open_fds > 800;
-    $('adminCards').innerHTML =
-        card('Status', o.ready ? 'Ready' : 'Not ready', 'version ' + (o.version || '?'), o.ready ? 'ok' : 'bad') +
-        card('Uptime', fmtUptime(o.uptime_seconds), 'since ' + fmtTimeDate(o.started_at)) +
-        card('Sessions', o.sessions, 'connected clients') +
-        card('Tunnels', o.http_tunnels + o.tcp_tunnels, o.http_tunnels + ' http / ' + o.tcp_tunnels + ' tcp') +
-        card('TCP ports', o.tcp_ports_in_use + ' / ' + o.tcp_ports_total, 'in use / available') +
-        card('Requests', o.requests, 'since start') +
-        card('Traffic in / out', fmtBytes(o.bytes_in) + ' / ' + fmtBytes(o.bytes_out), 'through tunnels') +
-        card('Avg response', fNum(o.avg_latency_ms) + ' ms', 'p99 ≤ ' + fNum(o.p99_ms) + ' ms') +
-        card('Memory (heap)', fNum(o.heap_mb) + ' MB', 'sys ' + fNum(o.sys_mb) + ' MB, ' + o.num_gc + ' GCs') +
-        card('Goroutines', o.goroutines, o.cpus + ' CPU(s)') +
-        card('Open files', o.open_fds < 0 ? 'n/a' : o.open_fds, 'file descriptors', fdWarn ? 'warn' : '') +
-        card('Certificate', certDays === null ? 'none' : certDays + ' days', 'earliest expiry', certDays !== null && certDays < 14 ? (certDays < 5 ? 'bad' : 'warn') : 'ok') +
-        card('Write errors', o.persistence_errors, 'persistent state', o.persistence_errors ? 'bad' : 'ok') +
-        card('Go', o.go_version, o.domain);
-    $('adminCharts').innerHTML =
-        spark('Requests', rates(h, 'requests'), fRate, 'var(--ac)') +
-        spark('Errors 4xx', rates(h, 'err4xx'), fRate, 'var(--wn)') +
-        spark('Errors 5xx', rates(h, 'err5xx'), fRate, 'var(--er)') +
-        spark('Traffic in', rates(h, 'bytes_in'), fBps, 'var(--ok)') +
-        spark('Traffic out', rates(h, 'bytes_out'), fBps, 'var(--pr)') +
-        spark('Sessions', gauge(h, 'sessions'), fNum, 'var(--tl)') +
-        spark('Tunnels', gauge(h, 'tunnels'), fNum, 'var(--ac)') +
-        spark('Heap (MB)', gauge(h, 'heap_mb'), fNum, 'var(--wn)') +
-        spark('Goroutines', gauge(h, 'goroutines'), fNum, 'var(--pr)') +
-        spark('Open files', gauge(h, 'fds'), fNum, 'var(--tl)');
-    var lat = [], prev = 0, b, total = o.requests || 0;
-    for(b = 0; b < o.latency_buckets.length; b++){
-        var bk = o.latency_buckets[b], c = bk.count - prev; prev = bk.count;
-        lat.push([bk.le_ms ? '≤ ' + bk.le_ms + ' ms' : '> 10 s', c, null, c + (total ? ' (' + (c / total * 100).toFixed(1) + '%)' : '')]);
-    }
-    $('adminLatency').innerHTML = '<div class="hbar"><span class="l">avg</span><span class="n" style="text-align:left">' + fNum(o.avg_latency_ms) + ' ms</span></div>' +
-        '<div class="hbar"><span class="l">p50/p95/p99</span><span class="n" style="width:auto">≤ ' + fNum(o.p50_ms) + ' / ' + fNum(o.p95_ms) + ' / ' + fNum(o.p99_ms) + ' ms</span></div>' + hbars(lat, 'var(--ac)');
-    var st = o.status || {};
-    $('adminStatus').innerHTML = hbars([['2xx', st['2xx']||0, 'var(--ok)'], ['3xx', st['3xx']||0, 'var(--ac)'], ['4xx', st['4xx']||0, 'var(--wn)'], ['5xx', st['5xx']||0, 'var(--er)'], ['1xx', st['1xx']||0, 'var(--tx-2)']], 'var(--ac)');
+    admData = {h: h, o: o};
+    renderHero(o, h);
+    renderTiles(o, h);
+    drawChart();
+    renderLatency(o);
+    renderStatus(o);
+    renderAccounts(accts);
     var rows = '', i;
-    for(i = 0; i < accts.length; i++){
-        var a = accts[i], lim = [];
-        if(a.max_tunnels) lim.push('tunnels≤' + a.max_tunnels);
-        if(a.max_sessions) lim.push('sessions≤' + a.max_sessions);
-        if(a.rate_limit) lim.push('rate ' + a.rate_limit + '/s');
-        rows += '<tr><td>' + escHtml(a.id) + '</td><td>' + (a.admin ? '<span class="pill warn">admin</span>' : 'user') + '</td><td>' +
-            (a.active ? '<span class="pill ok">active</span>' : '<span class="pill bad">disabled</span>') + '</td><td>' + a.sessions + '</td><td>' + a.tunnels + '</td><td>' + fNum(a.requests || 0) + '</td><td>' + fmtBytes(a.bytes_in || 0) + ' / ' + fmtBytes(a.bytes_out || 0) + '</td><td>' + escHtml(lim.join(', ') || '-') + '</td><td><button class="btn-sm" data-newtok="' + escHtml(a.id.replace(/^acct_/, '')) + '">New token</button></td></tr>';
-    }
-    $('tbodyAccounts').innerHTML = rows;
-    rows = '';
     for(i = 0; i < sess.length; i++){
         var s = sess[i];
-        rows += '<tr><td>' + escHtml(s.id) + '</td><td>' + escHtml(s.account_id) + '</td><td>' + escHtml(s.remote_addr) + '</td><td>' + fmtAgo(s.connected_at) +
+        rows += '<tr><td class="mono">' + escHtml(s.id) + '</td><td>' + escHtml(s.account_id) + '</td><td class="mono">' + escHtml(s.remote_addr) + '</td><td>' + fmtAgo(s.connected_at) +
             '</td><td>' + (new Date(s.last_heartbeat).getFullYear() < 2000 ? '-' : fmtTime(s.last_heartbeat)) + '</td><td>' + s.tunnel_count + '</td><td><button class="btn-danger" data-kick="' + escHtml(s.id) + '">Disconnect</button></td></tr>';
     }
     $('tbodyAdminSessions').innerHTML = rows || '<tr><td colspan="7" style="color:var(--tx-2)">No sessions</td></tr>';
@@ -2234,7 +2435,7 @@ function renderTokens(list){
         if(t.max_sessions) lim.push('sessions≤' + t.max_sessions);
         if(t.rate_limit) lim.push('rate ' + t.rate_limit + '/s');
         var cls = t.status === 'active' ? 'ok' : (t.status === 'expired' ? 'warn' : 'bad');
-        rows += '<tr' + (t.status === 'active' ? '' : ' class="tok-off"') + '><td>' + escHtml(t.id) + '</td><td>' + escHtml(t.account) + '</td><td>' + escHtml(t.name || '-') + '</td><td>' +
+        rows += '<tr' + (t.status === 'active' ? '' : ' class="tok-off"') + '><td class="mono">' + escHtml(t.id) + '</td><td>' + escHtml(t.account) + '</td><td>' + escHtml(t.name || '-') + '</td><td>' +
             (t.admin ? '<span class="pill warn">admin</span>' : 'user') + '</td><td>' + escHtml(lim.join(', ') || '-') + '</td><td>' + fmtAgo(t.created_at) + '</td><td>' +
             (t.expires_at ? fmtTimeDate(t.expires_at) : 'never') + '</td><td><span class="pill ' + cls + '">' + escHtml(t.status) + '</span></td><td>' +
             (t.status === 'revoked' ? '' : '<button class="btn-danger" data-revoke="' + escHtml(t.id) + '">Revoke</button>') + '</td></tr>';
@@ -2293,6 +2494,13 @@ document.addEventListener('click', function(ev){
         $('tokNew').open = true;
         $('tokNew').scrollIntoView({behavior: 'smooth', block: 'center'});
         $('tokName').focus();
+        return;
+    }
+    if(t && t.getAttribute && t.getAttribute('data-setpw')){
+        $('pwAccount').value = t.getAttribute('data-setpw');
+        $('pwSet').open = true;
+        $('pwSet').scrollIntoView({behavior: 'smooth', block: 'center'});
+        $('pwValue').focus();
         return;
     }
     if(t && t.getAttribute && t.getAttribute('data-kick')){
@@ -2356,6 +2564,29 @@ function init(){
     $('refreshSessions').onclick = function(){ loadSessions(); toast('Sessions refreshed', 'info'); };
     $('refreshRequests').onclick = function(){ loadRequests(); toast('Inspector refreshed', 'info'); };
     $('tokCreate').onclick = createToken;
+    $('admChartTabs').onclick = function(e){
+        var b = e.target.closest('button');
+        if(!b) return;
+        admTab = b.getAttribute('data-ct');
+        var all = $('admChartTabs').querySelectorAll('button');
+        for(var i = 0; i < all.length; i++) all[i].classList.toggle('on', all[i] === b);
+        drawChart();
+    };
+    var rzT = null;
+    window.addEventListener('resize', function(){ clearTimeout(rzT); rzT = setTimeout(function(){ if(currentTab === 'admin') drawChart(); }, 150); });
+    var spyT = null;
+    window.addEventListener('scroll', function(){
+        if(currentTab !== 'admin' || spyT) return;
+        spyT = setTimeout(function(){
+            spyT = null;
+            var links = $('admNav').querySelectorAll('a'), cur = null, i;
+            for(i = 0; i < links.length; i++){
+                var sec = $(links[i].getAttribute('data-jump'));
+                if(sec && sec.getBoundingClientRect().top <= 90) cur = links[i];
+            }
+            for(i = 0; i < links.length; i++) links[i].classList.toggle('on', links[i] === cur);
+        }, 80);
+    }, {passive: true});
     $('admNav').onclick = function(e){
         var id = e.target.getAttribute && e.target.getAttribute('data-jump');
         if(!id) return;

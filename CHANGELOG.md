@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.0] - 2026-11-11
+
+### Changed
+- The Admin tab is rebuilt as a console: a status summary that names what needs attention (not ready, certificate expiry, write errors, many open files, a high 5xx share, held names), metric tiles with sparklines for traffic and capacity, one interactive chart of the last hour (requests split into OK / 4xx / 5xx, or traffic in / out; hover for exact values; a table view), a response-time histogram with the slowest 5% marked, a status-class bar, and an account card per account with limit meters, traffic share, and New token / Set password shortcuts. The section bar highlights where you are. IDs use a monospace face; the token and password cards line up.
+
 ## [1.27.0] - 2026-11-11
 
 ### Added
