@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.26.2] - 2026-11-11
+
+### Fixed
+- Dashboard: an unknown dashboard session key (sessions are in memory, so a restart ends them all) no longer counts as a failed sign-in attempt. A browser tab left open with an ended session could still poll fast enough to lock its owner's IP out.
+
 ## [1.26.1] - 2026-11-10
 
 ### Fixed

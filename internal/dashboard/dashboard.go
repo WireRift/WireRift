@@ -7,7 +7,6 @@ import (
 	"embed"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io/fs"
 	"net"
@@ -249,7 +248,11 @@ func (d *Dashboard) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		if strings.HasPrefix(parts[1], loginSessionPrefix) {
 			var ok bool
 			if acct, ok = d.sessionAccount(parts[1]); !ok {
-				err = errors.New("session ended")
+				// A dashboard session key is 256 random bits, so an unknown one is
+				// an ended session (a restart drops them), not a guess. Counting it
+				// would let a forgotten browser tab lock its owner out.
+				d.jsonError(w, "Session ended", http.StatusUnauthorized)
+				return
 			}
 		} else {
 			_, acct, err = d.authManager.ValidateToken(parts[1])

@@ -151,3 +151,22 @@ func TestLoginSessionStoreLimits(t *testing.T) {
 }
 
 var _ = auth.MinPasswordLength
+
+// A dashboard session key that is no longer known (a restart drops them) is not
+// a guess: a forgotten browser tab polling with one must not lock its owner out.
+func TestEndedSessionKeyDoesNotCountTowardLockout(t *testing.T) {
+	h, _, _ := loginFixture(t)
+	for i := 0; i < 40; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/api/stats", nil)
+		req.RemoteAddr = "198.51.100.77:1234"
+		req.Header.Set("Authorization", "Bearer wrs_endedsessionkey")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("request %d: %d, want 401 (never 429)", i, rec.Code)
+		}
+	}
+	if code, _ := login(h, "ops", "ops password 123", "198.51.100.77"); code != http.StatusOK {
+		t.Errorf("sign-in after the stale polling: %d", code)
+	}
+}
