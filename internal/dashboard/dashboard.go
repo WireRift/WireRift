@@ -1093,6 +1093,21 @@ function hideLogin(){
     $('loginOverlay').classList.remove('show');
     $('app').style.display = 'block';
 }
+// stopPolling ends every background refresh. A rejected session must not keep
+// polling: each failed request counts against the sign-in lockout of the visitor's IP.
+function stopPolling(){
+    var had = !!(statsInterval || reqInterval);
+    if(statsInterval){ clearInterval(statsInterval); statsInterval = null; }
+    if(reqInterval){ clearInterval(reqInterval); reqInterval = null; }
+    if(adminInterval){ clearInterval(adminInterval); adminInterval = null; }
+    if(cnTimer){ clearInterval(cnTimer); cnTimer = null; }
+    if(had){
+        try { sessionStorage.removeItem('wr_t'); } catch(e){}
+        apiToken = '';
+        $('loginErr').textContent = 'Your session ended, sign in again';
+        showLogin();
+    }
+}
 function logout(){
     if(apiToken.indexOf('wrs_') === 0){ fetch('/api/logout', {method: 'POST', headers: {'Authorization': 'Bearer ' + apiToken}}).catch(function(){}); }
     try { sessionStorage.removeItem('wr_t'); } catch(e){}
@@ -1170,7 +1185,7 @@ function apiFetch(path, opts){
         headers: headers,
         body: opts.body || null
     }).then(function(r){
-        if(r.status === 401) throw new Error('Unauthorized');
+        if(r.status === 401){ stopPolling(); throw new Error('Unauthorized'); }
         if(!r.ok) throw new Error('API error ' + r.status);
         var ct = r.headers.get('content-type') || '';
         if(ct.indexOf('application/json') !== -1) return r.json();

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.26.1] - 2026-11-10
+
+### Fixed
+- Dashboard: a tab whose session was rejected (for example after a server restart, sessions are in memory) kept polling with the dead session, and every failed request counted toward the IP's sign-in lockout, so the user could not sign in again. The page now stops polling and shows the sign-in screen.
+
 ## [1.26.0] - 2026-11-10
 
 ### Added
