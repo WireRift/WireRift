@@ -229,6 +229,7 @@ Options:
   --dashboard-port int  Dashboard port (default: 4040)
   --dashboard-bind str  Dashboard bind address (default: 127.0.0.1)
   --dashboard-host str  Also serve the dashboard on the HTTPS edge at this host (label or full name; needs HTTPS)
+  --dashboard-allow str Comma-separated addresses or CIDR ranges allowed to reach the dashboard (default: anyone)
   --dashboard-tls-cert  PEM certificate for the dashboard (with --dashboard-tls-key serves HTTPS)
   --dashboard-tls-key   PEM private key for the dashboard
   --dns-server string   DNS server for custom-domain TXT checks (default: system resolver)
@@ -446,7 +447,7 @@ wirerift-server -domain tunnel.example.com -acme-email you@example.com -dashboar
 # -> https://dashboard.tunnel.example.com  (certificate issued automatically)
 ```
 
-`-dashboard-host` takes a label (`dashboard` -> `dashboard.<domain>`) or a full host name and refuses to start without HTTPS. Plain HTTP is redirected to HTTPS, responses carry HSTS and `no-store`, the edge rate limit applies, and every API call still needs a token (ten failed logins from one IP lock it out). `dashboard` is a reserved subdomain, so no tunnel can take the name. Publishing a login page is a choice: prefer the SSH tunnel when a handful of people reach it from fixed machines.
+`-dashboard-host` takes a label (`dashboard` -> `dashboard.<domain>`) or a full host name and refuses to start without HTTPS. Plain HTTP is redirected to HTTPS, responses carry HSTS and `no-store`, the edge rate limit applies, and every API call still needs a token (ten failed logins from one IP lock it out). `dashboard` is a reserved subdomain, so no tunnel can take the name. With fixed addresses, add `-dashboard-allow 203.0.113.7,198.51.100.0/24`: everyone else gets `403` before the sign-in page, and the SSH tunnel to the local port keeps working. Publishing a login page is a choice: prefer the SSH tunnel when a handful of people reach it from fixed machines.
 
 ---
 

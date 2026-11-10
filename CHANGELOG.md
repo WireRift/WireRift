@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.27.0] - 2026-11-11
+
+### Added
+- `-dashboard-allow`: addresses or CIDR ranges that may reach the dashboard at all (everyone else gets 403 before the sign-in page). Direct loopback access (an SSH tunnel to the local port) always works; a malformed entry stops the server from starting.
+
 ## [1.26.2] - 2026-11-11
 
 ### Fixed

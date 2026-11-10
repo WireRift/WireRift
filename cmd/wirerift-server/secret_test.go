@@ -333,10 +333,10 @@ func TestDashboardHostName(t *testing.T) {
 func TestPublishDashboardNeedsHTTPS(t *testing.T) {
 	srv := server.New(server.DefaultConfig(), nil)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	if err := publishDashboard(srv, nil, "", "t.example", false, logger); err != nil {
+	if err := publishDashboard(srv, nil, "", "t.example", "", false, logger); err != nil {
 		t.Errorf("unset flag must be a no-op: %v", err)
 	}
-	if err := publishDashboard(srv, nil, "dashboard", "t.example", false, logger); err == nil {
+	if err := publishDashboard(srv, nil, "dashboard", "t.example", "", false, logger); err == nil {
 		t.Error("publishing without HTTPS must be refused")
 	}
 }
@@ -367,7 +367,7 @@ func TestPublishDashboardPublishes(t *testing.T) {
 	srv := server.New(server.DefaultConfig(), nil)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	dash := dashboard.New(dashboard.Config{Server: srv, AuthManager: auth.NewManager("x")})
-	if err := publishDashboard(srv, dash, "dashboard", "t.example", true, logger); err != nil {
+	if err := publishDashboard(srv, dash, "dashboard", "t.example", "", true, logger); err != nil {
 		t.Fatal(err)
 	}
 	if !srv.IsHostServed("dashboard.t.example") {
@@ -405,5 +405,16 @@ func TestSetupAuth(t *testing.T) {
 	t.Setenv("WIRERIFT_TOKEN_FILE", filepath.Join(t.TempDir(), "missing"))
 	if _, _, err := setupAuth("", file, logger); err == nil {
 		t.Error("an unreadable bootstrap token file must stop startup")
+	}
+}
+
+func TestPublishDashboardRejectsBadAllowList(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv := server.New(server.DefaultConfig(), nil)
+	if err := publishDashboard(srv, nil, "", "t.example", "203.0.113.7, nonsense", false, logger); err == nil {
+		t.Error("a bad -dashboard-allow entry must be an error, not silently ignored")
+	}
+	if err := publishDashboard(srv, nil, "", "t.example", "203.0.113.7, 198.51.100.0/24, 2001:db8::/32", false, logger); err != nil {
+		t.Errorf("valid list: %v", err)
 	}
 }

@@ -30,6 +30,7 @@ type Dashboard struct {
 	port          int
 	httpsEnabled  bool
 	guard         authGuard
+	allow         []*net.IPNet // empty = everyone
 	sessions      loginSessions
 	certs         func() []CertInfo
 	tokenFile     string
@@ -57,6 +58,9 @@ type Config struct {
 	// applies it at once.
 	TokenFile       string
 	OnTokensChanged func()
+	// Allow limits who may reach the dashboard at all: addresses or CIDR
+	// ranges. Empty = anyone who can reach it (sign-in is still required).
+	Allow []string
 }
 
 // New creates a new dashboard.
@@ -64,7 +68,9 @@ func New(cfg Config) *Dashboard {
 	if cfg.Port == 0 {
 		cfg.Port = 4040
 	}
+	allow, _ := ParseAllowList(cfg.Allow) // main validates the flag; a bad entry here just stays out
 	return &Dashboard{
+		allow:         allow,
 		server:        cfg.Server,
 		authManager:   cfg.AuthManager,
 		port:          cfg.Port,
@@ -115,11 +121,72 @@ func (d *Dashboard) Handler() http.Handler {
 // securityHeaders wraps a handler with standard security headers.
 func (d *Dashboard) securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !d.allowed(r) {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		next.ServeHTTP(w, r)
 	})
+}
+
+// ParseAllowList parses addresses and CIDR ranges ("203.0.113.7",
+// "198.51.100.0/24", "2001:db8::/32") for Config.Allow.
+func ParseAllowList(entries []string) ([]*net.IPNet, error) {
+	var nets []*net.IPNet
+	for _, e := range entries {
+		e = strings.TrimSpace(e)
+		if e == "" {
+			continue
+		}
+		if !strings.Contains(e, "/") {
+			ip := net.ParseIP(e)
+			if ip == nil {
+				return nil, fmt.Errorf("invalid address %q", e)
+			}
+			bits := 128
+			if ip.To4() != nil {
+				ip, bits = ip.To4(), 32
+			}
+			nets = append(nets, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
+			continue
+		}
+		_, n, err := net.ParseCIDR(e)
+		if err != nil {
+			return nil, fmt.Errorf("invalid range %q", e)
+		}
+		nets = append(nets, n)
+	}
+	return nets, nil
+}
+
+// allowed reports whether the caller may reach the dashboard. A direct
+// loopback connection (an SSH tunnel to the local port) is always allowed;
+// requests relayed by the edge carry the visitor's address with port 0 and are
+// checked like any other.
+func (d *Dashboard) allowed(r *http.Request) bool {
+	if len(d.allow) == 0 {
+		return true
+	}
+	host, port, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	if ip.IsLoopback() && port != "0" {
+		return true
+	}
+	for _, n := range d.allow {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 const (

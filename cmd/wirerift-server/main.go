@@ -103,6 +103,7 @@ func run(parentCtx context.Context, args []string) error {
 	tcpPortRange := fs.String("tcp-ports", "20000-29999", "TCP tunnel port range")
 	offlineGrace := fs.Duration("offline-grace", 2*time.Minute, "keep a dropped client's subdomains reserved for it this long, showing visitors 503 (0 = release at once)")
 	dashHost := fs.String("dashboard-host", "", "also serve the dashboard over the HTTPS edge on this host: a label (\"dashboard\" -> dashboard.<domain>) or a full name; sign-in with a token is always required")
+	dashAllow := fs.String("dashboard-allow", "", "comma-separated addresses or CIDR ranges allowed to reach the dashboard (default: anyone; sign-in is always required). Local access through an SSH tunnel stays possible")
 	edgeRate := fs.Float64("edge-rate", 0, "requests per second one visitor IP may send to the HTTP edge (0 = default 100)")
 	edgeBurst := fs.Int("edge-burst", 0, "burst allowance on top of -edge-rate (0 = default 50)")
 	tcpIdle := fs.Duration("tcp-idle-timeout", 0, "close a TCP tunnel connection that moved no data for this long (0 = never)")
@@ -306,10 +307,11 @@ Environment Variables:
 		HTTPSEnabled: tlsMgr != nil,
 		Certs:        certProvider(tlsMgr),
 		TokenFile:    tokenFilePath(*tokensFile, *certDir),
+		Allow:        splitCommaList(*dashAllow),
 		// A token created or revoked in the Admin tab applies at once.
 		OnTokensChanged: func() { reloadTokens(authMgr, srv, tokenFilePath(*tokensFile, *certDir), logger) },
 	})
-	if err := publishDashboard(srv, dash, *dashHost, *domain, tlsMgr != nil || dev != nil, logger); err != nil {
+	if err := publishDashboard(srv, dash, *dashHost, *domain, *dashAllow, tlsMgr != nil || dev != nil, logger); err != nil {
 		return err
 	}
 	dashServer := &http.Server{
@@ -692,7 +694,10 @@ func dashboardHostName(flagValue, domain string) string {
 // publishDashboard serves the dashboard on its own host of the edge when
 // -dashboard-host is set. It refuses to do so without HTTPS: the sign-in token
 // would cross the internet in clear text.
-func publishDashboard(srv *server.Server, dash *dashboard.Dashboard, flagValue, domain string, httpsAvailable bool, logger *slog.Logger) error {
+func publishDashboard(srv *server.Server, dash *dashboard.Dashboard, flagValue, domain, allow string, httpsAvailable bool, logger *slog.Logger) error {
+	if _, err := dashboard.ParseAllowList(splitCommaList(allow)); err != nil {
+		return fmt.Errorf("-dashboard-allow: %w", err)
+	}
 	host := dashboardHostName(flagValue, domain)
 	if host == "" {
 		return nil
@@ -701,7 +706,7 @@ func publishDashboard(srv *server.Server, dash *dashboard.Dashboard, flagValue, 
 		return errors.New("-dashboard-host needs HTTPS (-acme-email, -auto-cert or -dev): the sign-in token must not travel in clear text")
 	}
 	srv.SetDashboardRoute(host, dash.Handler())
-	logger.Info("dashboard published on the edge", "host", host)
+	logger.Info("dashboard published on the edge", "host", host, "allow", allow)
 	return nil
 }
 
