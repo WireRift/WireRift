@@ -336,3 +336,24 @@ func TestConnectInfoDescribesTheServer(t *testing.T) {
 		t.Errorf("default scheme: %q", info.PublicScheme)
 	}
 }
+
+func TestAccountTrafficCountersAppearInOverview(t *testing.T) {
+	s := New(DefaultConfig(), nil)
+	c := s.accountCounters("acct_x")
+	if s.accountCounters("acct_x") != c {
+		t.Fatal("counters must be shared per account")
+	}
+	c.requests.Add(3)
+	c.bytesIn.Add(100)
+	c.bytesOut.Add(2000)
+	var got *AccountUsage
+	for _, u := range s.AdminOverview().Accounts {
+		if u.Account == "acct_x" {
+			u := u
+			got = &u
+		}
+	}
+	if got == nil || got.Requests != 3 || got.BytesIn != 100 || got.BytesOut != 2000 {
+		t.Fatalf("usage = %+v", got)
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wirerift/wirerift/internal/proto"
@@ -196,6 +197,23 @@ type AccountUsage struct {
 	Account  string `json:"account"`
 	Sessions int    `json:"sessions"`
 	Tunnels  int    `json:"tunnels"`
+	Requests int64  `json:"requests"`  // since the server started
+	BytesIn  int64  `json:"bytes_in"`  // since the server started
+	BytesOut int64  `json:"bytes_out"` // since the server started
+}
+
+// accountCounters are the traffic totals of one account, since the server started.
+type accountCounters struct {
+	requests, bytesIn, bytesOut atomic.Int64
+}
+
+// accountCounters returns (creating on first use) the counters of an account.
+func (s *Server) accountCounters(id string) *accountCounters {
+	if v, ok := s.acctUsage.Load(id); ok {
+		return v.(*accountCounters)
+	}
+	v, _ := s.acctUsage.LoadOrStore(id, &accountCounters{})
+	return v.(*accountCounters)
 }
 
 // LatencyBucket is one cumulative bucket of the request-duration histogram.
@@ -323,6 +341,13 @@ func (s *Server) AdminOverview() AdminOverview {
 		if t, ok := v.(*Tunnel); ok {
 			get(t.AccountID).Tunnels++
 		}
+		return true
+	})
+	s.acctUsage.Range(func(k, v any) bool {
+		id, _ := k.(string)
+		c := v.(*accountCounters)
+		u := get(id)
+		u.Requests, u.BytesIn, u.BytesOut = c.requests.Load(), c.bytesIn.Load(), c.bytesOut.Load()
 		return true
 	})
 	for _, u := range usage {

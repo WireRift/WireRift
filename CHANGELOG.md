@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.26.0] - 2026-11-10
+
+### Added
+- Admin: the Accounts table shows each account's requests and traffic (in / out) since the server started. TCP connections count as one request each.
+- Activity: filter chips (All, Warnings, Auth, Sessions, Tunnels, Admin, Server) next to the search box; warnings are highlighted.
+
+### Changed
+- The four top counters are hidden on the Admin tab, where the health cards already show the same numbers.
+
 ## [1.25.0] - 2026-11-09
 
 ### Changed

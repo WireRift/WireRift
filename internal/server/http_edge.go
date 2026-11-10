@@ -230,11 +230,14 @@ func (s *Server) forwardHTTPRequest(w http.ResponseWriter, r *http.Request, sess
 	}
 
 	s.bytesIn.Add(int64(len(head)) + bodyLen)
+	usage := s.accountCounters(tunnel.AccountID)
+	usage.requests.Add(1)
+	usage.bytesIn.Add(int64(len(head)) + bodyLen)
 
 	// 5. Parse the response head from the stream and stream the body back as it
 	// arrives (no full buffering), so large downloads, SSE and long polling work.
 	headTimer := time.AfterFunc(responseHeadTimeout, func() { _ = stream.Reset() })
-	cr := &countingReader{r: stream, n: &s.bytesOut}
+	cr := &countingReader{r: stream, n: &s.bytesOut, n2: &usage.bytesOut}
 	br := bufio.NewReader(cr)
 	resp, err := http.ReadResponse(br, r)
 	headTimer.Stop()
@@ -267,12 +270,16 @@ var requestWriteTimeout = 3 * time.Minute
 type countingReader struct {
 	r   io.Reader
 	n   *atomic.Int64
-	err error // last read error (only touched by the single reading goroutine)
+	n2  *atomic.Int64 // optional second counter (the owning account's)
+	err error         // last read error (only touched by the single reading goroutine)
 }
 
 func (c *countingReader) Read(p []byte) (int, error) {
 	n, err := c.r.Read(p)
 	c.n.Add(int64(n))
+	if c.n2 != nil {
+		c.n2.Add(int64(n))
+	}
 	if err != nil {
 		c.err = err
 	}

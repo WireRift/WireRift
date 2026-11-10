@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/wirerift/wirerift/internal/auth"
+	"github.com/wirerift/wirerift/internal/server"
 )
 
 func isAdmin(r *http.Request) bool {
@@ -87,9 +88,9 @@ func (d *Dashboard) handleAdminAccounts(w http.ResponseWriter, r *http.Request) 
 	if !d.getOnly(w, r) {
 		return
 	}
-	usage := map[string][2]int{}
+	usage := map[string]server.AccountUsage{}
 	for _, u := range d.server.AdminOverview().Accounts {
-		usage[u.Account] = [2]int{u.Sessions, u.Tunnels}
+		usage[u.Account] = u
 	}
 	type row struct {
 		ID          string `json:"id"`
@@ -101,17 +102,20 @@ func (d *Dashboard) handleAdminAccounts(w http.ResponseWriter, r *http.Request) 
 		RateLimit   int    `json:"rate_limit"`
 		Sessions    int    `json:"sessions"`
 		Tunnels     int    `json:"tunnels"`
+		Requests    int64  `json:"requests"`
+		BytesIn     int64  `json:"bytes_in"`
+		BytesOut    int64  `json:"bytes_out"`
 	}
 	rows := []row{}
 	seen := map[string]bool{}
 	for _, a := range d.authManager.ListAccounts() {
 		u := usage[a.ID]
 		seen[a.ID] = true
-		rows = append(rows, row{a.ID, a.Name, a.Active, a.IsAdmin(), a.MaxTunnels, a.MaxSessions, a.RateLimit, u[0], u[1]})
+		rows = append(rows, row{a.ID, a.Name, a.Active, a.IsAdmin(), a.MaxTunnels, a.MaxSessions, a.RateLimit, u.Sessions, u.Tunnels, u.Requests, u.BytesIn, u.BytesOut})
 	}
 	for id, u := range usage { // accounts that are connected but no longer defined
 		if !seen[id] {
-			rows = append(rows, row{ID: id, Name: id, Sessions: u[0], Tunnels: u[1]})
+			rows = append(rows, row{ID: id, Name: id, Sessions: u.Sessions, Tunnels: u.Tunnels, Requests: u.Requests, BytesIn: u.BytesIn, BytesOut: u.BytesOut})
 		}
 	}
 	d.jsonResponse(w, rows)

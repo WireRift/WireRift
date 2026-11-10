@@ -245,6 +245,7 @@ type Server struct {
 	bodyBudget *byteBudget // caps buffered request bodies (nil = unlimited)
 
 	bytesIn             atomic.Int64
+	acctUsage           sync.Map // account ID -> *accountCounters
 	bytesOut            atomic.Int64
 	httpStatus          [5]atomic.Uint64
 	httpDurationBuckets [httpDurationBucketSlots]atomic.Uint64
@@ -1541,6 +1542,8 @@ func (s *Server) proxyTCPConnection(conn net.Conn, tunnel *Tunnel, session *Sess
 	defer stopWatch()
 
 	// Bidirectional copy with bytes tracking
+	usage := s.accountCounters(tunnel.AccountID)
+	usage.requests.Add(1) // one accepted connection
 	var toStream io.Writer = stream
 	var toConn io.Writer = conn
 	if s.config.TCPIdleTimeout > 0 {
@@ -1558,12 +1561,14 @@ func (s *Server) proxyTCPConnection(conn net.Conn, tunnel *Tunnel, session *Sess
 		defer wg.Done()
 		n, _ := io.Copy(toStream, conn)
 		s.bytesIn.Add(n)
+		usage.bytesIn.Add(n)
 		stream.Close()
 	}()
 	go func() {
 		defer wg.Done()
 		n, _ := io.Copy(toConn, stream)
 		s.bytesOut.Add(n)
+		usage.bytesOut.Add(n)
 		conn.Close()
 	}()
 	wg.Wait()

@@ -554,6 +554,13 @@ display:inline-flex;align-items:center;justify-content:center;font-weight:600;
 }
 .tab.active .tab-badge{background:rgba(59,130,246,.15);color:var(--ac)}
 
+/* Activity filter chips */
+.chips{display:inline-flex;gap:6px;flex-wrap:wrap;margin-left:10px}
+.chip{background:var(--bg-2);color:var(--tx-1);border:1px solid var(--bd);border-radius:999px;padding:4px 11px;font:inherit;font-size:12px;cursor:pointer}
+.chip:hover{color:var(--tx-0)}
+.chip.on{background:var(--ac);border-color:var(--ac);color:#fff}
+tr.row-warn td{background:color-mix(in srgb,var(--wn) 9%,transparent)}
+tr.row-warn td:first-child{box-shadow:inset 3px 0 0 var(--wn)}
 /* Admin / Activity */
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(10.5rem,1fr));gap:.75rem;margin-bottom:1rem}
 @media(max-width:480px){.cards{grid-template-columns:repeat(2,minmax(0,1fr));gap:.5rem}.card .v{font-size:1.0625rem}}
@@ -925,7 +932,8 @@ th,td{padding:.5rem .625rem;font-size:.75rem}
 <!-- Activity Panel -->
 <div class="panel" id="panelActivity">
 <div class="panel-bar">
-<div class="panel-bar-left"><input class="search-box" id="searchActivity" type="text" placeholder="Filter activity..."></div>
+<div class="panel-bar-left"><input class="search-box" id="searchActivity" type="text" placeholder="Filter activity...">
+<span class="chips" id="actChips"><button class="chip on" data-lvl="">All</button><button class="chip" data-lvl="warn">Warnings</button><button class="chip" data-kind="auth">Auth</button><button class="chip" data-kind="session">Sessions</button><button class="chip" data-kind="tunnel">Tunnels</button><button class="chip" data-kind="admin">Admin</button><button class="chip" data-kind="server">Server</button></span></div>
 <button class="btn-ghost" id="refreshActivity">Refresh <span class="kbd">R</span></button>
 </div>
 <div class="tbl-wrap">
@@ -949,7 +957,7 @@ th,td{padding:.5rem .625rem;font-size:.75rem}
 <div><div class="sec-title">Responses by status class</div><div id="adminStatus"></div></div>
 </div>
 <div class="sec-title" id="secAccounts">Accounts</div>
-<div class="tbl-wrap"><table><thead><tr><th>Account</th><th>Role</th><th>State</th><th>Sessions</th><th>Tunnels</th><th>Limits</th><th></th></tr></thead><tbody id="tbodyAccounts"></tbody></table></div>
+<div class="tbl-wrap"><table><thead><tr><th>Account</th><th>Role</th><th>State</th><th>Sessions</th><th>Tunnels</th><th title="Since the server started">Requests</th><th title="Since the server started">Traffic in / out</th><th>Limits</th><th></th></tr></thead><tbody id="tbodyAccounts"></tbody></table></div>
 <div class="sec-title" id="secTokens">Access tokens</div>
 <input class="search-box adm-find" type="text" placeholder="Filter tokens..." data-find="tbodyTokens">
 <div class="tbl-wrap"><table><thead><tr><th>ID</th><th>Account</th><th>Name</th><th>Role</th><th>Limits</th><th>Created</th><th>Expires</th><th>Status</th><th></th></tr></thead><tbody id="tbodyTokens"></tbody></table></div>
@@ -1777,6 +1785,8 @@ function copyUrl(btn){
 /* -- Tab Switching ------------------------------------------ */
 function switchTab(name){
     currentTab = name;
+    // The Admin tab has its own health cards; the top counters would only repeat them.
+    qs('.stats').style.display = name === 'admin' ? 'none' : '';
     if(name === 'connect' && typeof cnRender === 'function') cnRender();
     var tabs = qsa('.tab');
     for(var i = 0; i < tabs.length; i++){
@@ -1935,7 +1945,7 @@ function cnBind(){
 }
 
 /* -- Activity & Admin --------------------------------------- */
-var isAdminUser = false, adminInterval = null, activityCache = [];
+var isAdminUser = false, adminInterval = null, activityCache = [], actLevel = '', actKind = '';
 function initRoles(){
     initConnect();
     apiFetch('/api/me').then(function(me){
@@ -1965,8 +1975,10 @@ function renderActivity(){
         var e = activityCache[i];
         var hay = (e.kind + ' ' + (e.account||'') + ' ' + (e.remote||'') + ' ' + e.message).toLowerCase();
         if(q && hay.indexOf(q) === -1) continue;
+        if(actLevel && e.level !== actLevel) continue;
+        if(actKind && e.kind !== actKind) continue;
         n++;
-        rows += '<tr><td>' + fmtTime(e.time) + '</td><td>' + levelPill(e.level) + '</td><td>' + escHtml(e.kind) +
+        rows += '<tr class="' + (e.level === 'warn' ? 'row-warn' : '') + '"><td>' + fmtTime(e.time) + '</td><td>' + levelPill(e.level) + '</td><td>' + escHtml(e.kind) +
             '</td><td>' + escHtml(e.account || '-') + '</td><td>' + escHtml(e.remote || '-') +
             '</td><td>' + escHtml(e.message) + '</td></tr>';
     }
@@ -2071,7 +2083,7 @@ function renderAdmin(o, h, accts, certs, sess){
         if(a.max_sessions) lim.push('sessions≤' + a.max_sessions);
         if(a.rate_limit) lim.push('rate ' + a.rate_limit + '/s');
         rows += '<tr><td>' + escHtml(a.id) + '</td><td>' + (a.admin ? '<span class="pill warn">admin</span>' : 'user') + '</td><td>' +
-            (a.active ? '<span class="pill ok">active</span>' : '<span class="pill bad">disabled</span>') + '</td><td>' + a.sessions + '</td><td>' + a.tunnels + '</td><td>' + escHtml(lim.join(', ') || '-') + '</td><td><button class="btn-sm" data-newtok="' + escHtml(a.id.replace(/^acct_/, '')) + '">New token</button></td></tr>';
+            (a.active ? '<span class="pill ok">active</span>' : '<span class="pill bad">disabled</span>') + '</td><td>' + a.sessions + '</td><td>' + a.tunnels + '</td><td>' + fNum(a.requests || 0) + '</td><td>' + fmtBytes(a.bytes_in || 0) + ' / ' + fmtBytes(a.bytes_out || 0) + '</td><td>' + escHtml(lim.join(', ') || '-') + '</td><td><button class="btn-sm" data-newtok="' + escHtml(a.id.replace(/^acct_/, '')) + '">New token</button></td></tr>';
     }
     $('tbodyAccounts').innerHTML = rows;
     rows = '';
@@ -2278,6 +2290,15 @@ function init(){
     $('refreshActivity').onclick = function(){ loadActivity(); toast('Activity refreshed', 'info'); };
     $('refreshAdmin').onclick = function(){ loadAdmin(); toast('Admin view refreshed', 'info'); };
     $('searchActivity').oninput = renderActivity;
+    $('actChips').onclick = function(ev){
+        var b = ev.target.closest('.chip');
+        if(!b) return;
+        actLevel = b.getAttribute('data-lvl') || '';
+        actKind = b.getAttribute('data-kind') || '';
+        var all = $('actChips').querySelectorAll('.chip');
+        for(var i = 0; i < all.length; i++) all[i].classList.toggle('on', all[i] === b);
+        renderActivity();
+    };
 
     var debounceTimers = {};
     function debounceRender(key, fn){
