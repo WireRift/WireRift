@@ -556,12 +556,22 @@ display:inline-flex;align-items:center;justify-content:center;font-weight:600;
 
 /* Admin / Activity */
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(10.5rem,1fr));gap:.75rem;margin-bottom:1rem}
+@media(max-width:480px){.cards{grid-template-columns:repeat(2,minmax(0,1fr));gap:.5rem}.card .v{font-size:1.0625rem}}
 .card{background:var(--bg-1);border:1px solid var(--bd);border-radius:.625rem;padding:.75rem .875rem;box-shadow:var(--shadow)}
 .card .k{font-size:.6875rem;color:var(--tx-2);text-transform:uppercase;letter-spacing:.04em;font-weight:500}
 .card .v{font-size:1.25rem;font-weight:700;margin-top:.25rem;word-break:break-word}
 .card .s{font-size:.6875rem;color:var(--tx-2);margin-top:.125rem}
 .card.ok .v{color:var(--ok)}.card.warn .v{color:var(--wn)}.card.bad .v{color:var(--er)}
 .sec-title{font-size:.8125rem;font-weight:600;color:var(--tx-1);margin:1.25rem 0 .5rem;text-transform:uppercase;letter-spacing:.05em}
+.adm-nav{position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;gap:.375rem;margin:.75rem 0 0;padding:.5rem 0;background:var(--bg-0);border-bottom:1px solid var(--bd)}
+.adm-nav a{font-size:.75rem;color:var(--tx-1);text-decoration:none;padding:.25rem .625rem;border:1px solid var(--bd);border-radius:999px;background:var(--bg-1)}
+.adm-nav a:hover{color:var(--ac);border-color:var(--ac)}
+.adm-forms{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:.75rem;margin-top:.75rem;align-items:start}
+@media(max-width:900px){.adm-forms{grid-template-columns:minmax(0,1fr)}}
+.adm-card{background:var(--bg-1);border:1px solid var(--bd);border-radius:.625rem;padding:.75rem 1rem}
+.adm-card>summary{font-weight:600;font-size:.875rem;color:var(--tx-0);cursor:pointer}
+.adm-find{margin:.25rem 0 .5rem;max-width:18rem}
+.sec-title{scroll-margin-top:3.5rem}
 .charts{display:grid;grid-template-columns:repeat(auto-fill,minmax(15rem,1fr));gap:.75rem}
 .chart{background:var(--bg-1);border:1px solid var(--bd);border-radius:.625rem;padding:.625rem .75rem}
 .chart .h{display:flex;justify-content:space-between;align-items:baseline;font-size:.75rem;color:var(--tx-2)}
@@ -690,7 +700,7 @@ font-family:'SF Mono',SFMono-Regular,Consolas,monospace;
 .cn-grid{display:grid;grid-template-columns:minmax(0,22rem) minmax(0,1fr);gap:1.5rem;align-items:start}
 @media (max-width:860px){.cn-grid{grid-template-columns:minmax(0,1fr)}}
 .cn-form label{display:block;font-size:.75rem;color:var(--tx-1);margin:.75rem 0 .25rem}
-.cn-form input[type=text],.cn-form input[type=number],.cn-form select,.cn-out select{
+.cn-form input[type=text],.cn-form input[type=password],.cn-form input[type=number],.cn-form select,.cn-out select{
 width:100%;padding:.4375rem .625rem;background:var(--bg-1);border:1px solid var(--bd);
 border-radius:.375rem;color:var(--tx-0);font-size:.8125rem}
 .cn-form input:focus,.cn-form select:focus,.cn-out select:focus{outline:none;border-color:var(--ac)}
@@ -929,20 +939,23 @@ th,td{padding:.5rem .625rem;font-size:.75rem}
 <div class="panel" id="panelAdmin">
 <div class="panel-bar"><div class="panel-bar-left"><span class="pill" id="adminStamp">loading...</span></div>
 <button class="btn-ghost" id="refreshAdmin">Refresh <span class="kbd">R</span></button></div>
-<div class="sec-title" style="margin-top:0">Server health</div>
+<nav class="adm-nav" id="admNav" aria-label="Admin sections"><a href="#secHealth" data-jump="secHealth">Health</a><a href="#secCharts" data-jump="secCharts">Last hour</a><a href="#secAccounts" data-jump="secAccounts">Accounts</a><a href="#secTokens" data-jump="secTokens">Tokens</a><a href="#secSessions" data-jump="secSessions">Sessions</a><a href="#secHeld" data-jump="secHeld">Reserved</a><a href="#secCerts" data-jump="secCerts">Certificates</a><a href="#secConfig" data-jump="secConfig">Configuration</a></nav>
+<div class="sec-title" id="secHealth" style="margin-top:1rem">Server health</div>
 <div class="cards" id="adminCards"></div>
-<div class="sec-title">Last hour (10 s samples)</div>
+<div class="sec-title" id="secCharts">Last hour (10 s samples)</div>
 <div class="charts" id="adminCharts"></div>
 <div class="two">
 <div><div class="sec-title">Response time</div><div id="adminLatency"></div></div>
 <div><div class="sec-title">Responses by status class</div><div id="adminStatus"></div></div>
 </div>
-<div class="sec-title">Accounts</div>
-<div class="tbl-wrap"><table><thead><tr><th>Account</th><th>Role</th><th>State</th><th>Sessions</th><th>Tunnels</th><th>Limits</th></tr></thead><tbody id="tbodyAccounts"></tbody></table></div>
-<div class="sec-title">Access tokens</div>
+<div class="sec-title" id="secAccounts">Accounts</div>
+<div class="tbl-wrap"><table><thead><tr><th>Account</th><th>Role</th><th>State</th><th>Sessions</th><th>Tunnels</th><th>Limits</th><th></th></tr></thead><tbody id="tbodyAccounts"></tbody></table></div>
+<div class="sec-title" id="secTokens">Access tokens</div>
+<input class="search-box adm-find" type="text" placeholder="Filter tokens..." data-find="tbodyTokens">
 <div class="tbl-wrap"><table><thead><tr><th>ID</th><th>Account</th><th>Name</th><th>Role</th><th>Limits</th><th>Created</th><th>Expires</th><th>Status</th><th></th></tr></thead><tbody id="tbodyTokens"></tbody></table></div>
 <div class="cn-note" id="tokensOff" style="display:none"></div>
-<details class="cn-form" id="tokNew"><summary>Create a token</summary>
+<div class="adm-forms">
+<details class="cn-form adm-card" id="tokNew" open><summary>Create a token</summary>
 <div class="tok-grid">
 <div><label for="tokAccount">Account <span class="hint">new or existing</span></label><input id="tokAccount" type="text" list="tokAccounts" autocomplete="off" spellcheck="false" placeholder="alice"><datalist id="tokAccounts"></datalist></div>
 <div><label for="tokName">Label</label><input id="tokName" type="text" autocomplete="off" placeholder="laptop"></div>
@@ -955,7 +968,7 @@ th,td{padding:.5rem .625rem;font-size:.75rem}
 <p class="cn-note">Every token has its own secret and can be revoked on its own. Account limits and role are shared by all tokens of an account, so setting them here changes them for its other tokens too.</p>
 <button class="btn" id="tokCreate">Create token</button>
 </details>
-<details class="cn-form" id="pwSet"><summary>Set a dashboard password</summary>
+<details class="cn-form adm-card" id="pwSet" open><summary>Set a dashboard password</summary>
 <div class="tok-grid">
 <div><label for="pwAccount">Account <span class="hint">the username for signing in</span></label><input id="pwAccount" type="text" list="tokAccounts" autocomplete="off" spellcheck="false"></div>
 <div><label for="pwValue">New password <span class="hint">at least 10 characters</span></label><input id="pwValue" type="password" autocomplete="new-password"></div>
@@ -963,14 +976,16 @@ th,td{padding:.5rem .625rem;font-size:.75rem}
 <p class="cn-note">The account signs in to this dashboard with its name and this password; its role (administrator or regular user) decides what it sees. Setting a new password signs that account out of the dashboard. API tokens keep working.</p>
 <button class="btn" id="pwSave">Set password</button>
 </details>
+</div>
 <div class="tok-secret" id="tokSecret" style="display:none"></div>
-<div class="sec-title">All sessions</div>
+<div class="sec-title" id="secSessions">All sessions</div>
+<input class="search-box adm-find" type="text" placeholder="Filter sessions..." data-find="tbodyAdminSessions">
 <div class="tbl-wrap"><table><thead><tr><th>ID</th><th>Account</th><th>Remote</th><th>Connected</th><th>Last heartbeat</th><th>Tunnels</th><th></th></tr></thead><tbody id="tbodyAdminSessions"></tbody></table></div>
-<div class="sec-title">Reserved subdomains and TCP ports (client dropped, waiting for reconnect)</div>
+<div class="sec-title" id="secHeld">Reserved subdomains and TCP ports (client dropped, waiting for reconnect)</div>
 <div class="tbl-wrap"><table><thead><tr><th>Subdomain / tcp:port</th><th>Account</th><th>Held for</th></tr></thead><tbody id="tbodyHeld"></tbody></table></div>
-<div class="sec-title">Certificates</div>
+<div class="sec-title" id="secCerts">Certificates</div>
 <div class="tbl-wrap"><table><thead><tr><th>Host</th><th>Issuer</th><th>Expires</th><th>Days left</th></tr></thead><tbody id="tbodyCerts"></tbody></table></div>
-<div class="sec-title">Configuration in effect</div>
+<div class="sec-title" id="secConfig">Configuration in effect</div>
 <div class="cards" id="adminConfig"></div>
 </div>
 </div>
@@ -1182,6 +1197,16 @@ function fmtTime(t){
     var mm = String(d.getMinutes()).length < 2 ? '0' + d.getMinutes() : '' + d.getMinutes();
     var ss = String(d.getSeconds()).length < 2 ? '0' + d.getSeconds() : '' + d.getSeconds();
     return hh + ':' + mm + ':' + ss;
+}
+function fmtAgo(t){
+    if(!t) return '-';
+    var sec = Math.round((Date.now() - new Date(t).getTime()) / 1000), txt;
+    if(sec < 0) sec = 0;
+    if(sec < 60) txt = 'just now';
+    else if(sec < 3600) txt = Math.floor(sec / 60) + ' min ago';
+    else if(sec < 86400) txt = Math.floor(sec / 3600) + ' h ago';
+    else txt = Math.floor(sec / 86400) + ' d ago';
+    return '<span title="' + escHtml(new Date(t).toLocaleString()) + '">' + txt + '</span>';
 }
 function fmtTimeDate(t){
     if(!t) return '-';
@@ -2046,16 +2071,17 @@ function renderAdmin(o, h, accts, certs, sess){
         if(a.max_sessions) lim.push('sessions≤' + a.max_sessions);
         if(a.rate_limit) lim.push('rate ' + a.rate_limit + '/s');
         rows += '<tr><td>' + escHtml(a.id) + '</td><td>' + (a.admin ? '<span class="pill warn">admin</span>' : 'user') + '</td><td>' +
-            (a.active ? '<span class="pill ok">active</span>' : '<span class="pill bad">disabled</span>') + '</td><td>' + a.sessions + '</td><td>' + a.tunnels + '</td><td>' + escHtml(lim.join(', ') || '-') + '</td></tr>';
+            (a.active ? '<span class="pill ok">active</span>' : '<span class="pill bad">disabled</span>') + '</td><td>' + a.sessions + '</td><td>' + a.tunnels + '</td><td>' + escHtml(lim.join(', ') || '-') + '</td><td><button class="btn-sm" data-newtok="' + escHtml(a.id.replace(/^acct_/, '')) + '">New token</button></td></tr>';
     }
     $('tbodyAccounts').innerHTML = rows;
     rows = '';
     for(i = 0; i < sess.length; i++){
         var s = sess[i];
-        rows += '<tr><td>' + escHtml(s.id) + '</td><td>' + escHtml(s.account_id) + '</td><td>' + escHtml(s.remote_addr) + '</td><td>' + fmtTimeDate(s.connected_at) +
+        rows += '<tr><td>' + escHtml(s.id) + '</td><td>' + escHtml(s.account_id) + '</td><td>' + escHtml(s.remote_addr) + '</td><td>' + fmtAgo(s.connected_at) +
             '</td><td>' + (new Date(s.last_heartbeat).getFullYear() < 2000 ? '-' : fmtTime(s.last_heartbeat)) + '</td><td>' + s.tunnel_count + '</td><td><button class="btn-danger" data-kick="' + escHtml(s.id) + '">Disconnect</button></td></tr>';
     }
     $('tbodyAdminSessions').innerHTML = rows || '<tr><td colspan="7" style="color:var(--tx-2)">No sessions</td></tr>';
+    reapplyFinds();
     rows = '';
     var held = o.held_subdomains || [];
     for(i = 0; i < held.length; i++){
@@ -2112,15 +2138,23 @@ function renderTokens(list){
         if(t.rate_limit) lim.push('rate ' + t.rate_limit + '/s');
         var cls = t.status === 'active' ? 'ok' : (t.status === 'expired' ? 'warn' : 'bad');
         rows += '<tr' + (t.status === 'active' ? '' : ' class="tok-off"') + '><td>' + escHtml(t.id) + '</td><td>' + escHtml(t.account) + '</td><td>' + escHtml(t.name || '-') + '</td><td>' +
-            (t.admin ? '<span class="pill warn">admin</span>' : 'user') + '</td><td>' + escHtml(lim.join(', ') || '-') + '</td><td>' + fmtTimeDate(t.created_at) + '</td><td>' +
+            (t.admin ? '<span class="pill warn">admin</span>' : 'user') + '</td><td>' + escHtml(lim.join(', ') || '-') + '</td><td>' + fmtAgo(t.created_at) + '</td><td>' +
             (t.expires_at ? fmtTimeDate(t.expires_at) : 'never') + '</td><td><span class="pill ' + cls + '">' + escHtml(t.status) + '</span></td><td>' +
             (t.status === 'revoked' ? '' : '<button class="btn-danger" data-revoke="' + escHtml(t.id) + '">Revoke</button>') + '</td></tr>';
     }
     $('tbodyTokens').innerHTML = rows || '<tr><td colspan="9" style="color:var(--tx-2)">No tokens in the token file</td></tr>';
+    reapplyFinds();
     var opts = '';
     for(var n in names) opts += '<option value="' + escHtml(n) + '">';
     $('tokAccounts').innerHTML = opts;
 }
+function applyFind(inp){
+    var q = inp.value.trim().toLowerCase(), rows = $(inp.getAttribute('data-find')).children;
+    for(var i = 0; i < rows.length; i++){
+        rows[i].style.display = !q || rows[i].textContent.toLowerCase().indexOf(q) >= 0 ? '' : 'none';
+    }
+}
+function reapplyFinds(){ qsa('[data-find]').forEach(applyFind); }
 function tokNum(id){ var v = $(id).value.trim(); return v === '' ? undefined : parseInt(v, 10); }
 function createToken(){
     var body = {account: $('tokAccount').value.trim(), name: $('tokName').value.trim(), expires: $('tokExpires').value};
@@ -2157,6 +2191,13 @@ function showSecret(res){
 
 document.addEventListener('click', function(ev){
     var t = ev.target;
+    if(t && t.getAttribute && t.getAttribute('data-newtok')){
+        $('tokAccount').value = t.getAttribute('data-newtok');
+        $('tokNew').open = true;
+        $('tokNew').scrollIntoView({behavior: 'smooth', block: 'center'});
+        $('tokName').focus();
+        return;
+    }
     if(t && t.getAttribute && t.getAttribute('data-kick')){
         var id = t.getAttribute('data-kick');
         if(!confirm('Disconnect session ' + id + '? The client may reconnect; revoke its token to keep it out.')) return;
@@ -2218,6 +2259,15 @@ function init(){
     $('refreshSessions').onclick = function(){ loadSessions(); toast('Sessions refreshed', 'info'); };
     $('refreshRequests').onclick = function(){ loadRequests(); toast('Inspector refreshed', 'info'); };
     $('tokCreate').onclick = createToken;
+    $('admNav').onclick = function(e){
+        var id = e.target.getAttribute && e.target.getAttribute('data-jump');
+        if(!id) return;
+        e.preventDefault();
+        var el = $(id); if(el && el.scrollIntoView) el.scrollIntoView({behavior: 'smooth', block: 'start'});
+    };
+    qsa('[data-find]').forEach(function(inp){
+        inp.addEventListener('input', function(){ applyFind(inp); });
+    });
     $('pwSave').onclick = function(){
         var acct = $('pwAccount').value.trim(), pw = $('pwValue').value;
         if(!acct || !pw){ toast('Give an account and a password', 'err'); return; }

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.25.0] - 2026-11-09
+
+### Changed
+- Admin tab: a sticky section bar (Health, Last hour, Accounts, Tokens, Sessions, Reserved, Certificates, Configuration), filter boxes for tokens and sessions, relative times ("4m ago", full time on hover), a *New token* button on every account row, and the token and password forms side by side and open by default. Health cards use two columns on phones. Password fields now match the other inputs.
+
 ## [1.24.0] - 2026-11-08
 
 ### Added
