@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.29.0] - 2026-11-11
+
+### Changed
+- Inspector: filter chips (All, 2xx, 3xx, 4xx, 5xx, Slow = 500 ms or more) and a duration bar on every row, amber for slow requests.
+- Tunnels: the URL of an HTTP tunnel is a link, the type is a pill, and the age is relative.
+- Narrow screens: the tab bar scrolls sideways instead of overflowing, and the keyboard hints are hidden.
+
+### Fixed
+- The dashboard script defined `fmtAgo` and `fmtUptime` twice; the duplicates are removed.
+
 ## [1.28.0] - 2026-11-11
 
 ### Changed

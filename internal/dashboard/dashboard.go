@@ -631,6 +631,14 @@ display:inline-flex;align-items:center;justify-content:center;font-weight:600;
 .chip.on{background:var(--ac);border-color:var(--ac);color:#fff}
 tr.row-warn td{background:color-mix(in srgb,var(--wn) 9%,transparent)}
 tr.row-warn td:first-child{box-shadow:inset 3px 0 0 var(--wn)}
+/* Tabs on narrow screens, links, duration bars */
+.tabs{overflow-x:auto;scrollbar-width:none}.tabs::-webkit-scrollbar{display:none}.tab{flex:none;white-space:nowrap}
+@media(max-width:640px){.tab .kbd{display:none}.tab{padding:.625rem .75rem}}
+.lnk{color:var(--ac);text-decoration:none}.lnk:hover{text-decoration:underline}
+.dur-cell{white-space:nowrap}.dur-t{display:inline-block;min-width:4.5rem}
+.dur{display:inline-block;vertical-align:middle;width:3.5rem;height:.3125rem;background:var(--bg-3);border-radius:999px;overflow:hidden}
+.dur b{display:block;height:100%;background:var(--ac);border-radius:999px}.dur.slow b{background:var(--wn)}
+.panel-bar-left .chips{margin-left:.25rem}
 /* Admin console */
 .adm-hero{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;margin-top:1rem;padding:1rem 1.25rem;border:1px solid var(--bd);border-radius:.75rem;background:var(--bg-1);box-shadow:var(--shadow);position:relative;overflow:hidden}
 .adm-hero::before{content:'';position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--ok)}
@@ -999,6 +1007,7 @@ th,td{padding:.5rem .625rem;font-size:.75rem}
 <div class="panel-bar-left">
 <input class="search-box" id="searchInspector" type="text" placeholder="Filter by path, method, status...">
 <select class="sel" id="tunnelFilter"><option value="">All Tunnels</option></select>
+<span class="chips" id="inspChips"><button class="chip on" data-sc="">All</button><button class="chip" data-sc="2">2xx</button><button class="chip" data-sc="3">3xx</button><button class="chip" data-sc="4">4xx</button><button class="chip" data-sc="5">5xx</button><button class="chip" data-sc="slow" title="Took 500 ms or more">Slow</button></span>
 </div>
 <button class="btn-ghost" id="refreshRequests">Refresh <span class="kbd">R</span></button>
 </div>
@@ -1177,7 +1186,8 @@ var animBytesOut = {current:0, target:0, el:null};
 var animFrame = null;
 var tunnelsCache = [];
 var sessionsCache = [];
-var requestsCache = [];
+var requestsCache = [], inspClass = '';
+var SLOW_NS = 500e6; // the API's duration_ms field holds nanoseconds
 
 /* -- Theme -------------------------------------------------- */
 function initTheme(){
@@ -1332,17 +1342,6 @@ function fmtBytes(b){
     if(i >= sizes.length) i = sizes.length - 1;
     return (b / Math.pow(k, i)).toFixed(1) + ' ' + sizes[i];
 }
-function fmtUptime(sec){
-    if(!sec || sec < 0) return '-';
-    var d = Math.floor(sec / 86400);
-    var h = Math.floor((sec % 86400) / 3600);
-    var m = Math.floor((sec % 3600) / 60);
-    var s = Math.floor(sec % 60);
-    if(d > 0) return d + 'd ' + h + 'h ' + m + 'm';
-    if(h > 0) return h + 'h ' + m + 'm ' + s + 's';
-    if(m > 0) return m + 'm ' + s + 's';
-    return s + 's';
-}
 function fmtTime(t){
     if(!t) return '-';
     var d = new Date(t);
@@ -1350,16 +1349,6 @@ function fmtTime(t){
     var mm = String(d.getMinutes()).length < 2 ? '0' + d.getMinutes() : '' + d.getMinutes();
     var ss = String(d.getSeconds()).length < 2 ? '0' + d.getSeconds() : '' + d.getSeconds();
     return hh + ':' + mm + ':' + ss;
-}
-function fmtAgo(t){
-    if(!t) return '-';
-    var sec = Math.round((Date.now() - new Date(t).getTime()) / 1000), txt;
-    if(sec < 0) sec = 0;
-    if(sec < 60) txt = 'just now';
-    else if(sec < 3600) txt = Math.floor(sec / 60) + ' min ago';
-    else if(sec < 86400) txt = Math.floor(sec / 3600) + ' h ago';
-    else txt = Math.floor(sec / 86400) + ' d ago';
-    return '<span title="' + escHtml(new Date(t).toLocaleString()) + '">' + txt + '</span>';
 }
 function fmtTimeDate(t){
     if(!t) return '-';
@@ -1561,7 +1550,7 @@ function renderTunnels(){
         return;
     }
     $('emptyTunnels').style.display = 'none';
-    var sig = items.map(function(t){ return t.id + t.status; }).join('|');
+    var sig = items.map(function(t){ return t.id + t.status + Math.floor(Date.now() / 30000); }).join('|');
     if(tbody.getAttribute('data-sig') === sig) return;
     tbody.setAttribute('data-sig', sig);
 
@@ -1572,10 +1561,18 @@ function renderTunnels(){
         var c1 = document.createElement('td');
         var sp1 = document.createElement('span'); sp1.className = 'mono'; sp1.textContent = t.id || '-'; c1.appendChild(sp1);
         tr.appendChild(c1);
-        var c2 = document.createElement('td'); c2.textContent = t.type || '-'; tr.appendChild(c2);
+        var c2 = document.createElement('td');
+        var typ = document.createElement('span'); typ.className = 'pill ' + (t.type === 'tcp' ? 'warn' : 'ok'); typ.textContent = (t.type || '-').toUpperCase();
+        c2.appendChild(typ); tr.appendChild(c2);
         var c3 = document.createElement('td');
-        var sp3 = document.createElement('span'); sp3.className = 'mono';
-        sp3.textContent = t.type === 'http' ? (t.url || '-') : 'Port ' + (t.port || '-');
+        var sp3;
+        if(t.type === 'http' && /^https?:\/\//.test(t.url || '')){
+            sp3 = document.createElement('a'); sp3.href = t.url; sp3.target = '_blank'; sp3.rel = 'noopener noreferrer'; sp3.className = 'mono lnk';
+            sp3.textContent = t.url;
+        } else {
+            sp3 = document.createElement('span'); sp3.className = 'mono';
+            sp3.textContent = t.type === 'http' ? (t.url || '-') : 'Port ' + (t.port || '-');
+        }
         c3.appendChild(sp3); tr.appendChild(c3);
         var c4 = document.createElement('td');
         var sp4 = document.createElement('span'); sp4.className = 'mono'; sp4.textContent = t.target || '-'; c4.appendChild(sp4);
@@ -1590,7 +1587,7 @@ function renderTunnels(){
         var c6 = document.createElement('td');
         var dot = document.createElement('span'); dot.className = 'status-dot'; dot.textContent = 'Active';
         c6.appendChild(dot); tr.appendChild(c6);
-        var c7 = document.createElement('td'); c7.textContent = fmtTimeDate(t.created_at); tr.appendChild(c7);
+        var c7 = document.createElement('td'); c7.textContent = fmtAgo(t.created_at); c7.title = fmtTimeDate(t.created_at); tr.appendChild(c7);
         var c8 = document.createElement('td');
         if(t.url){
             var cpBtn = document.createElement('button'); cpBtn.className = 'btn-sm'; cpBtn.textContent = 'Copy';
@@ -1709,6 +1706,11 @@ function renderRequests(){
     var filter = ($('searchInspector').value || '').toLowerCase();
     var tbody = $('tbodyRequests');
     var items = requestsCache;
+    if(inspClass){
+        items = items.filter(function(r){
+            return inspClass === 'slow' ? (r.duration_ms || 0) >= SLOW_NS : String(Math.floor((r.status_code || 0) / 100)) === inspClass;
+        });
+    }
     if(filter){
         items = items.filter(function(r){
             return (r.path && r.path.toLowerCase().indexOf(filter) !== -1) ||
@@ -1726,9 +1728,11 @@ function renderRequests(){
     $('emptyRequests').style.display = 'none';
 
     var sig = items.map(function(r){ return r.id; }).join('|');
-    if(tbody.getAttribute('data-sig') === sig && !filter) return;
+    if(tbody.getAttribute('data-sig') === sig && !filter && !inspClass) return;
     tbody.setAttribute('data-sig', sig);
 
+    var maxDur = 1;
+    for(var mi = 0; mi < items.length; mi++) if((items[mi].duration_ms || 0) > maxDur) maxDur = items[mi].duration_ms;
     var frag = document.createDocumentFragment();
     for(var idx = 0; idx < items.length; idx++){
         var r = items[idx];
@@ -1747,7 +1751,11 @@ function renderRequests(){
         var c4 = document.createElement('td');
         var scSpan = document.createElement('span'); scSpan.className = 'sc ' + scClass; scSpan.textContent = sc;
         c4.appendChild(scSpan); tr.appendChild(c4);
-        var c5 = document.createElement('td'); c5.textContent = fmtDuration(r.duration_ms); tr.appendChild(c5);
+        var c5 = document.createElement('td'); c5.className = 'dur-cell';
+        var durTxt = document.createElement('span'); durTxt.className = 'dur-t'; durTxt.textContent = fmtDuration(r.duration_ms); c5.appendChild(durTxt);
+        var durBar = document.createElement('i'); durBar.className = 'dur' + ((r.duration_ms || 0) >= SLOW_NS ? ' slow' : '');
+        var durFill = document.createElement('b'); durFill.style.width = Math.max(2, Math.min(100, (r.duration_ms || 0) / maxDur * 100)).toFixed(0) + '%';
+        durBar.appendChild(durFill); c5.appendChild(durBar); tr.appendChild(c5);
         var c6 = document.createElement('td');
         var sp6 = document.createElement('span'); sp6.className = 'mono'; sp6.textContent = r.client_ip || '-'; c6.appendChild(sp6);
         tr.appendChild(c6);
@@ -2563,6 +2571,14 @@ function init(){
     $('refreshTunnels').onclick = function(){ loadTunnels(); toast('Tunnels refreshed', 'info'); };
     $('refreshSessions').onclick = function(){ loadSessions(); toast('Sessions refreshed', 'info'); };
     $('refreshRequests').onclick = function(){ loadRequests(); toast('Inspector refreshed', 'info'); };
+    $('inspChips').onclick = function(e){
+        var b = e.target.closest('.chip');
+        if(!b) return;
+        inspClass = b.getAttribute('data-sc') || '';
+        var all = $('inspChips').querySelectorAll('.chip');
+        for(var i = 0; i < all.length; i++) all[i].classList.toggle('on', all[i] === b);
+        renderRequests();
+    };
     $('tokCreate').onclick = createToken;
     $('admChartTabs').onclick = function(e){
         var b = e.target.closest('button');
