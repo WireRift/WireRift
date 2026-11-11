@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.29.1] - 2026-11-11
+
+### Changed
+- Dashboard Sessions: the last-heartbeat cell is a green/amber/red pill (over 45 s / 90 s) and the tunnel count is a pill.
+
 ## [1.29.0] - 2026-11-11
 
 ### Changed

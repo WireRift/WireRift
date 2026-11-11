@@ -1649,12 +1649,16 @@ function renderSessions(){
         var c4 = document.createElement('td'); c4.textContent = fmtTimeDate(s.connected_at); tr.appendChild(c4);
         var c5 = document.createElement('td');
         if(s.last_heartbeat && s.last_heartbeat !== '0001-01-01T00:00:00Z'){
-            c5.textContent = fmtAgo(s.last_heartbeat);
+            var hbAge = (Date.now() - new Date(s.last_heartbeat).getTime()) / 1000;
+            var hp = document.createElement('span');
+            hp.className = 'pill ' + (hbAge > 90 ? 'bad' : hbAge > 45 ? 'warn' : 'ok');
+            hp.textContent = fmtAgo(s.last_heartbeat);
+            c5.appendChild(hp);
             c5.title = fmtTimeDate(s.last_heartbeat);
         } else { c5.textContent = '-'; }
         tr.appendChild(c5);
         var c6 = document.createElement('td'); c6.textContent = fmtUptime(s.uptime_seconds || 0); tr.appendChild(c6);
-        var c7 = document.createElement('td'); c7.textContent = s.tunnel_count || 0; tr.appendChild(c7);
+        var c7 = document.createElement('td'); var tp = document.createElement('span'); tp.className = 'pill' + (s.tunnel_count ? ' ok' : ''); tp.textContent = s.tunnel_count || 0; c7.appendChild(tp); tr.appendChild(c7);
 
         /* detail row */
         var detailTr = document.createElement('tr');
