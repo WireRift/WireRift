@@ -153,12 +153,14 @@ func (m *Mux) OpenStream() (*Stream, error) {
 	default:
 	}
 
+	m.idMu.Lock()
+	defer m.idMu.Unlock()
+
+	// Checked under idMu so concurrent callers cannot all pass it before any
+	// of them registers its stream.
 	if int(m.streamCount.Load()) >= int(m.maxStreams.Load()) {
 		return nil, ErrTooManyStreams
 	}
-
-	m.idMu.Lock()
-	defer m.idMu.Unlock()
 
 	id, ok := m.allocIDLocked()
 	if !ok {

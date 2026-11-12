@@ -97,6 +97,9 @@ func (s *Stream) SetMetadata(remoteAddr, protocol, tunnelID string) {
 
 // Read reads data from the stream. Blocks until data is available or stream is closed.
 func (s *Stream) Read(p []byte) (n int, err error) {
+	if len(p) == 0 {
+		return 0, nil // io.Reader: an empty read must not wait for data
+	}
 	muxDone := false
 	for {
 		// Observe the state before draining the buffer: if the remote has
@@ -163,9 +166,11 @@ func (s *Stream) Write(p []byte) (n int, err error) {
 		// Recheck state on each iteration to detect close/reset during write
 		state = s.state.Load()
 		if state == streamStateClosed || state == streamStateHalfClosedLocal {
+			s.signalWindow() // windowCh holds one token: wake the next blocked writer too
 			return total, ErrStreamClosed
 		}
 		if state == streamStateReset {
+			s.signalWindow()
 			return total, ErrStreamReset
 		}
 
@@ -224,6 +229,8 @@ func (s *Stream) Close() error {
 		} else if state == streamStateHalfClosedRemote {
 			s.state.CompareAndSwap(streamStateHalfClosedRemote, streamStateClosed)
 		}
+		// A Write parked waiting for send credit must see the state change.
+		s.signalWindow()
 		// Re-read: the remote may have closed concurrently.
 		final := s.state.Load()
 		fullyClosed := final == streamStateClosed || final == streamStateReset
