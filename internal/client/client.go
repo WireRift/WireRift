@@ -1168,7 +1168,7 @@ func (c *Client) handleHTTPStream(stream *mux.Stream) {
 	// blocks the response writer forever, so the visitor's handshake never
 	// completes. Relay them as a raw pipe instead.
 	if strings.EqualFold(req.Header.Get("Upgrade"), "websocket") {
-		c.handleUpgradeStream(stream, req, tunnel)
+		c.handleUpgradeStream(stream, reader, req, tunnel)
 		return
 	}
 
@@ -1177,6 +1177,7 @@ func (c *Client) handleHTTPStream(stream *mux.Stream) {
 	if c.config.OnExchange != nil {
 		rec = c.beginExchange(tunnel, req)
 	}
+	keepNoUserAgent(req)
 	req = req.WithContext(c.ctx)
 	req.URL.Scheme = "http"
 	req.URL.Host = tunnel.LocalAddr
@@ -1203,15 +1204,24 @@ func (c *Client) handleHTTPStream(stream *mux.Stream) {
 	_ = resp.Write(stream)
 }
 
+// keepNoUserAgent stops the Go HTTP stack from inventing a User-Agent for a
+// visitor request that had none: an explicitly empty value is not sent.
+func keepNoUserAgent(req *http.Request) {
+	if _, ok := req.Header["User-Agent"]; !ok {
+		req.Header["User-Agent"] = []string{""}
+	}
+}
+
 // handleUpgradeStream relays a WebSocket upgrade as a raw bidirectional pipe:
 // the upgrade request is written verbatim to the local service and both
 // directions are copied with per-direction closes, so the 101 handshake,
 // frames, and EOF all propagate (mirrors the server-side proxyTCPConnection
 // relay and handleTCPStream).
-func (c *Client) handleUpgradeStream(stream *mux.Stream, req *http.Request, tunnel *Tunnel) {
+func (c *Client) handleUpgradeStream(stream *mux.Stream, reader *bufio.Reader, req *http.Request, tunnel *Tunnel) {
 	start := time.Now()
 	hdr := req.Header.Clone()
 	path, host := req.URL.RequestURI(), req.Host
+	keepNoUserAgent(req)
 	localConn, err := net.DialTimeout("tcp", tunnel.LocalAddr, 10*time.Second)
 	if err != nil {
 		c.emitStream(tunnel, "websocket", start, 0, 0, req.Method, path, host, hdr, err.Error())
@@ -1226,12 +1236,27 @@ func (c *Client) handleUpgradeStream(stream *mux.Stream, req *http.Request, tunn
 		return
 	}
 
+	// The reader that parsed the request may already hold the visitor's first
+	// bytes (sent right behind the handshake); they are no longer on the stream.
+	var pre int64
+	if n := reader.Buffered(); n > 0 {
+		buffered, _ := reader.Peek(n)
+		w, err := localConn.Write(buffered)
+		if err != nil {
+			c.emitStream(tunnel, "websocket", start, int64(w), 0, req.Method, path, host, hdr, err.Error())
+			stream.Close()
+			return
+		}
+		pre = int64(w)
+	}
+
 	var wg sync.WaitGroup
 	var in, out int64
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
 		in, _ = io.Copy(localConn, stream)
+		in += pre
 		localConn.Close()
 	}()
 	go func() {
