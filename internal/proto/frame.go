@@ -132,12 +132,13 @@ func ReadFrame(r io.Reader) (*Frame, error) {
 			// Don't trust the claimed length for a large allocation: grow as
 			// data actually arrives, so a bare header costs nothing.
 			var buf bytes.Buffer
-			var n int64
-			n, err = io.CopyN(&buf, r, int64(payloadLen))
+			_, err = io.CopyN(&buf, r, int64(payloadLen))
 			payload = buf.Bytes()
-			if err == io.EOF && n > 0 {
-				err = io.ErrUnexpectedEOF
-			}
+		}
+		if err == io.EOF {
+			// The header promised payload bytes: ending here is a truncated
+			// frame, never a clean end of stream.
+			err = io.ErrUnexpectedEOF
 		}
 		if err != nil {
 			return nil, err

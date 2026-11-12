@@ -475,3 +475,25 @@ func TestReadMagicPartialInvalid(t *testing.T) {
 		t.Errorf("error = %v, want %v", err, ErrInvalidMagic)
 	}
 }
+
+// TestReadFrameTruncatedAfterHeader: a header that promises payload bytes
+// followed by end of stream is a truncated frame (unexpected EOF), not a
+// clean EOF; only an empty stream is a clean EOF.
+func TestReadFrameTruncatedAfterHeader(t *testing.T) {
+	hdr := func(n uint32) []byte {
+		return []byte{Version, byte(FrameStreamData), 0, 0, 1, byte(n >> 24), byte(n >> 16), byte(n >> 8), byte(n)}
+	}
+	for name, data := range map[string][]byte{
+		"small header only":     hdr(10),
+		"large header only":     hdr(smallPayloadSize + 1),
+		"small partial payload": append(hdr(10), 1, 2, 3),
+		"large partial payload": append(hdr(smallPayloadSize+1), 1, 2, 3),
+	} {
+		if _, err := ReadFrame(bytes.NewReader(data)); !errors.Is(err, io.ErrUnexpectedEOF) {
+			t.Errorf("%s: err = %v, want unexpected EOF", name, err)
+		}
+	}
+	if _, err := ReadFrame(bytes.NewReader(nil)); err != io.EOF {
+		t.Errorf("empty stream: err = %v, want io.EOF", err)
+	}
+}
