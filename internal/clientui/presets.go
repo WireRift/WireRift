@@ -38,6 +38,8 @@ func (m *Manager) SavePreset(p Preset) error {
 	if m.settings == nil || m.settings.path == "" {
 		return errors.New("saving is off (started with -no-save)")
 	}
+	m.smu.Lock()
+	defer m.smu.Unlock()
 	saved := m.settings.Load()
 	replaced := false
 	for i := range saved.Presets {
@@ -56,6 +58,8 @@ func (m *Manager) SavePreset(p Preset) error {
 
 // DeletePreset removes the preset called name (no error if it is not there).
 func (m *Manager) DeletePreset(name string) error {
+	m.smu.Lock()
+	defer m.smu.Unlock()
 	saved := m.settings.Load()
 	kept := saved.Presets[:0]
 	for _, p := range saved.Presets {

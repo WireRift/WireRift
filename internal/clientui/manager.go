@@ -48,6 +48,9 @@ type Manager struct {
 	connectedAt time.Time
 	lastErr     string
 	remembered  bool // the token is stored on disk
+	connecting  bool // a Connect is in flight (it has not stored its client yet)
+
+	smu sync.Mutex // serializes read-modify-write cycles on the settings file
 
 	tmu     sync.Mutex
 	traffic []client.Exchange
@@ -159,17 +162,24 @@ func (m *Manager) Connect(server, token string, remember bool) error {
 		return errors.New("server address is required")
 	}
 	m.mu.Lock()
-	if m.cl != nil {
+	if m.cl != nil || m.connecting {
 		m.mu.Unlock()
 		return ErrBusy
 	}
 	if token == "" {
 		token = m.token
 	}
-	m.mu.Unlock()
 	if token == "" {
+		m.mu.Unlock()
 		return errors.New("token is required")
 	}
+	m.connecting = true
+	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		m.connecting = false
+		m.mu.Unlock()
+	}()
 
 	cfg := m.base
 	cfg.ServerAddr, cfg.Token, cfg.Reconnect = server, token, true
@@ -185,6 +195,8 @@ func (m *Manager) Connect(server, token string, remember bool) error {
 	m.mu.Lock()
 	m.cl, m.server, m.token, m.connectedAt, m.lastErr, m.remembered = c, server, token, time.Now(), "", remember
 	m.mu.Unlock()
+	m.smu.Lock()
+	defer m.smu.Unlock()
 	saved := m.settings.Load()
 	saved.Server, saved.Token = server, ""
 	if remember {
@@ -211,6 +223,8 @@ func (m *Manager) Forget() error {
 	m.mu.Lock()
 	m.token, m.remembered = "", false
 	m.mu.Unlock()
+	m.smu.Lock()
+	defer m.smu.Unlock()
 	saved := m.settings.Load()
 	saved.Server, saved.Token = "", ""
 	return m.settings.Save(saved)
@@ -252,7 +266,7 @@ func LocalAddress(s string) (string, error) {
 			return "", fmt.Errorf("local host %q has characters that are not allowed", host)
 		}
 	}
-	return net.JoinHostPort(host, portStr), nil
+	return net.JoinHostPort(host, strconv.Itoa(port)), nil
 }
 
 // OpenTunnel opens a tunnel on the current connection.
