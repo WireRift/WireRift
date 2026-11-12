@@ -17,6 +17,10 @@ func TestStateSurvivesRestart(t *testing.T) {
 	a.recordEvent("info", "test", "acct", "", "", "before the restart")
 	a.history.add(HistoryPoint{T: time.Now().Unix() - 30, Requests: 5})
 	a.history.add(HistoryPoint{T: time.Now().Unix() - 5, Requests: 9})
+	ac := a.accountCounters("acme")
+	ac.requests.Store(7)
+	ac.bytesIn.Store(100)
+	ac.bytesOut.Store(200)
 	a.saveState()
 	if fi, err := os.Stat(path); err != nil {
 		t.Fatal(err)
@@ -36,6 +40,9 @@ func TestStateSurvivesRestart(t *testing.T) {
 	}
 	if h := b.History(); len(h) != 2 || h[1].Requests != 9 {
 		t.Errorf("history after restart: %+v", h)
+	}
+	if bc := b.accountCounters("acme"); bc.requests.Load() != 7 || bc.bytesIn.Load() != 100 || bc.bytesOut.Load() != 200 {
+		t.Errorf("account totals after restart: %d/%d/%d", bc.requests.Load(), bc.bytesIn.Load(), bc.bytesOut.Load())
 	}
 }
 

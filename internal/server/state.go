@@ -17,8 +17,16 @@ const (
 )
 
 type savedState struct {
-	Events  []Event        `json:"events"`
-	History []HistoryPoint `json:"history"`
+	Events  []Event               `json:"events"`
+	History []HistoryPoint        `json:"history"`
+	Usage   map[string]savedUsage `json:"usage,omitempty"`
+}
+
+// savedUsage is one account's traffic totals as kept across restarts.
+type savedUsage struct {
+	Requests int64 `json:"requests"`
+	BytesIn  int64 `json:"bytes_in"`
+	BytesOut int64 `json:"bytes_out"`
 }
 
 // saveState writes the activity log and history atomically, mode 0600.
@@ -30,6 +38,12 @@ func (s *Server) saveState() {
 	st := savedState{Events: append([]Event(nil), s.events.buf...)}
 	s.events.mu.Unlock()
 	st.History = s.History()
+	st.Usage = map[string]savedUsage{}
+	s.acctUsage.Range(func(k, v any) bool {
+		c := v.(*accountCounters)
+		st.Usage[k.(string)] = savedUsage{c.requests.Load(), c.bytesIn.Load(), c.bytesOut.Load()}
+		return true
+	})
 	data, err := json.Marshal(st)
 	if err != nil {
 		return
@@ -61,6 +75,12 @@ func (s *Server) loadState() {
 	var st savedState
 	if json.Unmarshal(data, &st) != nil {
 		return
+	}
+	for id, u := range st.Usage {
+		c := s.accountCounters(id)
+		c.requests.Store(u.Requests)
+		c.bytesIn.Store(u.BytesIn)
+		c.bytesOut.Store(u.BytesOut)
 	}
 	cutoff := time.Now().Add(-stateMaxAge)
 	s.events.mu.Lock()

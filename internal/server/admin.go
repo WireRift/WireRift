@@ -197,12 +197,12 @@ type AccountUsage struct {
 	Account  string `json:"account"`
 	Sessions int    `json:"sessions"`
 	Tunnels  int    `json:"tunnels"`
-	Requests int64  `json:"requests"`  // since the server started
-	BytesIn  int64  `json:"bytes_in"`  // since the server started
-	BytesOut int64  `json:"bytes_out"` // since the server started
+	Requests int64  `json:"requests"`  // kept in the state file across restarts
+	BytesIn  int64  `json:"bytes_in"`  // kept in the state file across restarts
+	BytesOut int64  `json:"bytes_out"` // kept in the state file across restarts
 }
 
-// accountCounters are the traffic totals of one account, since the server started.
+// accountCounters are the traffic totals of one account, kept in the state file across restarts.
 type accountCounters struct {
 	requests, bytesIn, bytesOut atomic.Int64
 }
