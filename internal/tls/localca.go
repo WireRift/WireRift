@@ -301,6 +301,10 @@ func createLocalCA(dir string) (*LocalCA, error) {
 		betweenCAFilesHook() // tests widen the window in which only the key exists
 	}
 	if err := writeFileAtomicMode(ca.CertPath(), ca.PEM(), 0o644); err != nil {
+		// Neither file existed when creation started (checked under the lock),
+		// so this key is ours and was never trusted. Leaving it behind would
+		// make every later run report an "incomplete" CA.
+		_ = os.Remove(ca.KeyPath())
 		return nil, fmt.Errorf("write local CA certificate: %w", err)
 	}
 	return ca, nil
@@ -369,10 +373,11 @@ func (ca *LocalCA) IssueLeaf(names []string) (*tls.Certificate, error) {
 		if !namePermitted(n) {
 			return nil, fmt.Errorf("%w: %q", ErrNameNotPermitted, n)
 		}
-		if ip := net.ParseIP(n); ip != nil {
+		host := strings.ToLower(strings.TrimSuffix(n, "."))
+		if ip := net.ParseIP(host); ip != nil {
 			ips = append(ips, ip)
 		} else {
-			dns = append(dns, strings.ToLower(strings.TrimSuffix(n, ".")))
+			dns = append(dns, host)
 		}
 	}
 	return ca.signLeaf(dns, ips)
@@ -441,7 +446,7 @@ type LeafProvider struct {
 // base must itself be inside the CA's permitted namespace.
 func (ca *LocalCA) NewLeafProvider(base string) (*LeafProvider, error) {
 	base = strings.ToLower(strings.TrimSuffix(base, "."))
-	if base == "" || net.ParseIP(base) != nil || !namePermitted(base) {
+	if !validHostName(base) || net.ParseIP(base) != nil || !namePermitted(base) {
 		return nil, fmt.Errorf("%w: %q", ErrNameNotPermitted, base)
 	}
 	p := &LeafProvider{ca: ca, base: base, certs: make(map[string]*tls.Certificate)}

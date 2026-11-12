@@ -601,3 +601,41 @@ func TestSecondProcessWaitsWhileTheFirstIsBetweenKeyAndCertificate(t *testing.T)
 		t.Errorf("the CA on disk differs from the one returned: %v", err)
 	}
 }
+
+// F700: when writing the certificate fails, the key this call just created must
+// not stay behind as a lone file that makes every later run report an
+// "incomplete" CA; a lone key that was already there is never touched.
+func TestFailedCertWriteLeavesNoLoneKey(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "ca")
+	obstacle := filepath.Join(dir, localCAFile)
+	betweenCAFilesHook = func() { _ = os.Mkdir(obstacle, 0o700) } // the certificate rename will fail
+	_, err := LoadOrCreateLocalCA(dir)
+	betweenCAFilesHook = nil
+	if err == nil {
+		t.Fatal("expected the first creation to fail")
+	}
+	if fileExists(filepath.Join(dir, localCAKeyFile)) {
+		t.Fatal("a failed creation left a lone CA key behind")
+	}
+	if err := os.Remove(obstacle); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadOrCreateLocalCA(dir); err != nil {
+		t.Fatalf("retry after the transient failure: %v", err)
+	}
+
+	pre := filepath.Join(t.TempDir(), "ca")
+	if err := os.MkdirAll(pre, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	keyPath := filepath.Join(pre, localCAKeyFile)
+	if err := os.WriteFile(keyPath, []byte("precious"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadOrCreateLocalCA(pre); err == nil {
+		t.Fatal("a pre-existing lone key must stay a hard error")
+	}
+	if b, _ := os.ReadFile(keyPath); string(b) != "precious" {
+		t.Fatal("a pre-existing key was modified")
+	}
+}
