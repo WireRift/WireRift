@@ -35,7 +35,26 @@ func (g *pinGuard) locked(key string) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	f := g.failures[key]
-	return f != nil && time.Now().Before(f.until)
+	if f == nil {
+		// A key that cannot be tracked cannot be throttled either (see fail), so
+		// while the table is full of active entries it is refused outright.
+		return !g.makeRoom(time.Now())
+	}
+	return time.Now().Before(f.until)
+}
+
+// makeRoom drops expired entries when the table is full and reports whether a
+// new key can be tracked. The caller holds g.mu.
+func (g *pinGuard) makeRoom(now time.Time) bool {
+	if len(g.failures) < pinMaxTrackedGuards {
+		return true
+	}
+	for k, f := range g.failures {
+		if now.Sub(f.last) > pinLockout {
+			delete(g.failures, k)
+		}
+	}
+	return len(g.failures) < pinMaxTrackedGuards
 }
 
 // fail records a failed attempt and returns true once the key is locked.
@@ -47,18 +66,10 @@ func (g *pinGuard) fail(key string) bool {
 	}
 	now := time.Now()
 	f := g.failures[key]
-	if f == nil && len(g.failures) >= pinMaxTrackedGuards {
-		// Make room from expired entries. If all slots are active, fail closed for
-		// an untracked key instead of letting a distributed guessing attack grow
-		// this map without bound.
-		for k, f := range g.failures {
-			if now.Sub(f.last) > pinLockout {
-				delete(g.failures, k)
-			}
-		}
-		if len(g.failures) >= pinMaxTrackedGuards {
-			return true
-		}
+	if f == nil && !g.makeRoom(now) {
+		// All slots are active: fail closed for an untracked key instead of
+		// letting a distributed guessing attack grow this map without bound.
+		return true
 	}
 	if f == nil || now.Sub(f.last) > pinLockout {
 		f = &pinFailure{}

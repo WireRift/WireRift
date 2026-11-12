@@ -125,3 +125,35 @@ func TestPINValidCookieSurvivesLockout(t *testing.T) {
 		t.Errorf("forged cookie during lockout: code = %d, want 429 and denied", w.Code)
 	}
 }
+
+// F200: with the guard table full of active entries a new key cannot be
+// tracked, so it must be refused rather than allowed unlimited PIN guesses.
+func TestPINGuessingWithFullGuardTableIsRefused(t *testing.T) {
+	s := &Server{pinSecret: []byte("secret")}
+	for i := 0; i < pinMaxTrackedGuards; i++ {
+		s.pinGuard.fail(fmt.Sprintf("app|2001:db8::%x", i))
+	}
+	attempt := func(pin string) bool {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.RemoteAddr = "203.0.113.9:4000"
+		r.Header.Set("X-WireRift-PIN", pin)
+		return s.checkPIN(httptest.NewRecorder(), r, "1234", "app")
+	}
+	for i := 0; i < 50; i++ {
+		attempt(fmt.Sprintf("%04d", i))
+	}
+	if attempt("1234") {
+		t.Fatal("an untracked key got through after 50 wrong guesses")
+	}
+	if got := len(s.pinGuard.failures); got != pinMaxTrackedGuards {
+		t.Fatalf("tracked failures = %d, want %d", got, pinMaxTrackedGuards)
+	}
+
+	// Once the entries age out the table has room again.
+	for _, f := range s.pinGuard.failures {
+		f.last = f.last.Add(-2 * pinLockout)
+	}
+	if !attempt("1234") {
+		t.Fatal("an aged-out table must accept a correct PIN again")
+	}
+}

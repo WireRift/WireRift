@@ -377,8 +377,8 @@ func extractSubdomain(host, domain string) string {
 		}
 	}
 
-	// DNS is case-insensitive
-	host = strings.ToLower(host)
+	// DNS is case-insensitive, and a trailing dot (absolute FQDN) names the same host.
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
 
 	// Check if host ends with domain
 	suffix := "." + strings.ToLower(domain)

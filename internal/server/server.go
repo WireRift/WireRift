@@ -1371,7 +1371,15 @@ func (s *Server) teardownTunnel(tunnel *Tunnel) {
 			s.tunnels.CompareAndDelete(customKeyPrefix+tunnel.CustomDomain, tunnel)
 		}
 	case proto.TunnelTypeTCP:
-		s.tunnels.Delete("tcp:" + strconv.Itoa(tunnel.Port))
+		key := "tcp:" + strconv.Itoa(tunnel.Port)
+		// A stale teardown (a session snapshot taken before a same-account
+		// reconnect evicted this tunnel) must not release the port or registry
+		// entry that now belong to the replacement.
+		if cur, ok := s.tunnels.Load(key); ok && cur != any(tunnel) {
+			tunnel.shutdown()
+			return
+		}
+		s.tunnels.CompareAndDelete(key, tunnel)
 		tunnel.shutdown()
 		s.releasePort(tunnel.Port)
 	}

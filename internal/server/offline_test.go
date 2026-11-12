@@ -177,3 +177,35 @@ func TestSessionTeardownWithoutTakeoverStillUnregisters(t *testing.T) {
 		t.Fatalf("plain teardown kept the registration (v=%v)", v)
 	}
 }
+
+// F201: a stale teardown of an evicted TCP tunnel (a session snapshot taken
+// before the same account's reconnect replaced it) must leave the replacement's
+// registry entry and port reservation alone.
+func TestStaleTCPTeardownKeepsReplacement(t *testing.T) {
+	s := New(Config{Domain: "example.test", OfflineGrace: time.Minute}, nil)
+	mk := func(id, sess string) *Tunnel {
+		return &Tunnel{ID: id, Type: proto.TunnelTypeTCP, SessionID: sess, AccountID: "a", Port: 20001, closed: make(chan struct{})}
+	}
+	old, fresh := mk("old", "s1"), mk("new", "s2")
+	s.tunnels.Store("tcp:20001", old)
+	s.tcpPorts.Store(20001, true)
+	s.evictTCPTunnel(old)
+	s.tunnels.Store("tcp:20001", fresh)
+	s.tcpPorts.Store(20001, true)
+
+	s.teardownTunnel(old) // stale
+	if v, ok := s.tunnels.Load("tcp:20001"); !ok || v.(*Tunnel) != fresh {
+		t.Fatal("stale teardown removed the replacement's registry entry")
+	}
+	if _, ok := s.tcpPorts.Load(20001); !ok {
+		t.Fatal("stale teardown released the replacement's port")
+	}
+
+	s.teardownTunnel(fresh)
+	if _, ok := s.tunnels.Load("tcp:20001"); ok {
+		t.Fatal("the owner's teardown must unregister the tunnel")
+	}
+	if _, ok := s.tcpPorts.Load(20001); ok {
+		t.Fatal("the owner's teardown must release the port")
+	}
+}
