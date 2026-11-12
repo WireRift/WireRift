@@ -250,3 +250,22 @@ func TestRevokeLastAdminTokenRefused(t *testing.T) {
 		t.Fatalf("with a second admin token the revoke must work: %d %s", rec.Code, rec.Body)
 	}
 }
+
+// F300: demoting the only administrator account through the token endpoint
+// must be refused like revoking its last token.
+func TestDemoteLastAdminRefused(t *testing.T) {
+	h, _, path, adminTok, _, _ := tokenFixture(t)
+	if rec := postJSON(h, "/api/admin/tokens", adminTok, `{"account":"ops","admin":false}`); rec.Code != http.StatusConflict {
+		t.Fatalf("demoting the last admin: %d %s", rec.Code, rec.Body)
+	}
+	f, _ := auth.LoadTokenFile(path)
+	if a, _ := f.Account("acct_ops"); !a.Admin {
+		t.Fatal("the account lost its admin flag")
+	}
+	if rec := postJSON(h, "/api/admin/tokens", adminTok, `{"account":"boss","admin":true}`); rec.Code != http.StatusCreated {
+		t.Fatalf("create second admin: %d", rec.Code)
+	}
+	if rec := postJSON(h, "/api/admin/tokens", adminTok, `{"account":"ops","admin":false}`); rec.Code != http.StatusCreated {
+		t.Fatalf("demoting with a second admin present: %d %s", rec.Code, rec.Body)
+	}
+}

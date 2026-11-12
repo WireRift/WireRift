@@ -37,6 +37,21 @@ type createTokenRequest struct {
 	Expires     string `json:"expires"` // "12h", "30d"; empty: never
 }
 
+// hasUsableAdmin reports whether some token of an active admin account can
+// still sign in.
+func hasUsableAdmin(f *auth.TokenFile) bool {
+	now := time.Now()
+	for _, t := range f.Tokens {
+		if t.Revoked || (t.ExpiresAt != nil && !t.ExpiresAt.After(now)) {
+			continue
+		}
+		if a, ok := f.Account(t.AccountID); ok && a.Active && a.Admin {
+			return true
+		}
+	}
+	return false
+}
+
 func orKeep(v *int) int {
 	if v == nil {
 		return -1
@@ -135,7 +150,15 @@ func (d *Dashboard) createToken(w http.ResponseWriter, r *http.Request) {
 		d.jsonError(w, "Cannot read the token file", http.StatusInternalServerError)
 		return
 	}
+	hadAdmin := hasUsableAdmin(f)
 	secret, tok, err := f.CreateToken(opts)
+	if err == nil && hadAdmin && !hasUsableAdmin(f) {
+		// Demoting the only administrator account would lock everyone out,
+		// the same as revoking its last token.
+		d.tokenMu.Unlock()
+		d.jsonError(w, "This would remove the last active admin; create another admin token first", http.StatusConflict)
+		return
+	}
 	if err == nil {
 		err = f.Save(d.tokenFile)
 	}
