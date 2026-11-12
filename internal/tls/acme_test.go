@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
@@ -2603,5 +2604,46 @@ func TestProcessAuthorization_PollSignedPostContinue(t *testing.T) {
 	err := mgr.processAuthorization(context.Background(), srv.URL+"/authz/1")
 	if err != nil {
 		t.Fatalf("processAuthorization should succeed after retries: %v", err)
+	}
+}
+
+// An order the CA marks invalid when it is finalized must fail at once, not
+// after the full certificate-wait loop (which holds one of the order slots).
+func TestObtainCertificate_FinalizeInvalidFailsFast(t *testing.T) {
+	var finalized bool
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	js := func(w http.ResponseWriter, v any) { _ = json.NewEncoder(w).Encode(v) }
+	mux.HandleFunc("/directory", func(w http.ResponseWriter, r *http.Request) {
+		js(w, acmeDirectory{NewNonce: srv.URL + "/nonce", NewAccount: srv.URL + "/account", NewOrder: srv.URL + "/order"})
+	})
+	mux.HandleFunc("/nonce", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Replay-Nonce", "n")
+	})
+	mux.HandleFunc("/order", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", srv.URL+"/order/1")
+		w.WriteHeader(http.StatusCreated)
+		js(w, acmeOrder{Status: "pending", Authorizations: []string{srv.URL + "/authz/1"}, Finalize: srv.URL + "/finalize/1"})
+	})
+	mux.HandleFunc("/authz/1", func(w http.ResponseWriter, r *http.Request) { js(w, acmeAuthorization{Status: "valid"}) })
+	mux.HandleFunc("/order/1", func(w http.ResponseWriter, r *http.Request) {
+		st := "ready"
+		if finalized {
+			st = "invalid"
+		}
+		js(w, acmeOrder{Status: st, Finalize: srv.URL + "/finalize/1"})
+	})
+	mux.HandleFunc("/finalize/1", func(w http.ResponseWriter, r *http.Request) {
+		finalized = true
+		js(w, acmeOrder{Status: "invalid"})
+	})
+	mgr := setupMockManager(t, srv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_, err := mgr.ObtainCertificate(ctx, []string{"a.example.com"})
+	if !errors.Is(err, ErrACMEOrderFailed) {
+		t.Fatalf("want ErrACMEOrderFailed, got %v", err)
 	}
 }

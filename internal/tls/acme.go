@@ -281,6 +281,9 @@ func (m *ACMEManager) ObtainCertificate(ctx context.Context, domains []string) (
 		if order.Certificate != "" {
 			break
 		}
+		if order.Status == "invalid" {
+			return nil, fmt.Errorf("%w: order status invalid", ErrACMEOrderFailed)
+		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
