@@ -178,7 +178,12 @@ func (d *Dashboard) allowed(r *http.Request) bool {
 	if ip == nil {
 		return false
 	}
-	if ip.IsLoopback() && port != "0" {
+	// Direct loopback access (an SSH tunnel to the local port) always works.
+	// A loopback peer that forwards someone else's request -- a same-host
+	// reverse proxy sets a forwarding header -- is not a direct local visitor
+	// and is judged by the allow list like any other remote caller, the same
+	// rule the server's /metrics gate applies.
+	if ip.IsLoopback() && port != "0" && !forwardsVisitor(r) {
 		return true
 	}
 	for _, n := range d.allow {
@@ -187,6 +192,15 @@ func (d *Dashboard) allowed(r *http.Request) bool {
 		}
 	}
 	return false
+}
+
+// forwardsVisitor reports whether r carries a forwarding header, which means
+// the peer is relaying a request from somewhere else rather than being the
+// visitor itself.
+func forwardsVisitor(r *http.Request) bool {
+	return r.Header.Get("X-Forwarded-For") != "" ||
+		r.Header.Get("Forwarded") != "" ||
+		r.Header.Get("X-Real-Ip") != ""
 }
 
 const (

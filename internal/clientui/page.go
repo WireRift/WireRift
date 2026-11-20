@@ -246,7 +246,7 @@ function showDetail(id){
 }
 function q1(s){return"'"+String(s).replace(/'/g,"'\\''")+"'"}
 function curl(d){
-  var s='curl -i -X '+d.method+' '+q1('http://'+d.local+d.path);
+  var s='curl -i -X '+q1(d.method||'GET')+' '+q1('http://'+d.local+d.path);
   var skip={'content-length':1,'connection':1,'accept-encoding':1,'x-forwarded-for':1,'x-forwarded-proto':1,'x-forwarded-host':1};
   Object.keys(d.request.headers||{}).forEach(function(k){if(!skip[k.toLowerCase()])d.request.headers[k].forEach(function(v){s+=' -H '+q1(k+': '+v)})});
   if(d.request.body)s+=' --data-binary '+q1(d.request.body);

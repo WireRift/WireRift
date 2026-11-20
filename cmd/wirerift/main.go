@@ -525,11 +525,7 @@ func doStart(parentCtx context.Context, args []string) error {
 				opts = append(opts, client.WithCustomDomain(t.Domain))
 			}
 			if t.Whitelist != "" {
-				ips := strings.Split(t.Whitelist, ",")
-				for i := range ips {
-					ips[i] = strings.TrimSpace(ips[i])
-				}
-				opts = append(opts, client.WithAllowedIPs(ips))
+				opts = append(opts, client.WithAllowedIPs(parseWhitelist(t.Whitelist)))
 			}
 			if t.PIN != "" {
 				opts = append(opts, client.WithPIN(t.PIN))
@@ -555,7 +551,13 @@ func doStart(parentCtx context.Context, args []string) error {
 			fmt.Printf("HTTP tunnel: %s -> localhost:%d\n", tunnel.PublicURL, t.LocalPort)
 			started++
 		case "tcp":
-			tunnel, err := c.TCP(fmt.Sprintf("localhost:%d", t.LocalPort), 0)
+			// The server enforces the whitelist on TCP tunnels too, so the
+			// configured IPs must be sent along with the request.
+			var opts []client.TCPOption
+			if t.Whitelist != "" {
+				opts = append(opts, client.WithAllowedIPs(parseWhitelist(t.Whitelist)))
+			}
+			tunnel, err := c.TCP(fmt.Sprintf("localhost:%d", t.LocalPort), 0, opts...)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Failed to create TCP tunnel: %v\n", err)
 				continue
@@ -645,20 +647,27 @@ func loadConfig(path string) (*ConfigFile, error) {
 		if err := dec.Decode(&struct{}{}); err != io.EOF {
 			return nil, fmt.Errorf("parse JSON config: trailing data")
 		}
-		// Apply env overrides
-		if cfg.Server == "" {
-			cfg.Server = getEnv("WIRERIFT_SERVER", "localhost:4443")
+	} else {
+		// YAML files are parsed with a simple line-based parser.
+		// Supports flat key:value pairs and a single "tunnels:" list.
+		// For complex configs, use JSON format instead.
+		cfg, err = loadYAMLConfig(data, cfg)
+		if err != nil {
+			return nil, err
 		}
-		if cfg.Token == "" {
-			cfg.Token = envToken()
-		}
-		return cfg, nil
 	}
 
-	// YAML files are parsed with a simple line-based parser.
-	// Supports flat key:value pairs and a single "tunnels:" list.
-	// For complex configs, use JSON format instead.
-	return loadYAMLConfig(data, cfg)
+	// Apply env overrides. A value the file leaves empty falls back to the
+	// environment, in both formats: the "wirerift config init" template
+	// ships an empty token, and that must not discard the token from
+	// WIRERIFT_TOKEN or WIRERIFT_TOKEN_FILE.
+	if cfg.Server == "" {
+		cfg.Server = getEnv("WIRERIFT_SERVER", "localhost:4443")
+	}
+	if cfg.Token == "" {
+		cfg.Token = envToken()
+	}
+	return cfg, nil
 }
 
 // loadYAMLConfig parses a simple YAML config file.
@@ -741,6 +750,16 @@ func loadYAMLConfig(data []byte, cfg *ConfigFile) (*ConfigFile, error) {
 	}
 
 	return cfg, nil
+}
+
+// parseWhitelist parses a comma-separated list of IP addresses or CIDR
+// ranges into a trimmed slice.
+func parseWhitelist(raw string) []string {
+	ips := strings.Split(raw, ",")
+	for i := range ips {
+		ips[i] = strings.TrimSpace(ips[i])
+	}
+	return ips
 }
 
 // parseHeaders parses a comma-separated "Key:Value" string into a map.

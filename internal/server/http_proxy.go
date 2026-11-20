@@ -114,6 +114,7 @@ func (s *Server) clientIP(r *http.Request) string {
 func skipForwardHeader(key string) bool {
 	switch http.CanonicalHeaderKey(key) {
 	case "X-Forwarded-For", "X-Forwarded-Proto", "X-Forwarded-Host",
+		"X-Real-Ip",
 		"Content-Length", "Transfer-Encoding", "X-Wirerift-Pin":
 		return true
 	}
@@ -213,6 +214,14 @@ func serializeRequestPartsFor(r *http.Request, clientIP string) (head, body []by
 	buf.WriteString("\r\n")
 	buf.WriteString("X-Forwarded-Host: ")
 	buf.WriteString(r.Host)
+	buf.WriteString("\r\n")
+	// X-Real-IP is the other widely used convention for the client address
+	// (nginx $http_x_real_ip, Express req.ip behind a proxy). The edge owns
+	// it for the same reason it owns X-Forwarded-For: a visitor-supplied
+	// value would let that visitor choose the address the local app logs,
+	// rate-limits and applies IP allow-lists on.
+	buf.WriteString("X-Real-IP: ")
+	buf.WriteString(clientIP)
 	buf.WriteString("\r\n")
 
 	// Body framing: chunked/unknown-length bodies were decoded by net/http,

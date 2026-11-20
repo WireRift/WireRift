@@ -64,3 +64,76 @@ func TestEnvTokenFromFile(t *testing.T) {
 		t.Errorf("oversized file accepted")
 	}
 }
+
+// A config file that leaves a value empty falls back to the environment, in
+// both formats. The "wirerift config init" template ships an empty token, so
+// without the fallback a token from WIRERIFT_TOKEN or WIRERIFT_TOKEN_FILE
+// would be discarded and the client would authenticate with "".
+func TestConfigEmptyValueFallsBackToEnvironment(t *testing.T) {
+	t.Setenv("WIRERIFT_TOKEN", "env-token")
+	t.Setenv("WIRERIFT_TOKEN_FILE", "")
+	t.Setenv("WIRERIFT_SERVER", "env.server:4443")
+
+	dir := t.TempDir()
+	write := func(name, content string) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+
+	cases := []struct {
+		name    string
+		path    string
+		content string
+	}{
+		{"yaml empty token", write("a.yaml", "server: localhost:4443\ntoken: \"\"\n"), "env-token"},
+		{"yaml empty server", write("b.yaml", "server: \"\"\ntoken: file-token\n"), "file-token"},
+		{"yaml empty both", write("c.yaml", "server: \"\"\ntoken: \"\"\n"), "env-token"},
+		{"json empty token", write("d.json", `{"server":"localhost:4443","token":""}`), "env-token"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := loadConfig(tc.path)
+			if err != nil {
+				t.Fatalf("loadConfig: %v", err)
+			}
+			if cfg.Token != tc.content {
+				t.Errorf("token = %q, want %q", cfg.Token, tc.content)
+			}
+		})
+	}
+
+	// The server address falls back the same way.
+	cfg, err := loadConfig(write("e.yaml", "server: \"\"\ntoken: t\n"))
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if cfg.Server != "env.server:4443" {
+		t.Errorf("server = %q, want %q", cfg.Server, "env.server:4443")
+	}
+}
+
+// A value written in the config file still wins over the environment.
+func TestConfigFileValueWinsOverEnvironment(t *testing.T) {
+	t.Setenv("WIRERIFT_TOKEN", "env-token")
+	t.Setenv("WIRERIFT_TOKEN_FILE", "")
+	t.Setenv("WIRERIFT_SERVER", "env.server:4443")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "wirerift.yaml")
+	if err := os.WriteFile(path, []byte("server: file.server:4443\ntoken: file-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if cfg.Token != "file-token" {
+		t.Errorf("token = %q, want file-token", cfg.Token)
+	}
+	if cfg.Server != "file.server:4443" {
+		t.Errorf("server = %q, want file.server:4443", cfg.Server)
+	}
+}

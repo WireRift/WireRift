@@ -173,31 +173,12 @@ Environment Variables:
 		return nil
 	}
 
-	// Setup logging
-	logLevel := slog.LevelInfo
-	if *verbose {
-		logLevel = slog.LevelDebug
-	}
-
-	var logger *slog.Logger
-	if *jsonLog {
-		logger = slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
-	} else {
-		logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
-	}
+	logger := newLogger(*verbose, *jsonLog)
 
 	// Get config from environment. A flag given on the command line always wins,
 	// even when its value equals the default.
 	given := visitedFlags(fs)
-	if envDomain := os.Getenv("WIRERIFT_DOMAIN"); envDomain != "" && !given["domain"] {
-		*domain = envDomain
-	}
-	if envControl := os.Getenv("WIRERIFT_CONTROL_ADDR"); envControl != "" && !given["control"] {
-		*controlAddr = envControl
-	}
-	if envHTTP := os.Getenv("WIRERIFT_HTTP_ADDR"); envHTTP != "" && !given["http"] {
-		*httpAddr = envHTTP
-	}
+	applyEnvAddrs(given, domain, controlAddr, httpAddr)
 
 	// -dev: loopback + unprivileged ports, trusted HTTPS from the local CA
 	var dev *devSetup
@@ -225,33 +206,11 @@ Environment Variables:
 		return err
 	}
 
-	// Print connection info prominently
-	fmt.Fprintln(os.Stderr)
-	fmt.Fprintln(os.Stderr, "╔══════════════════════════════════════════════╗")
-	fmt.Fprintln(os.Stderr, "║              WireRift Server                 ║")
-	fmt.Fprintln(os.Stderr, "╠══════════════════════════════════════════════╣")
-	fmt.Fprintf(os.Stderr, "  Control:   %s\n", *controlAddr)
-	fmt.Fprintf(os.Stderr, "  HTTP:      %s\n", *httpAddr)
-	dashScheme := "http"
-	if *dashCert != "" {
-		dashScheme = "https"
-	}
-	fmt.Fprintf(os.Stderr, "  Dashboard: %s://localhost:%d\n", dashScheme, *dashboardAddr)
-	fmt.Fprintf(os.Stderr, "  Domain:    %s\n", *domain)
-	dev.printBanner(os.Stderr, *httpsAddr, *domain)
-	fmt.Fprintln(os.Stderr, "╠══════════════════════════════════════════════╣")
-	shownToken := printToken(os.Stderr, tokenSource, devToken)
-	fmt.Fprintln(os.Stderr, "╠══════════════════════════════════════════════╣")
-	fmt.Fprintln(os.Stderr, "  Quick start:")
-	serverAddr := *controlAddr
-	if strings.HasPrefix(serverAddr, ":") {
-		serverAddr = "localhost" + serverAddr
-	}
-	if *controlCert != "" || (tlsMgr != nil && tlsMgr.IsACMEEnabled()) {
-		serverAddr = "tls://" + serverAddr
-	}
-	fmt.Fprintf(os.Stderr, "  wirerift http 8080 -server %s -token %s\n", serverAddr, shownToken)
-	fmt.Fprintln(os.Stderr, "╚══════════════════════════════════════════════╝")
+	printStartupBanner(os.Stderr, bannerInfo{
+		Control: *controlAddr, HTTP: *httpAddr, HTTPS: *httpsAddr, Domain: *domain,
+		DashPort: *dashboardAddr, DashTLS: *dashCert != "", ControlTLS: *controlCert != "" || (tlsMgr != nil && tlsMgr.IsACMEEnabled()),
+		Dev: dev, TokenSource: tokenSource, DevToken: devToken,
+	})
 
 	// Create server config
 	srvConfig := server.DefaultConfig()
@@ -390,6 +349,71 @@ Environment Variables:
 
 	logger.Info("server stopped")
 	return runErr
+}
+
+// newLogger builds the server logger for the -v and -json flags.
+func newLogger(verbose, jsonLog bool) *slog.Logger {
+	opts := &slog.HandlerOptions{Level: slog.LevelInfo}
+	if verbose {
+		opts.Level = slog.LevelDebug
+	}
+	if jsonLog {
+		return slog.New(slog.NewJSONHandler(os.Stdout, opts))
+	}
+	return slog.New(slog.NewTextHandler(os.Stdout, opts))
+}
+
+// applyEnvAddrs lets the WIRERIFT_* variables set what no flag set. A flag
+// given on the command line always wins, even when its value equals the default.
+func applyEnvAddrs(given map[string]bool, domain, control, httpAddr *string) {
+	if v := os.Getenv("WIRERIFT_DOMAIN"); v != "" && !given["domain"] {
+		*domain = v
+	}
+	if v := os.Getenv("WIRERIFT_CONTROL_ADDR"); v != "" && !given["control"] {
+		*control = v
+	}
+	if v := os.Getenv("WIRERIFT_HTTP_ADDR"); v != "" && !given["http"] {
+		*httpAddr = v
+	}
+}
+
+type bannerInfo struct {
+	Control, HTTP, HTTPS, Domain string
+	DashPort                     int
+	DashTLS, ControlTLS          bool
+	Dev                          *devSetup
+	TokenSource                  string
+	DevToken                     string
+}
+
+// printStartupBanner shows the connection details and the token to use.
+func printStartupBanner(w io.Writer, b bannerInfo) {
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "╔══════════════════════════════════════════════╗")
+	fmt.Fprintln(w, "║              WireRift Server                 ║")
+	fmt.Fprintln(w, "╠══════════════════════════════════════════════╣")
+	fmt.Fprintf(w, "  Control:   %s\n", b.Control)
+	fmt.Fprintf(w, "  HTTP:      %s\n", b.HTTP)
+	dashScheme := "http"
+	if b.DashTLS {
+		dashScheme = "https"
+	}
+	fmt.Fprintf(w, "  Dashboard: %s://localhost:%d\n", dashScheme, b.DashPort)
+	fmt.Fprintf(w, "  Domain:    %s\n", b.Domain)
+	b.Dev.printBanner(w, b.HTTPS, b.Domain)
+	fmt.Fprintln(w, "╠══════════════════════════════════════════════╣")
+	shown := printToken(w, b.TokenSource, b.DevToken)
+	fmt.Fprintln(w, "╠══════════════════════════════════════════════╣")
+	fmt.Fprintln(w, "  Quick start:")
+	addr := b.Control
+	if strings.HasPrefix(addr, ":") {
+		addr = "localhost" + addr
+	}
+	if b.ControlTLS {
+		addr = "tls://" + addr
+	}
+	fmt.Fprintf(w, "  wirerift http 8080 -server %s -token %s\n", addr, shown)
+	fmt.Fprintln(w, "╚══════════════════════════════════════════════╝")
 }
 
 func awaitRuntimeEnd(ctx context.Context, cancel context.CancelFunc, serverErrors, dashboardErrors <-chan error) error {
