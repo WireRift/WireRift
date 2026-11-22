@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.30.1] - 2026-11-22
+
+### Security
+- Built with Go 1.27.4, which fixes CVE-2026-97054 in the standard library (HTTP/1 servers when a `MaxBytesReader` limit is exceeded). The Docker base image is pinned to 1.27.4 as well.
+
 ## [1.30.0] - 2026-11-12
 
 ### Changed
